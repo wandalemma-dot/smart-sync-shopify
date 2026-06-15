@@ -101,7 +101,7 @@ export default function App() {
   return (
     <div className="app-container">
       <header>
-        <h1>Smart Sync Shopify</h1>
+        <h1>Stock y Ventas Sync Shopify</h1>
         <p className="subtitle">Actualización inteligente de Inventarios y Precios (Local y Privado)</p>
       </header>
 
