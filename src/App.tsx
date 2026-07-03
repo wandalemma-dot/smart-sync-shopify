@@ -150,6 +150,7 @@ export default function App() {
               >
                 <option value="converse">Converse</option>
                 <option value="lecoq">Le Coq Sportif</option>
+                <option value="orchard">Orchard</option>
                 <option value="bloque">Bloque (PDFs)</option>
               </select>
             </div>

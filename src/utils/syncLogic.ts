@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx';
 
 export interface SyncConfig {
   sheetName: string;
-  brand: 'lecoq' | 'converse' | 'bloque';
+  brand: 'lecoq' | 'converse' | 'bloque' | 'orchard';
   marginMultiplier: number;
 }
 
