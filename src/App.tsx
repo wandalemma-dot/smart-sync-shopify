@@ -107,8 +107,8 @@ export default function App() {
   return (
     <div className="app-container">
       <header>
-        <h1>Stock y Ventas Sync Shopify</h1>
-        <p className="subtitle">Conexión Directa por API (Nivel Dios)</p>
+        <h1>Sincronización de Stock e Inventario</h1>
+        <p className="subtitle">Automatización Inteligente con Shopify API</p>
       </header>
 
       {!previewReady ? (
