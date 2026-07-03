@@ -54,12 +54,14 @@ async function fetchShopifyGraphQL(query: string, variables: any = {}) {
     body: JSON.stringify({ query, variables })
   });
   if (!res.ok) {
-     const text = await res.text();
-     throw new Error(`Error en conexión con Shopify: ${res.statusText} - ${text}`);
+    const rawText = await res.text();
+    console.error("Shopify Raw Error:", rawText);
+    throw new Error(`Error de Conexión (${res.status}): ${rawText.substring(0, 100)}`);
   }
   const json = await res.json();
   if (json.errors) {
-     throw new Error('Shopify Error: ' + json.errors[0].message);
+     console.error(json.errors);
+     throw new Error('Shopify Error: ' + JSON.stringify(json.errors));
   }
   return json.data;
 }
