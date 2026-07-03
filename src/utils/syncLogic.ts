@@ -1,5 +1,7 @@
 import * as XLSX from 'xlsx';
 
+export type SyncMode = 'all' | 'stock_only' | 'cost_only' | 'price_only';
+
 export interface SyncConfig {
   sheetName: string;
   brand: 'lecoq' | 'converse' | 'bloque' | 'orchard';
@@ -295,8 +297,10 @@ export async function processFiles(
 export async function processDirectSync(
   result: SyncResult, 
   config: SyncConfig, 
-  tableSelections: Record<string, number>
+  tableSelections: Record<string, number>,
+  syncMode: SyncMode = 'all'
 ) {
+  console.log('Modo de Sincronizacion:', syncMode);
   console.log(config, tableSelections);
   // Acá es donde enviaríamos las Mutations GraphQL a Shopify para aplicar los cambios de updateActions y missingProducts
   // 1. Obtener el Location ID Principal

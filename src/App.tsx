@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { processFiles, extractSheetNames, processDirectSync } from './utils/syncLogic';
+import { processFiles, extractSheetNames, processDirectSync, SyncMode } from './utils/syncLogic';
 import type { SyncConfig, SyncResult } from './utils/syncLogic';
 
 export default function App() {
@@ -86,12 +86,12 @@ export default function App() {
     }
   };
   
-  const handleConfirmSync = async () => {
+  const handleConfirmSync = async (mode: SyncMode) => {
     if (!result) return;
     setLoading(true);
     setLoadingText('Impactando cambios en Shopify... ¡No cierres esta ventana!');
     try {
-      await processDirectSync(result, config, tableSelections);
+      await processDirectSync(result, config, tableSelections, mode);
       alert('✅ ¡Sincronización completada con éxito!');
       setPreviewReady(false);
       setResult(null);
@@ -240,17 +240,43 @@ export default function App() {
             </div>
           )}
 
-          <div style={{ marginTop: '30px', display: 'flex', justifyContent: 'center' }}>
+          <div style={{ marginTop: '30px', display: 'flex', flexDirection: 'column', gap: '15px', alignItems: 'center' }}>
             <button 
               className="btn-primary" 
-              style={{ fontSize: '1.2rem', padding: '15px 40px', background: '#10b981' }}
-              onClick={handleConfirmSync}
+              style={{ fontSize: '1.2rem', padding: '15px 40px', background: '#10b981', width: '100%', maxWidth: '500px' }}
+              onClick={() => handleConfirmSync('all')}
               disabled={loading}
             >
-              {loading ? <span className="loader"></span> : '🚀 CONFIRMAR Y SINCRONIZAR A SHOPIFY'}
+              {loading ? <span className="loader"></span> : '🚀 SINCRONIZAR TODO (Stock + Precio + Costo)'}
             </button>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', width: '100%', maxWidth: '800px' }}>
+              <button 
+                className="btn-primary" 
+                style={{ background: '#3b82f6' }}
+                onClick={() => handleConfirmSync('stock_only')}
+                disabled={loading}
+              >
+                📦 SÓLO STOCK
+              </button>
+              <button 
+                className="btn-primary" 
+                style={{ background: '#f59e0b' }}
+                onClick={() => handleConfirmSync('price_only')}
+                disabled={loading}
+              >
+                💲 SÓLO PRECIOS
+              </button>
+              <button 
+                className="btn-primary" 
+                style={{ background: '#8b5cf6' }}
+                onClick={() => handleConfirmSync('cost_only')}
+                disabled={loading}
+              >
+                💰 SÓLO COSTOS
+              </button>
+            </div>
           </div>
-          {loading && <p style={{marginTop: '10px', textAlign: 'center', color: '#10b981'}}>{loadingText}</p>}
+          {loading && <p style={{marginTop: '15px', textAlign: 'center', color: '#10b981', fontWeight: 'bold'}}>{loadingText}</p>}
         </div>
       )}
     </div>
