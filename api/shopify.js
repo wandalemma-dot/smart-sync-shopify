@@ -10,7 +10,7 @@ export default async function handler(req, res) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'X-Shopify-Access-Token': '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'
+        'X-Shopify-Access-Token': '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'
       },
       body: JSON.stringify({ query, variables })
     });
