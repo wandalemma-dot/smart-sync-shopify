@@ -5,7 +5,6 @@ export type SyncMode = 'all' | 'stock_only' | 'cost_only' | 'price_only';
 export interface SyncConfig {
   sheetName: string;
   brand: 'lecoq' | 'converse' | 'bloque' | 'orchard';
-  marginMultiplier: number;
 }
 
 export interface MissingProduct {
@@ -243,11 +242,17 @@ export async function processFiles(
       
       if (match) {
         provData.foundInShopify = true;
-        // Bonificación comercial del 15% para Bloque
+        // Bonificación comercial del 15% para Bloque (y solo para Bloque)
         const trueCost = config.brand === 'bloque' ? provData.wholesale * 0.85 : provData.wholesale;
         
-        // Precio sugerido = PRECIO MAYORISTA ORIGINAL x Multiplicador (no sobre el costo con descuento)
-        const minP = provData.wholesale * config.marginMultiplier;
+        // El multiplicador depende de cada marca
+        let marginMultiplier = 2.01; // Default para las demás
+        if (config.brand === 'bloque') {
+          marginMultiplier = 2.0; // "criterio de markup orientativo de 2,0"
+        }
+        
+        // Precio sugerido = PRECIO MAYORISTA ORIGINAL x Multiplicador
+        const minP = provData.wholesale * marginMultiplier;
         let calculatedPrice = Math.floor(minP / 10000) * 10000 + 9900;
         if (calculatedPrice < minP) calculatedPrice += 10000;
 

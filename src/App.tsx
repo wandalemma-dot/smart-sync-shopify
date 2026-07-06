@@ -10,8 +10,7 @@ export default function App() {
   
   const [config, setConfig] = useState<SyncConfig>({
     sheetName: '',
-    brand: 'converse',
-    marginMultiplier: 2.01,
+    brand: 'converse'
   });
 
   const [loading, setLoading] = useState(false);
@@ -166,16 +165,6 @@ export default function App() {
                 </select>
               </div>
             )}
-
-            <div className="form-group">
-              <label>Multiplicador de Ganancia (Default: 2.01)</label>
-              <input 
-                type="number" 
-                step="0.01" 
-                value={config.marginMultiplier} 
-                onChange={e => setConfig({...config, marginMultiplier: parseFloat(e.target.value) || 2.01})}
-              />
-            </div>
 
             <button 
               className="btn-primary" 
