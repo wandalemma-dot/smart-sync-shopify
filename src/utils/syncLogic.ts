@@ -243,7 +243,7 @@ export async function processFiles(
       if (match) {
         provData.foundInShopify = true;
         // Bonificación comercial del 15% para Bloque (y solo para Bloque)
-        const trueCost = config.brand === 'bloque' ? provData.wholesale * 0.85 : provData.wholesale;
+        // El costo interno será provData.wholesale * 0.85, lo usaremos luego al sincronizar costos.
         
         // El multiplicador depende de cada marca
         let marginMultiplier = 2.01; // Default para las demás

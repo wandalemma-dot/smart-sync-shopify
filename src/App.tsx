@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { processFiles, extractSheetNames, processDirectSync, SyncMode } from './utils/syncLogic';
-import type { SyncConfig, SyncResult } from './utils/syncLogic';
+import { processFiles, extractSheetNames, processDirectSync } from './utils/syncLogic';
+import type { SyncConfig, SyncResult, SyncMode } from './utils/syncLogic';
 
 export default function App() {
   const [providerFile, setProviderFile] = useState<File | null>(null);
