@@ -246,8 +246,8 @@ export async function processFiles(
         // Bonificación comercial del 15% para Bloque
         const trueCost = config.brand === 'bloque' ? provData.wholesale * 0.85 : provData.wholesale;
         
-        // Precio sugerido = Costo x Multiplicador
-        const minP = trueCost * config.marginMultiplier;
+        // Precio sugerido = PRECIO MAYORISTA ORIGINAL x Multiplicador (no sobre el costo con descuento)
+        const minP = provData.wholesale * config.marginMultiplier;
         let calculatedPrice = Math.floor(minP / 10000) * 10000 + 9900;
         if (calculatedPrice < minP) calculatedPrice += 10000;
 
