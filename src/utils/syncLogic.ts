@@ -31,6 +31,7 @@ export interface SyncResult {
   updatesToApply: UpdateAction[];
   missingProducts: MissingProduct[];
   alerts: AlertMessage[];
+  excelMap: Record<string, any>;
 }
 
 export interface AlertMessage {
@@ -301,7 +302,8 @@ export async function processFiles(
   return {
     updatesToApply,
     missingProducts,
-    alerts
+    alerts,
+    excelMap
   };
 }
 
@@ -412,6 +414,46 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _table
   });
 
   triggerDownload(csvContent, `Matriz_Faltantes_${config.brand}_${new Date().toISOString().split('T')[0]}.csv`);
+}
+
+export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
+  if (Object.keys(result.excelMap).length === 0) {
+    alert("No hay datos de inventario para descargar.");
+    return;
+  }
+
+  const headers = [
+    'Handle', 'Title', 'Option1 Name', 'Option1 Value', 'Option2 Name', 'Option2 Value',
+    'Option3 Name', 'Option3 Value', 'SKU', 'Location', 'Available'
+  ];
+
+  let csvContent = headers.join(',') + '\n';
+
+  for (const [coditm, data] of Object.entries(result.excelMap)) {
+    const handle = coditm.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    
+    for (const [size, qty] of Object.entries(data.sizes)) {
+      const outRow: any = {};
+      headers.forEach(h => outRow[h] = '');
+
+      outRow['Handle'] = handle;
+      outRow['Title'] = data.title;
+      outRow['Option1 Name'] = 'Talle';
+      outRow['Option1 Value'] = size;
+      
+      // In the old script, SKU for converse/lecoq was coditm + '-' + size
+      // We'll just use the coditm for now, since Matrix uses coditm
+      outRow['SKU'] = coditm;
+      
+      outRow['Location'] = 'ID (Converse - Le Coq Sportif)'; // Default for old script
+      outRow['Available'] = String(qty);
+
+      const rowArray = headers.map(h => escapeCSV(outRow[h]));
+      csvContent += rowArray.join(',') + '\n';
+    }
+  }
+
+  triggerDownload(csvContent, `Actualizacion_Stock_${config.brand}_${new Date().toISOString().split('T')[0]}.csv`);
 }
 
 function triggerDownload(content: string, filename: string) {

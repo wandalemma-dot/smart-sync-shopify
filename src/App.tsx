@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV } from './utils/syncLogic';
+import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, downloadInventoryCSV } from './utils/syncLogic';
 import type { SyncConfig, SyncResult } from './utils/syncLogic';
 
 export default function App() {
@@ -85,13 +85,15 @@ export default function App() {
     }
   };
   
-  const handleDownload = (type: 'updates' | 'matrix') => {
+  const handleDownload = (type: 'updates' | 'matrix' | 'inventory') => {
     if (!result) return;
     try {
       if (type === 'updates') {
         downloadUpdateCSV(result, config);
-      } else {
+      } else if (type === 'matrix') {
         downloadMatrixCSV(result, config, tableSelections);
+      } else if (type === 'inventory') {
+        downloadInventoryCSV(result, config);
       }
     } catch (err: any) {
       alert("Error al generar CSV: " + err.message);
@@ -186,11 +188,11 @@ export default function App() {
 
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px', marginTop: '20px' }}>
             <div className="stat-card" style={{ background: 'rgba(255,255,255,0.1)', padding: '20px', borderRadius: '10px' }}>
-              <h3>🔄 Actualizaciones de Stock y Precio</h3>
+              <h3>🔄 Actualizaciones de Precio</h3>
               <p style={{ fontSize: '24px', fontWeight: 'bold' }}>{result?.updatesToApply.length || 0} variantes</p>
             </div>
             <div className="stat-card" style={{ background: 'rgba(245, 158, 11, 0.1)', padding: '20px', borderRadius: '10px', border: '1px solid #f59e0b' }}>
-              <h3 style={{ color: '#f59e0b' }}>✨ Faltantes (Se crearán nuevos)</h3>
+              <h3 style={{ color: '#f59e0b' }}>📦 Faltantes (Nuevos)</h3>
               <p style={{ fontSize: '24px', fontWeight: 'bold', color: '#f59e0b' }}>{result?.missingProducts.length || 0} modelos</p>
             </div>
           </div>
@@ -225,22 +227,30 @@ export default function App() {
           )}
 
           <div style={{ marginTop: '30px', display: 'flex', flexDirection: 'column', gap: '15px', alignItems: 'center' }}>
-            <div style={{ display: 'flex', gap: '15px', width: '100%', maxWidth: '800px', justifyContent: 'center' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '15px', width: '100%', maxWidth: '900px', justifyContent: 'center' }}>
               <button 
                 className="btn-primary" 
-                style={{ background: '#3b82f6', flex: 1, padding: '15px' }}
+                style={{ background: '#3b82f6', padding: '15px', fontSize: '0.9rem' }}
                 onClick={() => handleDownload('updates')}
                 disabled={loading || !result || result.updatesToApply.length === 0}
               >
-                📥 Descargar CSV Actualización (Precios)
+                📥 CSV de Precios
               </button>
               <button 
                 className="btn-primary" 
-                style={{ background: '#f59e0b', flex: 1, padding: '15px' }}
+                style={{ background: '#10b981', padding: '15px', fontSize: '0.9rem' }}
+                onClick={() => handleDownload('inventory')}
+                disabled={loading || !result || Object.keys(result.excelMap).length === 0}
+              >
+                📥 CSV de Stock (Inventario)
+              </button>
+              <button 
+                className="btn-primary" 
+                style={{ background: '#f59e0b', padding: '15px', fontSize: '0.9rem' }}
                 onClick={() => handleDownload('matrix')}
                 disabled={loading || !result || result.missingProducts.length === 0}
               >
-                📥 Descargar CSV Matriz (Faltantes)
+                📥 CSV de Nuevos (Matriz)
               </button>
             </div>
           </div>
