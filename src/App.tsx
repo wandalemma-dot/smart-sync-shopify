@@ -1,6 +1,6 @@
 import { useState } from 'react';
-import { processFiles, extractSheetNames, processDirectSync } from './utils/syncLogic';
-import type { SyncConfig, SyncResult, SyncMode } from './utils/syncLogic';
+import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV } from './utils/syncLogic';
+import type { SyncConfig, SyncResult } from './utils/syncLogic';
 
 export default function App() {
   const [providerFile, setProviderFile] = useState<File | null>(null);
@@ -85,21 +85,16 @@ export default function App() {
     }
   };
   
-  const handleConfirmSync = async (mode: SyncMode) => {
+  const handleDownload = (type: 'updates' | 'matrix') => {
     if (!result) return;
-    setLoading(true);
-    setLoadingText('Impactando cambios en Shopify... ¡No cierres esta ventana!');
     try {
-      await processDirectSync(result, config, tableSelections, mode);
-      alert('✅ ¡Sincronización completada con éxito!');
-      setPreviewReady(false);
-      setResult(null);
-      setProviderFile(null);
-      setRemitoFile(null);
+      if (type === 'updates') {
+        downloadUpdateCSV(result, config);
+      } else {
+        downloadMatrixCSV(result, config, tableSelections);
+      }
     } catch (err: any) {
-      alert("Error al sincronizar: " + err.message);
-    } finally {
-      setLoading(false);
+      alert("Error al generar CSV: " + err.message);
     }
   };
 
@@ -107,7 +102,7 @@ export default function App() {
     <div className="app-container">
       <header>
         <h1>Sincronización de Stock e Inventario</h1>
-        <p className="subtitle">Automatización Inteligente con Shopify API</p>
+        <p className="subtitle">Automatización Inteligente</p>
       </header>
 
       {!previewReady ? (
@@ -119,7 +114,7 @@ export default function App() {
               className={`dropzone ${providerFile ? 'has-file' : ''}`}
               onDrop={handleProviderDrop} onDragOver={preventDefault}
             >
-              <h3>{providerFile ? '✅ Archivo Principal Listo' : (config.brand === 'bloque' ? '📄 Arrastra el PRESUPUESTO (PDF)' : '📄 Arrastra el Excel del Proveedor')}</h3>
+              <h3>{providerFile ? '📄 Archivo Principal Listo' : (config.brand === 'bloque' ? '📥 Arrastra el PRESUPUESTO (PDF)' : '📥 Arrastra el Excel del Proveedor')}</h3>
               <p>{providerFile?.name}</p>
             </div>
 
@@ -128,7 +123,7 @@ export default function App() {
                 className={`dropzone ${remitoFile ? 'has-file' : ''}`}
                 onDrop={handleRemitoDrop} onDragOver={preventDefault}
               >
-                <h3>{remitoFile ? '✅ Remito Listo' : '📄 Arrastra el REMITO (PDF)'}</h3>
+                <h3>{remitoFile ? '📄 Remito Listo' : '📥 Arrastra el REMITO (PDF)'}</h3>
                 <p>{remitoFile?.name}</p>
               </div>
             )}
@@ -179,7 +174,7 @@ export default function App() {
       ) : (
         <div className="glass-panel results-area" style={{ marginTop: '2rem' }}>
           <div className="results-header">
-            <h2>⚠️ RESUMEN ANTES DE SINCRONIZAR</h2>
+            <h2>📊 RESUMEN ANTES DE SINCRONIZAR</h2>
             <button 
               className="btn-success"
               style={{ background: '#dc2626', marginLeft: '10px' }}
@@ -230,38 +225,22 @@ export default function App() {
           )}
 
           <div style={{ marginTop: '30px', display: 'flex', flexDirection: 'column', gap: '15px', alignItems: 'center' }}>
-            <button 
-              className="btn-primary" 
-              style={{ fontSize: '1.2rem', padding: '15px 40px', background: '#10b981', width: '100%', maxWidth: '500px' }}
-              onClick={() => handleConfirmSync('all')}
-              disabled={loading}
-            >
-              {loading ? <span className="loader"></span> : '🚀 SINCRONIZAR TODO (Stock + Precio + Costo)'}
-            </button>
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', width: '100%', maxWidth: '800px' }}>
+            <div style={{ display: 'flex', gap: '15px', width: '100%', maxWidth: '800px', justifyContent: 'center' }}>
               <button 
                 className="btn-primary" 
-                style={{ background: '#3b82f6' }}
-                onClick={() => handleConfirmSync('stock_only')}
-                disabled={loading}
+                style={{ background: '#3b82f6', flex: 1, padding: '15px' }}
+                onClick={() => handleDownload('updates')}
+                disabled={loading || !result || result.updatesToApply.length === 0}
               >
-                📦 SÓLO STOCK
+                📥 Descargar CSV Actualización (Precios)
               </button>
               <button 
                 className="btn-primary" 
-                style={{ background: '#f59e0b' }}
-                onClick={() => handleConfirmSync('price_only')}
-                disabled={loading}
+                style={{ background: '#f59e0b', flex: 1, padding: '15px' }}
+                onClick={() => handleDownload('matrix')}
+                disabled={loading || !result || result.missingProducts.length === 0}
               >
-                💲 SÓLO PRECIOS
-              </button>
-              <button 
-                className="btn-primary" 
-                style={{ background: '#8b5cf6' }}
-                onClick={() => handleConfirmSync('cost_only')}
-                disabled={loading}
-              >
-                💰 SÓLO COSTOS
+                📥 Descargar CSV Matriz (Faltantes)
               </button>
             </div>
           </div>

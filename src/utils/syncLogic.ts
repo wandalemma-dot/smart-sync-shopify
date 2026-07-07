@@ -305,29 +305,123 @@ export async function processFiles(
   };
 }
 
-export async function processDirectSync(
-  result: SyncResult, 
-  config: SyncConfig, 
-  tableSelections: Record<string, number>,
-  syncMode: SyncMode = 'all'
-) {
-  console.log('Modo de Sincronizacion:', syncMode);
-  console.log(config, tableSelections);
-  // Acá es donde enviaríamos las Mutations GraphQL a Shopify para aplicar los cambios de updateActions y missingProducts
-  // 1. Obtener el Location ID Principal
-  const locQ = `query { locations(first: 10) { edges { node { id name } } } }`;
-  const locData = await fetchShopifyGraphQL(locQ);
-  const martinez = locData.locations.edges.find((e:any) => e.node.name.toUpperCase().includes('MARTINEZ')) || locData.locations.edges[0];
-  const locationId = martinez.node.id;
+export function downloadUpdateCSV(result: SyncResult, config: SyncConfig) {
+  if (result.updatesToApply.length === 0) {
+    alert("No hay actualizaciones para descargar.");
+    return;
+  }
 
-  // 2. Ejecutar Updates (Precios)
-  const priceUpdates = result.updatesToApply.filter(u => u.type === 'PRICE');
-  // Por límites de la API de Shopify, lo ideal es enviar lotes, pero por simplicidad lo simularemos aquí
-  
-  // AVISO: El código real de subida a Shopify iría aquí iterando y enviando Mutations `productVariantsBulkUpdate`
-  console.log('Location seleccionada:', locationId);
-  console.log('Actualizaciones de precios listas:', priceUpdates.length);
-  
-  // Por ahora dejamos una alerta en consola para testear que llegamos hasta acá perfecto.
-  alert(`Sistema conectado y listo. Total Precios: ${priceUpdates.length}. Falta programar las Mutations finales!`);
+  // Columnas necesarias para actualizar precio: Handle, Variant SKU, Variant Price
+  const headers = ['Handle', 'Variant SKU', 'Variant Price'];
+  let csvContent = headers.join(',') + '\n';
+
+  result.updatesToApply.forEach(u => {
+    if (u.type === 'PRICE') {
+      const row = [
+        u.handle,
+        `"${u.sku}"`,
+        u.newPrice
+      ];
+      csvContent += row.join(',') + '\n';
+    }
+  });
+
+  triggerDownload(csvContent, `Actualizacion_Precios_${config.brand}_${new Date().toISOString().split('T')[0]}.csv`);
+}
+
+function escapeCSV(val: any): string {
+  if (val === null || val === undefined) return '';
+  const str = String(val);
+  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _tableSelections?: Record<string, number>) {
+  if (result.missingProducts.length === 0) {
+    alert("No hay productos faltantes para descargar.");
+    return;
+  }
+
+  const headers = [
+    'Handle', 'Title', 'Body (HTML)', 'Vendor', 'Type', 'Tags', 'Published',
+    'Option1 Name', 'Option1 Value', 'Option2 Name', 'Option2 Value', 'Option3 Name', 'Option3 Value',
+    'Variant SKU', 'Variant Grams', 'Variant Inventory Tracker', 'Variant Inventory Qty',
+    'Variant Inventory Policy', 'Variant Fulfillment Service', 'Variant Price', 'Variant Compare At Price',
+    'Variant Requires Shipping', 'Variant Taxable', 'Variant Barcode', 'Image Src', 'Image Position',
+    'Image Alt Text', 'Gift Card', 'SEO Title', 'SEO Description', 'Google Shopping / Google Product Category',
+    'Google Shopping / Gender', 'Google Shopping / Age Group', 'Google Shopping / MPN',
+    'Google Shopping / AdWords Grouping', 'Google Shopping / AdWords Labels', 'Google Shopping / Condition',
+    'Google Shopping / Custom Product', 'Google Shopping / Custom Label 0', 'Google Shopping / Custom Label 1',
+    'Google Shopping / Custom Label 2', 'Google Shopping / Custom Label 3', 'Google Shopping / Custom Label 4',
+    'Variant Image', 'Variant Weight Unit', 'Variant Tax Code', 'Cost per item', 'Included / Argentina',
+    'Price / Argentina', 'Compare At Price / Argentina', 'Included / International', 'Price / International',
+    'Compare At Price / International', 'Status'
+  ];
+
+  let csvContent = headers.join(',') + '\n';
+
+  result.missingProducts.forEach(prod => {
+    const handle = prod.coditm.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const vendor = prod.vendor || (config.brand === 'lecoq' ? 'Le Coq Sportif' : config.brand === 'converse' ? 'Converse' : 'Bloque');
+    
+    let marginMultiplier = 2.01;
+    if (config.brand === 'bloque') marginMultiplier = 2.0;
+    
+    const minP = prod.wholesale * marginMultiplier;
+    let price = Math.floor(minP / 10000) * 10000 + 9900;
+    if (price < minP) price += 10000;
+    
+    const cost = config.brand === 'bloque' ? prod.wholesale * 0.85 : prod.wholesale;
+
+    let isFirstVariant = true;
+
+    for (const [size, qty] of Object.entries(prod.sizes)) {
+      const outRow: any = {};
+      headers.forEach(h => outRow[h] = '');
+
+      outRow['Handle'] = handle;
+      if (isFirstVariant) {
+        outRow['Title'] = prod.title;
+        outRow['Body (HTML)'] = prod.title;
+        outRow['Vendor'] = vendor;
+        outRow['Tags'] = prod.coditm;
+        outRow['Published'] = 'FALSE'; // Para que lo publiquen a mano o con POS
+        outRow['Status'] = 'active';
+      }
+
+      outRow['Option1 Name'] = 'Talle';
+      outRow['Option1 Value'] = size;
+      
+      outRow['Variant SKU'] = prod.coditm;
+      outRow['Variant Price'] = price;
+      outRow['Cost per item'] = cost;
+      
+      outRow['Variant Inventory Tracker'] = 'shopify';
+      outRow['Variant Inventory Qty'] = qty.toString();
+      outRow['Variant Inventory Policy'] = 'deny';
+      outRow['Variant Fulfillment Service'] = 'manual';
+      outRow['Variant Requires Shipping'] = 'TRUE';
+
+      const rowArray = headers.map(h => escapeCSV(outRow[h]));
+      csvContent += rowArray.join(',') + '\n';
+      
+      isFirstVariant = false;
+    }
+  });
+
+  triggerDownload(csvContent, `Matriz_Faltantes_${config.brand}_${new Date().toISOString().split('T')[0]}.csv`);
+}
+
+function triggerDownload(content: string, filename: string) {
+  const blob = new Blob(["\uFEFF" + content], { type: 'text/csv;charset=utf-8;' });
+  const link = document.createElement("a");
+  const url = URL.createObjectURL(blob);
+  link.setAttribute("href", url);
+  link.setAttribute("download", filename);
+  link.style.visibility = 'hidden';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
