@@ -396,7 +396,11 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _table
       outRow['Option1 Name'] = 'Talle';
       outRow['Option1 Value'] = size;
       
-      outRow['Variant SKU'] = prod.coditm;
+      let variantSku = prod.coditm;
+      if (config.brand === 'converse' || config.brand === 'lecoq') {
+        variantSku = `${prod.coditm}-${size}`;
+      }
+      outRow['Variant SKU'] = variantSku;
       outRow['Variant Price'] = price;
       outRow['Cost per item'] = cost;
       
@@ -441,9 +445,11 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
       outRow['Option1 Name'] = 'Talle';
       outRow['Option1 Value'] = size;
       
-      // In the old script, SKU for converse/lecoq was coditm + '-' + size
-      // We'll just use the coditm for now, since Matrix uses coditm
-      outRow['SKU'] = coditm;
+      let variantSku = coditm;
+      if (config.brand === 'converse' || config.brand === 'lecoq') {
+        variantSku = `${coditm}-${size}`;
+      }
+      outRow['SKU'] = variantSku;
       
       outRow['Location'] = 'ID (Converse - Le Coq Sportif)'; // Default for old script
       outRow['Available'] = String(qty);
