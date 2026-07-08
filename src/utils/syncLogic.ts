@@ -49,26 +49,6 @@ export const convTable3: Record<string, string> = { '5': '35', '5.5': '36', '6':
 export const convTable4: Record<string, string> = { '10.5': '27', '11': '28', '11.5': '28.5', '12': '29', '12.5': '30', '13': '31', '13.5': '31.5', '1': '32', '1.5': '33', '2.5': '34', '3': '35' };
 export const convTable5: Record<string, string> = { '4': '20', '6': '21', '7': '22', '8': '23', '9': '24', '10': '25', '11': '26' };
 
-// Utility: Call Shopify via our Vercel Serverless Function Proxy
-async function fetchShopifyGraphQL(query: string, variables: any = {}) {
-  const res = await fetch('/api/shopify', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, variables })
-  });
-  if (!res.ok) {
-    const rawText = await res.text();
-    console.error("Shopify Raw Error:", rawText);
-    throw new Error(`Error de Conexión (${res.status}): ${rawText.substring(0, 100)}`);
-  }
-  const json = await res.json();
-  if (json.errors) {
-     console.error(json.errors);
-     throw new Error('Shopify Error: ' + JSON.stringify(json.errors));
-  }
-  return json.data;
-}
-
 // Extract Sheet names
 export async function extractSheetNames(file: File): Promise<string[]> {
   const arrayBuffer = await file.arrayBuffer();
@@ -116,6 +96,7 @@ async function readPdfText(file: File): Promise<string> {
 export async function processFiles(
   providerFile: File,
   remitoFile: File | null,
+  shopifyFile: File,
   config: SyncConfig
 ): Promise<SyncResult> {
   const alerts: AlertMessage[] = [];
@@ -200,40 +181,55 @@ export async function processFiles(
     }
   }
 
-  // 3. Obtener Inventario y Precios de Shopify via GraphQL
-  let hasNextPage = true;
-  let cursor = null;
+  // 3. Obtener Inventario y Precios de Shopify via CSV
   const shopifyProducts: any[] = [];
   
-  while(hasNextPage) {
-    const q = `
-      query getProducts($cursor: String) {
-        products(first: 100, after: $cursor) {
-          pageInfo { hasNextPage endCursor }
-          edges {
-            node {
-              id title handle tags
-              variants(first: 50) {
-                edges {
-                  node {
-                    id sku price inventoryQuantity
-                    inventoryItem { id }
-                  }
-                }
-              }
-            }
+  await new Promise<void>((resolve, reject) => {
+    Papa.parse(shopifyFile, {
+      header: true,
+      skipEmptyLines: true,
+      complete: (results) => {
+        const rows = results.data as any[];
+        const prodMap: Record<string, any> = {};
+        
+        for (const row of rows) {
+          const handle = row['Handle'];
+          if (!handle) continue;
+          
+          if (!prodMap[handle]) {
+             // Conservamos el Tags de la primera fila que lo tenga (suele estar en la matriz base)
+             prodMap[handle] = {
+                handle,
+                title: row['Title'] || '',
+                tags: row['Tags'] || '',
+                variants: { edges: [] }
+             };
           }
+          // Si el row tiene Tags y el prodMap no tenía, actualizarlo
+          if (row['Tags'] && !prodMap[handle].tags) {
+            prodMap[handle].tags = row['Tags'];
+          }
+          
+          const variant = {
+             node: {
+                id: row['Variant Inventory Item ID'] || '',
+                title: row['Option1 Value'] || row['Title'] || 'Default Title',
+                sku: row['Variant SKU'] || '',
+                price: row['Variant Price'] || '0',
+                inventoryQuantity: parseInt(row['Variant Inventory Qty'] || '0')
+             }
+          };
+          prodMap[handle].variants.edges.push(variant);
         }
-      }
-    `;
-    const data = await fetchShopifyGraphQL(q, { cursor });
-    const connection = data.products;
-    for (const edge of connection.edges) {
-      shopifyProducts.push(edge.node);
-    }
-    hasNextPage = connection.pageInfo.hasNextPage;
-    cursor = connection.pageInfo.endCursor;
-  }
+        
+        for (const p of Object.values(prodMap)) {
+          shopifyProducts.push(p);
+        }
+        resolve();
+      },
+      error: (err: any) => reject(new Error("Error leyendo el CSV de Shopify: " + err.message))
+    });
+  });
 
   const updatesToApply: UpdateAction[] = [];
 
