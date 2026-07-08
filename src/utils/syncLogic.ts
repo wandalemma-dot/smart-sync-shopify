@@ -184,8 +184,14 @@ export async function processFiles(
              const num = parseInt(rawSize, 10);
              if (!isNaN(num)) norm = (num / 10).toString();
           }
-          const qty = parseFloat(row[c] || 0) || 0;
-          if (norm) excelMap[cod].sizes[norm] = qty;
+
+          const cellVal = row[c];
+          if (cellVal !== undefined && cellVal !== null && String(cellVal).trim() !== '') {
+            const qty = parseFloat(cellVal);
+            if (!isNaN(qty)) {
+              excelMap[cod].sizes[norm] = qty;
+            }
+          }
         }
       }
     }
@@ -243,8 +249,8 @@ export async function processFiles(
       
       if (match) {
         provData.foundInShopify = true;
-        // Bonificación comercial del 15% para Bloque (y solo para Bloque)
-        // El costo interno será provData.wholesale * 0.85, lo usaremos luego al sincronizar costos.
+        provData.shopifyHandle = prod.handle;
+        provData.shopifyVariants = prod.variants.edges.map((e: any) => e.node);
         
         // El multiplicador depende de cada marca
         let marginMultiplier = 2.01; // Default para las demás
@@ -434,8 +440,28 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
   let csvContent = headers.join(',') + '\n';
 
   for (const [coditm, data] of Object.entries(result.excelMap)) {
-    const handle = coditm.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    if (!data.foundInShopify) continue; // Solo inventario para productos que ya existen
+
+    let handle = data.shopifyHandle || coditm.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     
+    // Auto-detect table for Converse
+    let bestTable: Record<string, string> | null = null;
+    if (config.brand === 'converse' && data.shopifyVariants) {
+       const tables = [convTable1, convTable2, convTable3, convTable4, convTable5];
+       const variantTitles = data.shopifyVariants.map((v: any) => String(v.title));
+       let bestScore = -1;
+       for (const table of tables) {
+          let score = 0;
+          for (const size of Object.keys(data.sizes)) {
+             if (table[size] && variantTitles.includes(table[size])) score++;
+          }
+          if (score > bestScore) {
+             bestScore = score;
+             bestTable = table;
+          }
+       }
+    }
+
     for (const [size, qty] of Object.entries(data.sizes)) {
       const outRow: any = {};
       headers.forEach(h => outRow[h] = '');
@@ -443,15 +469,44 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
       outRow['Handle'] = handle;
       outRow['Title'] = data.title;
       outRow['Option1 Name'] = 'Talle';
-      outRow['Option1 Value'] = size;
-      
-      let variantSku = coditm;
-      if (config.brand === 'converse' || config.brand === 'lecoq') {
-        variantSku = `${coditm}-${size}`;
+
+      let option1Value = size;
+      if (config.brand === 'converse' && bestTable) {
+         option1Value = bestTable[size] || size;
+      } else if (config.brand === 'lecoq') {
+         const sizeNum = parseInt(size, 10);
+         if (!isNaN(sizeNum)) {
+             option1Value = (sizeNum - 1).toString();
+         }
       }
-      outRow['SKU'] = variantSku;
+
+      // Buscar variante exacta en Shopify
+      let exactVariant = null;
+      if (data.shopifyVariants) {
+         exactVariant = data.shopifyVariants.find((v: any) => String(v.title) === String(option1Value) || String(v.sku).includes(coditm));
+         if (!exactVariant) {
+             // Si no coincide por titulo exacto, probamos si contiene
+             exactVariant = data.shopifyVariants.find((v: any) => String(v.sku).toLowerCase().includes(coditm.toLowerCase()));
+         }
+      }
+
+      if (exactVariant && exactVariant.title !== 'Default Title') {
+          outRow['Option1 Value'] = exactVariant.title;
+      } else {
+          outRow['Option1 Value'] = option1Value;
+      }
       
-      outRow['Location'] = 'ID (Converse - Le Coq Sportif)'; // Default for old script
+      if (exactVariant && exactVariant.sku) {
+         outRow['SKU'] = exactVariant.sku;
+      } else {
+         if (config.brand === 'converse' || config.brand === 'lecoq') {
+            outRow['SKU'] = `${coditm}-${option1Value}`;
+         } else {
+            outRow['SKU'] = coditm;
+         }
+      }
+      
+      outRow['Location'] = 'ID (Converse - Le Coq Sportif)'; // Sucursal ID
       outRow['Available'] = String(qty);
 
       const rowArray = headers.map(h => escapeCSV(outRow[h]));
