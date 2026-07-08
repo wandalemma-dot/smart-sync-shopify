@@ -245,9 +245,9 @@ export async function processFiles(
       // Detección: Si es bloque miramos el SKU. Si es converse/lecoq miramos el TAG.
       let match = false;
       if (config.brand === 'bloque') {
-         match = prod.variants.edges.some((v: any) => v.node.sku?.toLowerCase() === cod);
+         match = prod.variants.edges.some((v: any) => v.node.sku?.toLowerCase() === cod.toLowerCase());
       } else {
-         match = tags.includes(cod);
+         match = tags.includes(cod.toLowerCase());
       }
       
       if (match) {
