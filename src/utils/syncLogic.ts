@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import Papa from 'papaparse';
 
 export type SyncMode = 'all' | 'stock_only' | 'cost_only' | 'price_only';
 
