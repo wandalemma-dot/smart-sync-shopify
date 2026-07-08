@@ -13,6 +13,9 @@ export interface MissingProduct {
   wholesale: number;
   sizes: Record<string, number>;
   vendor?: string;
+  foundInShopify?: boolean;
+  shopifyHandle?: string;
+  shopifyVariants?: any[];
 }
 
 export interface UpdateAction {
@@ -116,7 +119,7 @@ export async function processFiles(
   config: SyncConfig
 ): Promise<SyncResult> {
   const alerts: AlertMessage[] = [];
-  const excelMap: Record<string, { wholesale: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string }> = {};
+  const excelMap: Record<string, { wholesale: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyVariants?: any[] }> = {};
 
   if (config.brand === 'bloque') {
     if (!remitoFile) throw new Error("Falta Remito de Bloque");
