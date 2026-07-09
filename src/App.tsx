@@ -5,7 +5,6 @@ import type { SyncConfig, SyncResult } from './utils/syncLogic';
 export default function App() {
   const [providerFile, setProviderFile] = useState<File | null>(null);
   const [remitoFile, setRemitoFile] = useState<File | null>(null); // Solo para Bloque
-  const [shopifyFile, setShopifyFile] = useState<File | null>(null); // Matriz Exportada de Shopify
   
   const [sheets, setSheets] = useState<string[]>([]);
   
@@ -61,18 +60,6 @@ export default function App() {
     }
   };
 
-  const handleShopifyDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (file) {
-      if (!file.name.toLowerCase().endsWith('.csv')) {
-        alert("⚠️ Error: Por favor, arrastrá la MATRIZ EXPORTADA DE SHOPIFY en formato CSV.");
-        return;
-      }
-      setShopifyFile(file);
-    }
-  };
-
   const preventDefault = (e: React.DragEvent) => e.preventDefault();
 
   const handleAnalyze = async () => {
@@ -81,18 +68,14 @@ export default function App() {
       alert("⚠️ Error: Para Bloque necesitas subir también el PDF del Remito.");
       return;
     }
-    if (!shopifyFile) {
-      alert("⚠️ Error: Necesitas subir la matriz exportada de Shopify (CSV).");
-      return;
-    }
 
     setLoading(true);
-    setLoadingText('Analizando archivos...');
+    setLoadingText('Analizando archivos y conectando con Shopify...');
     setResult(null);
     setPreviewReady(false);
     
     try {
-      const res = await processFiles(providerFile, remitoFile, shopifyFile, config);
+      const res = await processFiles(providerFile, remitoFile, config);
       setResult(res);
       setPreviewReady(true);
     } catch (err: any) {
@@ -146,15 +129,6 @@ export default function App() {
                 <p>{remitoFile?.name}</p>
               </div>
             )}
-
-            <div 
-              className={`dropzone ${shopifyFile ? 'has-file' : ''}`}
-              onDrop={handleShopifyDrop} onDragOver={preventDefault}
-              style={{ marginTop: '1rem', borderColor: '#10b981' }}
-            >
-              <h3 style={{ color: '#10b981' }}>{shopifyFile ? '✅ Shopify CSV Listo' : '🛒 Arrastra la MATRIZ EXPORTADA DE SHOPIFY (CSV)'}</h3>
-              <p>{shopifyFile?.name}</p>
-            </div>
           </div>
 
           <div className="glass-panel settings-panel">
@@ -168,7 +142,6 @@ export default function App() {
                   setConfig({...config, brand: e.target.value as any});
                   setProviderFile(null);
                   setRemitoFile(null);
-                  setShopifyFile(null);
                 }}
               >
                 <option value="converse">Converse</option>
@@ -193,7 +166,7 @@ export default function App() {
             <button 
               className="btn-primary" 
               onClick={handleAnalyze}
-              disabled={!providerFile || !shopifyFile || (config.brand === 'bloque' && !remitoFile) || loading}
+              disabled={!providerFile || (config.brand === 'bloque' && !remitoFile) || loading}
             >
               {loading ? <span className="loader"></span> : '🔍 Analizar y Preparar Resumen'}
             </button>

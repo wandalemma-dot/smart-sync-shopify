@@ -1,5 +1,4 @@
 import * as XLSX from 'xlsx';
-import Papa from 'papaparse';
 
 export type SyncMode = 'all' | 'stock_only' | 'cost_only' | 'price_only';
 
@@ -14,9 +13,6 @@ export interface MissingProduct {
   wholesale: number;
   sizes: Record<string, number>;
   vendor?: string;
-  foundInShopify?: boolean;
-  shopifyHandle?: string;
-  shopifyVariants?: any[];
 }
 
 export interface UpdateAction {
@@ -49,6 +45,26 @@ export const convTable2: Record<string, string> = { '3': '35', '3.5': '36', '4':
 export const convTable3: Record<string, string> = { '5': '35', '5.5': '36', '6': '36.5', '6.5': '37', '7.5': '38', '8': '39', '9': '40', '9.5': '41' };
 export const convTable4: Record<string, string> = { '10.5': '27', '11': '28', '11.5': '28.5', '12': '29', '12.5': '30', '13': '31', '13.5': '31.5', '1': '32', '1.5': '33', '2.5': '34', '3': '35' };
 export const convTable5: Record<string, string> = { '4': '20', '6': '21', '7': '22', '8': '23', '9': '24', '10': '25', '11': '26' };
+
+// Utility: Call Shopify via our Vercel Serverless Function Proxy
+async function fetchShopifyGraphQL(query: string, variables: any = {}) {
+  const res = await fetch('/api/shopify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ query, variables })
+  });
+  if (!res.ok) {
+    const rawText = await res.text();
+    console.error("Shopify Raw Error:", rawText);
+    throw new Error(`Error de Conexión (${res.status}): ${rawText.substring(0, 100)}`);
+  }
+  const json = await res.json();
+  if (json.errors) {
+     console.error(json.errors);
+     throw new Error('Shopify Error: ' + JSON.stringify(json.errors));
+  }
+  return json.data;
+}
 
 // Extract Sheet names
 export async function extractSheetNames(file: File): Promise<string[]> {
@@ -97,11 +113,10 @@ async function readPdfText(file: File): Promise<string> {
 export async function processFiles(
   providerFile: File,
   remitoFile: File | null,
-  shopifyFile: File,
   config: SyncConfig
 ): Promise<SyncResult> {
   const alerts: AlertMessage[] = [];
-  const excelMap: Record<string, { wholesale: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyVariants?: any[] }> = {};
+  const excelMap: Record<string, { wholesale: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string }> = {};
 
   if (config.brand === 'bloque') {
     if (!remitoFile) throw new Error("Falta Remito de Bloque");
@@ -182,55 +197,40 @@ export async function processFiles(
     }
   }
 
-  // 3. Obtener Inventario y Precios de Shopify via CSV
+  // 3. Obtener Inventario y Precios de Shopify via GraphQL
+  let hasNextPage = true;
+  let cursor = null;
   const shopifyProducts: any[] = [];
   
-  await new Promise<void>((resolve, reject) => {
-    Papa.parse(shopifyFile, {
-      header: true,
-      skipEmptyLines: true,
-      complete: (results) => {
-        const rows = results.data as any[];
-        const prodMap: Record<string, any> = {};
-        
-        for (const row of rows) {
-          const handle = row['Handle'];
-          if (!handle) continue;
-          
-          if (!prodMap[handle]) {
-             // Conservamos el Tags de la primera fila que lo tenga (suele estar en la matriz base)
-             prodMap[handle] = {
-                handle,
-                title: row['Title'] || '',
-                tags: row['Tags'] || '',
-                variants: { edges: [] }
-             };
+  while(hasNextPage) {
+    const q = `
+      query getProducts($cursor: String) {
+        products(first: 100, after: $cursor) {
+          pageInfo { hasNextPage endCursor }
+          edges {
+            node {
+              id title handle tags
+              variants(first: 50) {
+                edges {
+                  node {
+                    id sku price inventoryQuantity
+                    inventoryItem { id }
+                  }
+                }
+              }
+            }
           }
-          // Si el row tiene Tags y el prodMap no tenía, actualizarlo
-          if (row['Tags'] && !prodMap[handle].tags) {
-            prodMap[handle].tags = row['Tags'];
-          }
-          
-          const variant = {
-             node: {
-                id: row['Variant Inventory Item ID'] || '',
-                title: row['Option1 Value'] || row['Title'] || 'Default Title',
-                sku: row['Variant SKU'] || '',
-                price: row['Variant Price'] || '0',
-                inventoryQuantity: parseInt(row['Variant Inventory Qty'] || '0')
-             }
-          };
-          prodMap[handle].variants.edges.push(variant);
         }
-        
-        for (const p of Object.values(prodMap)) {
-          shopifyProducts.push(p);
-        }
-        resolve();
-      },
-      error: (err: any) => reject(new Error("Error leyendo el CSV de Shopify: " + err.message))
-    });
-  });
+      }
+    `;
+    const data = await fetchShopifyGraphQL(q, { cursor });
+    const connection = data.products;
+    for (const edge of connection.edges) {
+      shopifyProducts.push(edge.node);
+    }
+    hasNextPage = connection.pageInfo.hasNextPage;
+    cursor = connection.pageInfo.endCursor;
+  }
 
   const updatesToApply: UpdateAction[] = [];
 
@@ -242,9 +242,9 @@ export async function processFiles(
       // Detección: Si es bloque miramos el SKU. Si es converse/lecoq miramos el TAG.
       let match = false;
       if (config.brand === 'bloque') {
-         match = prod.variants.edges.some((v: any) => v.node.sku?.toLowerCase() === cod.toLowerCase());
+         match = prod.variants.edges.some((v: any) => v.node.sku?.toLowerCase() === cod);
       } else {
-         match = tags.includes(cod.toLowerCase());
+         match = tags.includes(cod);
       }
       
       if (match) {
