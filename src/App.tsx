@@ -5,6 +5,7 @@ import type { SyncConfig, SyncResult } from './utils/syncLogic';
 export default function App() {
   const [providerFile, setProviderFile] = useState<File | null>(null);
   const [remitoFile, setRemitoFile] = useState<File | null>(null); // Solo para Bloque
+  const [shopifyFile, setShopifyFile] = useState<File | null>(null); // CSV exportado de Shopify
   
   const [sheets, setSheets] = useState<string[]>([]);
   
@@ -60,6 +61,18 @@ export default function App() {
     }
   };
 
+  const handleShopifyDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file) {
+      if (!file.name.toLowerCase().endsWith('.csv')) {
+        alert("⚠️ Error: Arrastrá el CSV exportado de Shopify (products_export.csv).");
+        return;
+      }
+      setShopifyFile(file);
+    }
+  };
+
   const preventDefault = (e: React.DragEvent) => e.preventDefault();
 
   const handleAnalyze = async () => {
@@ -75,7 +88,7 @@ export default function App() {
     setPreviewReady(false);
     
     try {
-      const res = await processFiles(providerFile, remitoFile, config);
+      const res = await processFiles(providerFile, remitoFile, shopifyFile, config);
       setResult(res);
       setPreviewReady(true);
     } catch (err: any) {
@@ -129,6 +142,17 @@ export default function App() {
                 <p>{remitoFile?.name}</p>
               </div>
             )}
+
+            <div 
+              className={`dropzone ${shopifyFile ? 'has-file' : ''}`}
+              onDrop={handleShopifyDrop} onDragOver={preventDefault}
+              style={{ marginTop: '0.8rem', borderColor: shopifyFile ? '#10b981' : '#6366f1' }}
+            >
+              <h3 style={{ color: shopifyFile ? '#10b981' : '#a5b4fc' }}>
+                {shopifyFile ? '✅ Shopify CSV Listo' : '🛒 Arrastra el CSV de Shopify (products_export)'}
+              </h3>
+              <p>{shopifyFile?.name || 'Necesario para detectar si los productos ya existen'}</p>
+            </div>
           </div>
 
           <div className="glass-panel settings-panel">

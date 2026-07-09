@@ -113,6 +113,7 @@ async function readPdfText(file: File): Promise<string> {
 export async function processFiles(
   providerFile: File,
   remitoFile: File | null,
+  shopifyExportFile: File | null,
   config: SyncConfig
 ): Promise<SyncResult> {
   const alerts: AlertMessage[] = [];
@@ -161,6 +162,27 @@ export async function processFiles(
          excelMap[sku].sizes[size] = (excelMap[sku].sizes[size] || 0) + qty;
       }
     }
+  } else if (config.brand === 'orchard') {
+    // Orchard: filas verticales ARTICULO | DESCRIPCION | TALLE | COSTO | PUBLICO | CANTIDAD
+    // La clave para matchear con Shopify es la DESCRIPCION con espacios → guiones
+    const excelData = await readExcel(providerFile, config.sheetName);
+    for (let r = 1; r < excelData.length; r++) {
+      const row = excelData[r] as any[];
+      if (!row) continue;
+      const desc = String(row[1] || '').trim(); // ej: DEMON INSIDE
+      const rawSize = String(row[2] || '').trim(); // ej: M, L, XL
+      const wholesale = parseFloat(row[3] || 0);
+      const qty = parseFloat(row[5] || 0);
+      if (!desc || !rawSize) continue;
+      // La clave es la descripción con espacios → guiones (como aparece en las Tags de Shopify)
+      const cod = desc.replace(/\s+/g, '-').toLowerCase(); // ej: demon-inside
+      if (!excelMap[cod]) {
+        excelMap[cod] = { wholesale, sizes: {}, foundInShopify: false, title: desc };
+      }
+      if (!isNaN(qty)) {
+        excelMap[cod].sizes[rawSize] = (excelMap[cod].sizes[rawSize] || 0) + qty;
+      }
+    }
   } else {
     // Lectura de Excel estándar (Converse / LeCoq)
     const excelData = await readExcel(providerFile, config.sheetName);
@@ -197,54 +219,67 @@ export async function processFiles(
     }
   }
 
-  // 3. Obtener Inventario y Precios de Shopify via GraphQL
-  let hasNextPage = true;
-  let cursor = null;
-  const shopifyProducts: any[] = [];
+  // 3. Leer datos de Shopify desde el CSV exportado que el usuario subió
+  interface ShopifyProductNode {
+    handle: string;
+    title: string;
+    tags: string;
+    variants: { edges: { node: { id: string; title: string; sku: string; price: string; inventoryQuantity: number } }[] };
+  }
+  const shopifyProducts: ShopifyProductNode[] = [];
   
-  while(hasNextPage) {
-    const q = `
-      query getProducts($cursor: String) {
-        products(first: 100, after: $cursor) {
-          pageInfo { hasNextPage endCursor }
-          edges {
-            node {
-              id title handle tags
-              variants(first: 50) {
-                edges {
-                  node {
-                    id sku price inventoryQuantity
-                    inventoryItem { id }
-                  }
-                }
-              }
+  if (shopifyExportFile) {
+    await new Promise<void>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const wb = XLSX.read(e.target!.result, { type: 'array' });
+          const sheet = wb.Sheets[wb.SheetNames[0]];
+          const rows = XLSX.utils.sheet_to_json(sheet) as any[];
+          const prodMap: Record<string, ShopifyProductNode> = {};
+          for (const row of rows) {
+            const handle = String(row['Handle'] || '').trim();
+            if (!handle) continue;
+            if (!prodMap[handle]) {
+              prodMap[handle] = {
+                handle,
+                title: String(row['Title'] || ''),
+                tags: String(row['Tags'] || ''),
+                variants: { edges: [] }
+              };
             }
+            if (row['Tags'] && !prodMap[handle].tags) prodMap[handle].tags = String(row['Tags']);
+            prodMap[handle].variants.edges.push({
+              node: {
+                id: String(row['Variant Inventory Item ID'] || ''),
+                title: String(row['Option1 Value'] || ''),
+                sku: String(row['Variant SKU'] || ''),
+                price: String(row['Variant Price'] || '0'),
+                inventoryQuantity: parseInt(row['Variant Inventory Qty'] || '0')
+              }
+            });
           }
-        }
-      }
-    `;
-    const data = await fetchShopifyGraphQL(q, { cursor });
-    const connection = data.products;
-    for (const edge of connection.edges) {
-      shopifyProducts.push(edge.node);
-    }
-    hasNextPage = connection.pageInfo.hasNextPage;
-    cursor = connection.pageInfo.endCursor;
+          Object.values(prodMap).forEach(p => shopifyProducts.push(p));
+          resolve();
+        } catch(err: any) { reject(new Error('Error leyendo CSV Shopify: ' + err.message)); }
+      };
+      reader.onerror = () => reject(new Error('Error al leer el archivo CSV'));
+      reader.readAsArrayBuffer(shopifyExportFile);
+    });
   }
 
   const updatesToApply: UpdateAction[] = [];
 
-  // Mapear lo de Shopify contra el ExcelMap
+  // Mapear Shopify contra el ExcelMap
   for (const prod of shopifyProducts) {
     const tags = String(prod.tags || '').toLowerCase();
     
     for (const [cod, provData] of Object.entries(excelMap)) {
-      // Detección: Si es bloque miramos el SKU. Si es converse/lecoq miramos el TAG.
       let match = false;
       if (config.brand === 'bloque') {
-         match = prod.variants.edges.some((v: any) => v.node.sku?.toLowerCase() === cod);
+         match = prod.variants.edges.some((v) => v.node.sku?.toLowerCase() === cod);
       } else {
-         match = tags.includes(cod);
+         match = tags.includes(cod.toLowerCase());
       }
       
       if (match) {
