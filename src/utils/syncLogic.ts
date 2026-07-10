@@ -14,6 +14,8 @@ export interface MissingProduct {
   publicPrice?: number;
   sizes: Record<string, number>;
   vendor?: string;
+  descCod?: string;
+  artType?: string;
 }
 
 export interface UpdateAction {
@@ -146,7 +148,7 @@ export async function processFiles(
   config: SyncConfig
 ): Promise<SyncResult> {
   const alerts: AlertMessage[] = [];
-  const excelMap: Record<string, { wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyVariants?: any[] }> = {};
+  const excelMap: Record<string, { wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyVariants?: any[], descCod?: string, artType?: string }> = {};
 
   if (config.brand === 'bloque') {
     if (!remitoFile) throw new Error("Falta Remito de Bloque");
@@ -197,21 +199,31 @@ export async function processFiles(
     // El proveedor ya envía el precio final (PUBLICO). Solo hay que:
     //   - usar PUBLICO (col F) como precio de venta, sin markup
     //   - aplicar 15% de descuento al COSTO NETO (col E) para el costo
-    // La clave para matchear con Shopify es la DESCRIPCION con espacios → guiones
+    // Mapa ARTICULO del proveedor -> palabra de tipo que aparece en el título de Shopify.
+    const orchardTypeMap: Record<string, string> = {
+      REMERA: 'remera', BUZO: 'buzo', CAMPERA: 'campera',
+      GORRA: 'gorra', BEANIE: 'gorro', MEDIAS: 'medias',
+    };
     const excelData = await readExcel(providerFile, config.sheetName);
     for (let r = 1; r < excelData.length; r++) {
       const row = excelData[r] as any[];
       if (!row) continue;
+      const artRaw = String(row[1] || '').trim().toUpperCase(); // B: ARTICULO (tipo)
       const desc = String(row[2] || '').trim(); // C: ej DEMON INSIDE
       const rawSize = String(row[3] || '').trim(); // D: ej M, L, XL
       const costoNeto = parseFloat(row[4] || 0); // E: costo neto
       const publico = parseFloat(row[5] || 0); // F: precio público final
       const qty = parseFloat(row[6] || 0); // G: cantidad
       if (!desc || !rawSize || isNaN(costoNeto)) continue;
-      // La clave es la descripción con espacios → guiones (como aparece en las Tags de Shopify)
-      const cod = desc.replace(/\s+/g, '-').toLowerCase(); // ej: demon-inside
+      // descCod normaliza igual que Shopify (cualquier símbolo, incluido el punto, → guion).
+      // Así "ICONS 2.0" pasa a "icons-2-0" y coincide con el tag de Shopify.
+      const descCod = desc.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+      // Un mismo nombre puede repetirse en distinto ARTICULO (ej BEANIE vs GORRA SPIRIT)
+      // y son productos DISTINTOS: la clave interna incluye el tipo + la descripción.
+      const artType = orchardTypeMap[artRaw] || artRaw.toLowerCase();
+      const cod = `${artType}::${descCod}`;
       if (!excelMap[cod]) {
-        excelMap[cod] = { wholesale: costoNeto, publicPrice: publico, sizes: {}, foundInShopify: false, title: desc };
+        excelMap[cod] = { wholesale: costoNeto, publicPrice: publico, sizes: {}, foundInShopify: false, title: desc, descCod, artType };
       }
       if (!isNaN(qty)) {
         excelMap[cod].sizes[rawSize] = (excelMap[cod].sizes[rawSize] || 0) + qty;
@@ -312,6 +324,13 @@ export async function processFiles(
       let match = false;
       if (config.brand === 'bloque') {
          match = prod.variants.edges.some((v) => v.node.sku?.toLowerCase() === cod);
+      } else if (config.brand === 'orchard') {
+         // Matchea por descripción (tag) + tipo (título): distingue, por ejemplo,
+         // el gorro y la gorra que comparten la misma descripción ("SPIRIT").
+         const prodTitle = String(prod.title || '').toLowerCase();
+         const dCod = provData.descCod || '';
+         const aType = provData.artType || '';
+         match = !!dCod && tags.includes(dCod) && (!aType || prodTitle.includes(aType));
       } else {
          match = tags.includes(cod.toLowerCase());
       }
@@ -362,7 +381,9 @@ export async function processFiles(
         wholesale: data.wholesale,
         publicPrice: data.publicPrice,
         sizes: data.sizes,
-        vendor: data.vendor
+        vendor: data.vendor,
+        descCod: data.descCod,
+        artType: data.artType
       });
     }
   }
@@ -433,12 +454,25 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _table
   let csvContent = headers.join(',') + '\n';
 
   result.missingProducts.forEach(prod => {
-    const handle = prod.coditm.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    let handle = prod.coditm.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     const vendorDefaults: Record<SyncConfig['brand'], string> = { lecoq: 'Le Coq Sportif', converse: 'Converse', orchard: 'Orchard', bloque: 'Bloque' };
     const vendor = prod.vendor || vendorDefaults[config.brand];
 
     const price = calcSellPrice(config.brand, prod.wholesale, prod.publicPrice || 0);
     const cost = calcCost(config.brand, prod.wholesale);
+
+    // Orchard: nombre/tag/handle según tipo + descripción (gorro, gorra, remera, etc.)
+    let displayTitle = prod.title;
+    let tagValue = prod.coditm;
+    if (config.brand === 'orchard') {
+      const typeLabels: Record<string, string> = { gorra: 'Gorra', gorro: 'Gorro Beanie', remera: 'Remera', buzo: 'Buzo', campera: 'Campera', medias: 'Medias' };
+      const aType = prod.artType || '';
+      const typeLbl = typeLabels[aType] || (aType ? aType.charAt(0).toUpperCase() + aType.slice(1) : '');
+      const descTitle = prod.title.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+      displayTitle = `${typeLbl} Orchard ${descTitle}`.replace(/\s+/g, ' ').trim();
+      tagValue = prod.descCod || prod.coditm;
+      handle = `${aType}-orchard-${prod.descCod || ''}`.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    }
 
     let isFirstVariant = true;
 
@@ -448,10 +482,10 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _table
 
       outRow['Handle'] = handle;
       if (isFirstVariant) {
-        outRow['Title'] = prod.title;
-        outRow['Body (HTML)'] = prod.title;
+        outRow['Title'] = displayTitle;
+        outRow['Body (HTML)'] = displayTitle;
         outRow['Vendor'] = vendor;
-        outRow['Tags'] = prod.coditm;
+        outRow['Tags'] = tagValue;
         outRow['Published'] = 'FALSE'; // Para que lo publiquen a mano o con POS
         outRow['Status'] = 'active';
       }
@@ -462,6 +496,8 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _table
       let variantSku = prod.coditm;
       if (config.brand === 'converse' || config.brand === 'lecoq') {
         variantSku = `${prod.coditm}-${size}`;
+      } else if (config.brand === 'orchard') {
+        variantSku = `ORC-${(prod.descCod || '').toUpperCase()}-${String(size).toUpperCase()}`;
       }
       outRow['Variant SKU'] = variantSku;
       outRow['Variant Price'] = price;
