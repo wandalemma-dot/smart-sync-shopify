@@ -56,7 +56,7 @@ export const convTable5: Record<string, string> = { '4': '20', '6': '21', '7': '
 export const BRAND_PRICING: Record<SyncConfig['brand'], { markup: number; providerDiscount: number; usePublicPrice: boolean }> = {
   converse: { markup: 2.01, providerDiscount: 0,    usePublicPrice: false },
   lecoq:    { markup: 2.01, providerDiscount: 0,    usePublicPrice: false },
-  orchard:  { markup: 0,    providerDiscount: 0.15, usePublicPrice: true  },
+  orchard:  { markup: 0,    providerDiscount: 0.20, usePublicPrice: true  },
   bloque:   { markup: 2.0,  providerDiscount: 0.15, usePublicPrice: false },
 };
 
