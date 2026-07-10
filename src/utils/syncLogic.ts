@@ -491,7 +491,7 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
 
   const headers = [
     'Handle', 'Title', 'Option1 Name', 'Option1 Value', 'Option2 Name', 'Option2 Value',
-    'Option3 Name', 'Option3 Value', 'SKU', 'Location', 'Available'
+    'Option3 Name', 'Option3 Value', 'SKU', 'Location', 'On hand (new)'
   ];
 
   let csvContent = headers.join(',') + '\n';
@@ -564,7 +564,7 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
       }
       
       outRow['Location'] = 'ID (Converse - Le Coq Sportif)'; // Sucursal ID
-      outRow['Available'] = String(qty);
+      outRow['On hand (new)'] = String(qty); // Shopify exige esta columna para actualizar cantidades
 
       const rowArray = headers.map(h => escapeCSV(outRow[h]));
       csvContent += rowArray.join(',') + '\n';
