@@ -77,6 +77,18 @@ export function calcCost(brand: SyncConfig['brand'], wholesale: number): number 
   return wholesale * (1 - cfg.providerDiscount);
 }
 
+// Peso en GRAMOS por tipo de artículo (Shopify necesita peso para calcular envíos).
+// Orchard se define por su ARTICULO; Converse/Le Coq son zapatillas; Bloque skate.
+const ORCHARD_WEIGHTS: Record<string, number> = {
+  remera: 250, buzo: 700, campera: 900, gorra: 150, gorro: 120, medias: 100,
+};
+export function calcWeightGrams(brand: SyncConfig['brand'], artType?: string): number {
+  if (brand === 'converse' || brand === 'lecoq') return 900; // zapatillas
+  if (brand === 'bloque') return 2000; // skate (tentativo)
+  if (brand === 'orchard') return ORCHARD_WEIGHTS[artType || ''] ?? 250; // default remera
+  return 0;
+}
+
 // Utility: Call Shopify via our Vercel Serverless Function Proxy
 async function fetchShopifyGraphQL(query: string, variables: any = {}) {
   const res = await fetch('/api/shopify', {
@@ -503,7 +515,8 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _table
       outRow['Variant SKU'] = variantSku;
       outRow['Variant Price'] = price;
       outRow['Cost per item'] = cost;
-      
+      outRow['Variant Grams'] = String(calcWeightGrams(config.brand, prod.artType));
+
       outRow['Variant Inventory Tracker'] = 'shopify';
       outRow['Variant Inventory Qty'] = qty.toString();
       outRow['Variant Inventory Policy'] = 'deny';
