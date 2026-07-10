@@ -194,8 +194,9 @@ export async function processFiles(
       }
     }
   } else if (config.brand === 'orchard') {
-    // Orchard: la primera columna (A) viene vacía. Columnas reales:
-    //   B=ARTICULO | C=DESCRIPCION | D=TALLE | E=COSTO NETO | F=PUBLICO | G=CANTIDAD
+    // Orchard: la hoja tiene la columna A vacía, pero SheetJS la descarta (rango B1:G),
+    // así que en el array los índices ya arrancan en la columna B:
+    //   row[0]=ARTICULO | row[1]=DESCRIPCION | row[2]=TALLE | row[3]=COSTO NETO | row[4]=PUBLICO | row[5]=CANTIDAD
     // El proveedor ya envía el precio final (PUBLICO). Solo hay que:
     //   - usar PUBLICO (col F) como precio de venta, sin markup
     //   - aplicar 15% de descuento al COSTO NETO (col E) para el costo
@@ -208,12 +209,12 @@ export async function processFiles(
     for (let r = 1; r < excelData.length; r++) {
       const row = excelData[r] as any[];
       if (!row) continue;
-      const artRaw = String(row[1] || '').trim().toUpperCase(); // B: ARTICULO (tipo)
-      const desc = String(row[2] || '').trim(); // C: ej DEMON INSIDE
-      const rawSize = String(row[3] || '').trim(); // D: ej M, L, XL
-      const costoNeto = parseFloat(row[4] || 0); // E: costo neto
-      const publico = parseFloat(row[5] || 0); // F: precio público final
-      const qty = parseFloat(row[6] || 0); // G: cantidad
+      const artRaw = String(row[0] || '').trim().toUpperCase(); // ARTICULO (tipo)
+      const desc = String(row[1] || '').trim(); // ej DEMON INSIDE
+      const rawSize = String(row[2] || '').trim(); // ej M, L, XL
+      const costoNeto = parseFloat(row[3] || 0); // costo neto
+      const publico = parseFloat(row[4] || 0); // precio público final
+      const qty = parseFloat(row[5] || 0); // cantidad
       if (!desc || !rawSize || isNaN(costoNeto)) continue;
       // descCod normaliza igual que Shopify (cualquier símbolo, incluido el punto, → guion).
       // Así "ICONS 2.0" pasa a "icons-2-0" y coincide con el tag de Shopify.
