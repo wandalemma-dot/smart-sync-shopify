@@ -11,6 +11,7 @@ export interface MissingProduct {
   coditm: string;
   title: string;
   wholesale: number;
+  publicPrice?: number;
   sizes: Record<string, number>;
   vendor?: string;
 }
@@ -45,6 +46,34 @@ export const convTable2: Record<string, string> = { '3': '35', '3.5': '36', '4':
 export const convTable3: Record<string, string> = { '5': '35', '5.5': '36', '6': '36.5', '6.5': '37', '7.5': '38', '8': '39', '9': '40', '9.5': '41' };
 export const convTable4: Record<string, string> = { '10.5': '27', '11': '28', '11.5': '28.5', '12': '29', '12.5': '30', '13': '31', '13.5': '31.5', '1': '32', '1.5': '33', '2.5': '34', '3': '35' };
 export const convTable5: Record<string, string> = { '4': '20', '6': '21', '7': '22', '8': '23', '9': '24', '10': '25', '11': '26' };
+
+// Configuración de precios por marca.
+// - markup: multiplicador sobre el precio mayorista para calcular el precio de venta.
+// - providerDiscount: descuento que se aplica al costo (para el "Cost per item").
+// - usePublicPrice: si es true, se usa el precio PÚBLICO que envía el proveedor tal cual (sin markup).
+export const BRAND_PRICING: Record<SyncConfig['brand'], { markup: number; providerDiscount: number; usePublicPrice: boolean }> = {
+  converse: { markup: 2.01, providerDiscount: 0,    usePublicPrice: false },
+  lecoq:    { markup: 2.01, providerDiscount: 0,    usePublicPrice: false },
+  orchard:  { markup: 0,    providerDiscount: 0.15, usePublicPrice: true  },
+  bloque:   { markup: 2.0,  providerDiscount: 0.15, usePublicPrice: false },
+};
+
+// Precio de venta final según la marca.
+export function calcSellPrice(brand: SyncConfig['brand'], wholesale: number, publicPrice = 0): number {
+  const cfg = BRAND_PRICING[brand];
+  // Orchard: el proveedor ya manda el precio final, se usa tal cual.
+  if (cfg.usePublicPrice) return publicPrice;
+  const minP = wholesale * cfg.markup;
+  let price = Math.floor(minP / 10000) * 10000 + 9900;
+  if (price < minP) price += 10000;
+  return price;
+}
+
+// Costo (Cost per item) según la marca, aplicando el descuento de proveedor.
+export function calcCost(brand: SyncConfig['brand'], wholesale: number): number {
+  const cfg = BRAND_PRICING[brand];
+  return wholesale * (1 - cfg.providerDiscount);
+}
 
 // Utility: Call Shopify via our Vercel Serverless Function Proxy
 async function fetchShopifyGraphQL(query: string, variables: any = {}) {
@@ -117,7 +146,7 @@ export async function processFiles(
   config: SyncConfig
 ): Promise<SyncResult> {
   const alerts: AlertMessage[] = [];
-  const excelMap: Record<string, { wholesale: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string }> = {};
+  const excelMap: Record<string, { wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyVariants?: any[] }> = {};
 
   if (config.brand === 'bloque') {
     if (!remitoFile) throw new Error("Falta Remito de Bloque");
@@ -163,21 +192,26 @@ export async function processFiles(
       }
     }
   } else if (config.brand === 'orchard') {
-    // Orchard: filas verticales ARTICULO | DESCRIPCION | TALLE | COSTO | PUBLICO | CANTIDAD
+    // Orchard: la primera columna (A) viene vacía. Columnas reales:
+    //   B=ARTICULO | C=DESCRIPCION | D=TALLE | E=COSTO NETO | F=PUBLICO | G=CANTIDAD
+    // El proveedor ya envía el precio final (PUBLICO). Solo hay que:
+    //   - usar PUBLICO (col F) como precio de venta, sin markup
+    //   - aplicar 15% de descuento al COSTO NETO (col E) para el costo
     // La clave para matchear con Shopify es la DESCRIPCION con espacios → guiones
     const excelData = await readExcel(providerFile, config.sheetName);
     for (let r = 1; r < excelData.length; r++) {
       const row = excelData[r] as any[];
       if (!row) continue;
-      const desc = String(row[1] || '').trim(); // ej: DEMON INSIDE
-      const rawSize = String(row[2] || '').trim(); // ej: M, L, XL
-      const wholesale = parseFloat(row[3] || 0);
-      const qty = parseFloat(row[5] || 0);
-      if (!desc || !rawSize) continue;
+      const desc = String(row[2] || '').trim(); // C: ej DEMON INSIDE
+      const rawSize = String(row[3] || '').trim(); // D: ej M, L, XL
+      const costoNeto = parseFloat(row[4] || 0); // E: costo neto
+      const publico = parseFloat(row[5] || 0); // F: precio público final
+      const qty = parseFloat(row[6] || 0); // G: cantidad
+      if (!desc || !rawSize || isNaN(costoNeto)) continue;
       // La clave es la descripción con espacios → guiones (como aparece en las Tags de Shopify)
       const cod = desc.replace(/\s+/g, '-').toLowerCase(); // ej: demon-inside
       if (!excelMap[cod]) {
-        excelMap[cod] = { wholesale, sizes: {}, foundInShopify: false, title: desc };
+        excelMap[cod] = { wholesale: costoNeto, publicPrice: publico, sizes: {}, foundInShopify: false, title: desc };
       }
       if (!isNaN(qty)) {
         excelMap[cod].sizes[rawSize] = (excelMap[cod].sizes[rawSize] || 0) + qty;
@@ -287,16 +321,8 @@ export async function processFiles(
         provData.shopifyHandle = prod.handle;
         provData.shopifyVariants = prod.variants.edges.map((e: any) => e.node);
         
-        // El multiplicador depende de cada marca
-        let marginMultiplier = 2.01; // Default para las demás
-        if (config.brand === 'bloque') {
-          marginMultiplier = 2.0; // "criterio de markup orientativo de 2,0"
-        }
-        
-        // Precio sugerido = PRECIO MAYORISTA ORIGINAL x Multiplicador
-        const minP = provData.wholesale * marginMultiplier;
-        let calculatedPrice = Math.floor(minP / 10000) * 10000 + 9900;
-        if (calculatedPrice < minP) calculatedPrice += 10000;
+        // Precio de venta según la marca (Orchard usa el precio público directo).
+        const calculatedPrice = calcSellPrice(config.brand, provData.wholesale, provData.publicPrice || 0);
 
         for (const vEdge of prod.variants.edges) {
            const variant = vEdge.node;
@@ -334,6 +360,7 @@ export async function processFiles(
         coditm: cod,
         title: data.title,
         wholesale: data.wholesale,
+        publicPrice: data.publicPrice,
         sizes: data.sizes,
         vendor: data.vendor
       });
@@ -407,16 +434,11 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _table
 
   result.missingProducts.forEach(prod => {
     const handle = prod.coditm.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const vendor = prod.vendor || (config.brand === 'lecoq' ? 'Le Coq Sportif' : config.brand === 'converse' ? 'Converse' : 'Bloque');
-    
-    let marginMultiplier = 2.01;
-    if (config.brand === 'bloque') marginMultiplier = 2.0;
-    
-    const minP = prod.wholesale * marginMultiplier;
-    let price = Math.floor(minP / 10000) * 10000 + 9900;
-    if (price < minP) price += 10000;
-    
-    const cost = config.brand === 'bloque' ? prod.wholesale * 0.85 : prod.wholesale;
+    const vendorDefaults: Record<SyncConfig['brand'], string> = { lecoq: 'Le Coq Sportif', converse: 'Converse', orchard: 'Orchard', bloque: 'Bloque' };
+    const vendor = prod.vendor || vendorDefaults[config.brand];
+
+    const price = calcSellPrice(config.brand, prod.wholesale, prod.publicPrice || 0);
+    const cost = calcCost(config.brand, prod.wholesale);
 
     let isFirstVariant = true;
 
