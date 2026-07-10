@@ -531,6 +531,20 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
     'Option3 Name', 'Option3 Value', 'SKU', 'Location', 'On hand (new)'
   ];
 
+  // Sucursal donde se carga el stock, según la marca.
+  const stockLocation: Record<SyncConfig['brand'], string> = {
+    converse: 'ID (Converse - Le Coq Sportif)',
+    lecoq: 'ID (Converse - Le Coq Sportif)',
+    orchard: 'ORCHARD',
+    bloque: 'ID (Converse - Le Coq Sportif)',
+  };
+  // Sucursales que deben quedar en 0 para esa marca (se maneja en una sola sucursal).
+  const zeroLocations: Partial<Record<SyncConfig['brand'], string[]>> = {
+    orchard: ['DEPOSITO MARTINEZ'],
+  };
+  const mainLoc = stockLocation[config.brand];
+  const zeros = zeroLocations[config.brand] || [];
+
   let csvContent = headers.join(',') + '\n';
 
   for (const [coditm, data] of Object.entries(result.excelMap)) {
@@ -600,11 +614,17 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
          }
       }
       
-      outRow['Location'] = 'ID (Converse - Le Coq Sportif)'; // Sucursal ID
-      outRow['On hand (new)'] = String(qty); // Shopify exige esta columna para actualizar cantidades
+      // Fila principal: la sucursal de la marca con la cantidad del proveedor.
+      outRow['Location'] = mainLoc;
+      outRow['On hand (new)'] = String(qty);
+      csvContent += headers.map(h => escapeCSV(outRow[h])).join(',') + '\n';
 
-      const rowArray = headers.map(h => escapeCSV(outRow[h]));
-      csvContent += rowArray.join(',') + '\n';
+      // Filas extra: dejar en 0 las demás sucursales de esa marca (ej. Orchard -> DEPOSITO MARTINEZ).
+      for (const zloc of zeros) {
+        outRow['Location'] = zloc;
+        outRow['On hand (new)'] = '0';
+        csvContent += headers.map(h => escapeCSV(outRow[h])).join(',') + '\n';
+      }
     }
   }
 
