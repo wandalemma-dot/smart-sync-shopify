@@ -448,20 +448,24 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _table
     return;
   }
 
+  // Formato del template nuevo de Shopify (product_template): URL handle, Weight value (grams), Cost per item, etc.
   const headers = [
-    'Handle', 'Title', 'Body (HTML)', 'Vendor', 'Type', 'Tags', 'Published',
-    'Option1 Name', 'Option1 Value', 'Option2 Name', 'Option2 Value', 'Option3 Name', 'Option3 Value',
-    'Variant SKU', 'Variant Grams', 'Variant Inventory Tracker', 'Variant Inventory Qty',
-    'Variant Inventory Policy', 'Variant Fulfillment Service', 'Variant Price', 'Variant Compare At Price',
-    'Variant Requires Shipping', 'Variant Taxable', 'Variant Barcode', 'Image Src', 'Image Position',
-    'Image Alt Text', 'Gift Card', 'SEO Title', 'SEO Description', 'Google Shopping / Google Product Category',
-    'Google Shopping / Gender', 'Google Shopping / Age Group', 'Google Shopping / MPN',
-    'Google Shopping / AdWords Grouping', 'Google Shopping / AdWords Labels', 'Google Shopping / Condition',
-    'Google Shopping / Custom Product', 'Google Shopping / Custom Label 0', 'Google Shopping / Custom Label 1',
-    'Google Shopping / Custom Label 2', 'Google Shopping / Custom Label 3', 'Google Shopping / Custom Label 4',
-    'Variant Image', 'Variant Weight Unit', 'Variant Tax Code', 'Cost per item', 'Included / Argentina',
-    'Price / Argentina', 'Compare At Price / Argentina', 'Included / International', 'Price / International',
-    'Compare At Price / International', 'Status'
+    'Title', 'URL handle', 'Description', 'Vendor', 'Product category', 'Type', 'Tags',
+    'Published on online store', 'Status', 'SKU', 'Barcode',
+    'Option1 name', 'Option1 value', 'Option1 Linked To',
+    'Option2 name', 'Option2 value', 'Option2 Linked To',
+    'Option3 name', 'Option3 value', 'Option3 Linked To',
+    'Price', 'Compare-at price', 'Cost per item', 'Charge tax', 'Tax code',
+    'Unit price total measure', 'Unit price total measure unit', 'Unit price base measure', 'Unit price base measure unit',
+    'Inventory tracker', 'Inventory quantity', 'Continue selling when out of stock',
+    'Weight value (grams)', 'Weight unit for display', 'Requires shipping', 'Fulfillment service',
+    'Product image URL', 'Image position', 'Image alt text', 'Variant image URL', 'Gift card',
+    'SEO title', 'SEO description', 'Color (product.metafields.shopify.color-pattern)',
+    'Google Shopping / Google product category', 'Google Shopping / Gender', 'Google Shopping / Age group',
+    'Google Shopping / Manufacturer part number (MPN)', 'Google Shopping / Ad group name', 'Google Shopping / Ads labels',
+    'Google Shopping / Condition', 'Google Shopping / Custom product',
+    'Google Shopping / Custom label 0', 'Google Shopping / Custom label 1', 'Google Shopping / Custom label 2',
+    'Google Shopping / Custom label 3', 'Google Shopping / Custom label 4'
   ];
 
   let csvContent = headers.join(',') + '\n';
@@ -477,10 +481,12 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _table
     // Orchard: nombre/tag/handle según tipo + descripción (gorro, gorra, remera, etc.)
     let displayTitle = prod.title;
     let tagValue = prod.coditm;
+    let productType = '';
     if (config.brand === 'orchard') {
       const typeLabels: Record<string, string> = { gorra: 'Gorra', gorro: 'Gorro Beanie', remera: 'Remera', buzo: 'Buzo', campera: 'Campera', medias: 'Medias' };
       const aType = prod.artType || '';
       const typeLbl = typeLabels[aType] || (aType ? aType.charAt(0).toUpperCase() + aType.slice(1) : '');
+      productType = typeLbl;
       const descTitle = prod.title.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
       displayTitle = `${typeLbl} Orchard ${descTitle}`.replace(/\s+/g, ' ').trim();
       tagValue = prod.descCod || prod.coditm;
@@ -493,35 +499,37 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _table
       const outRow: any = {};
       headers.forEach(h => outRow[h] = '');
 
-      outRow['Handle'] = handle;
+      // URL handle en todas las filas (liga las variantes del mismo producto)
+      outRow['URL handle'] = handle;
       if (isFirstVariant) {
         outRow['Title'] = displayTitle;
-        outRow['Body (HTML)'] = displayTitle;
+        outRow['Description'] = displayTitle;
         outRow['Vendor'] = vendor;
+        outRow['Type'] = productType;
         outRow['Tags'] = tagValue;
-        outRow['Published'] = 'FALSE'; // Para que lo publiquen a mano o con POS
-        outRow['Status'] = 'active';
+        outRow['Published on online store'] = 'FALSE'; // borrador hasta ponerle precio/publicar
+        outRow['Status'] = 'Active';
       }
 
-      outRow['Option1 Name'] = 'Talle';
-      outRow['Option1 Value'] = size;
-      
       let variantSku = prod.coditm;
       if (config.brand === 'converse' || config.brand === 'lecoq') {
         variantSku = `${prod.coditm}-${size}`;
       } else if (config.brand === 'orchard') {
         variantSku = `ORC-${(prod.descCod || '').toUpperCase()}-${String(size).toUpperCase()}`;
       }
-      outRow['Variant SKU'] = variantSku;
-      outRow['Variant Price'] = price;
+      outRow['SKU'] = variantSku;
+      outRow['Option1 name'] = 'Talle';
+      outRow['Option1 value'] = size;
+      outRow['Price'] = price;
       outRow['Cost per item'] = cost;
-      outRow['Variant Grams'] = String(calcWeightGrams(config.brand, prod.artType));
-
-      outRow['Variant Inventory Tracker'] = 'shopify';
-      outRow['Variant Inventory Qty'] = qty.toString();
-      outRow['Variant Inventory Policy'] = 'deny';
-      outRow['Variant Fulfillment Service'] = 'manual';
-      outRow['Variant Requires Shipping'] = 'TRUE';
+      outRow['Charge tax'] = 'TRUE';
+      outRow['Inventory tracker'] = 'shopify';
+      outRow['Inventory quantity'] = qty.toString();
+      outRow['Continue selling when out of stock'] = 'DENY';
+      outRow['Weight value (grams)'] = String(calcWeightGrams(config.brand, prod.artType));
+      outRow['Weight unit for display'] = 'g';
+      outRow['Requires shipping'] = 'TRUE';
+      outRow['Fulfillment service'] = 'manual';
 
       const rowArray = headers.map(h => escapeCSV(outRow[h]));
       csvContent += rowArray.join(',') + '\n';
