@@ -655,3 +655,5 @@ function triggerDownload(content: string, filename: string) {
   link.click();
   document.body.removeChild(link);
 }
+
+// redeploy: asegurar peso por tipo en produccion
