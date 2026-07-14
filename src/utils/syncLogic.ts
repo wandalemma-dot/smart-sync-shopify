@@ -243,34 +243,67 @@ export async function processFiles(
       }
     }
   } else {
-    // Lectura de Excel estándar (Converse / LeCoq)
+    // Converse / Le Coq
     const excelData = await readExcel(providerFile, config.sheetName);
-    if (excelData.length < 3) throw new Error('Excel sin suficientes filas.');
-    const excelHeaders = excelData[1] as any[];
-    const startSizeCol = 7;
-    for (let r = 2; r < excelData.length; r++) {
-      const row = excelData[r] as any[];
-      if (!row) continue;
-      const desc = String(row[2] || '').trim();
-      const cod = String(row[1] || '').trim().toLowerCase();
-      const wholesale = parseFloat(row[4] || 0);
-      if (cod) {
-        excelMap[cod] = { wholesale, sizes: {}, foundInShopify: false, title: desc };
-        for (let c = startSizeCol; c < excelHeaders.length; c++) {
-          const rawSize = String(excelHeaders[c] || '').trim();
-          if (!rawSize || rawSize.toLowerCase().includes('total')) continue;
-          let norm = rawSize;
-          if (config.brand === 'lecoq') norm = rawSize.replace(/^0+/, '');
-          if (config.brand === 'converse') {
-             const num = parseInt(rawSize, 10);
-             if (!isNaN(num)) norm = (num / 10).toString();
-          }
+    if (excelData.length < 2) throw new Error('Excel sin suficientes filas.');
 
-          const cellVal = row[c];
-          if (cellVal !== undefined && cellVal !== null && String(cellVal).trim() !== '') {
-            const qty = parseFloat(cellVal);
-            if (!isNaN(qty)) {
-              excelMap[cod].sizes[norm] = qty;
+    // Detectar el formato NUEVO del proveedor (vertical): tiene "Código Item (SKU)" y
+    // "Cantidad Disponible", con una fila por código/color/talle.
+    const hdr0 = ((excelData[0] as any[]) || []).map(x => String(x || '').toLowerCase());
+    const esFormatoNuevo = hdr0.some(h => h.includes('digo item')) && hdr0.some(h => h.includes('cantidad disponible'));
+
+    if (esFormatoNuevo) {
+      const idx = (needle: string) => hdr0.findIndex(h => h.includes(needle));
+      const cCod = 0;
+      const cDesc = idx('descripci') >= 0 ? idx('descripci') : 1;
+      const cTalle = idx('talle') >= 0 ? idx('talle') : 5;
+      const cCant = idx('cantidad disponible') >= 0 ? idx('cantidad disponible') : 7;
+      for (let r = 1; r < excelData.length; r++) {
+        const row = excelData[r] as any[];
+        if (!row) continue;
+        const cod = String(row[cCod] || '').trim().toLowerCase();
+        const desc = String(row[cDesc] || '').trim();
+        const rawSize = String(row[cTalle] || '').trim();
+        const qty = parseFloat(row[cCant]);
+        if (!cod || !rawSize || isNaN(qty)) continue;
+        let norm = rawSize;
+        if (config.brand === 'lecoq') norm = rawSize.replace(/^0+/, '') || rawSize;
+        if (config.brand === 'converse') {
+          const num = parseInt(rawSize, 10);
+          if (!isNaN(num)) norm = (num / 10).toString();
+        }
+        // El formato nuevo no trae costo -> wholesale 0 (solo stock, no toca precio)
+        if (!excelMap[cod]) excelMap[cod] = { wholesale: 0, sizes: {}, foundInShopify: false, title: desc };
+        excelMap[cod].sizes[norm] = (excelMap[cod].sizes[norm] || 0) + qty;
+      }
+    } else {
+      // Formato VIEJO (horizontal): talles en columnas, cabecera en la 2da fila.
+      if (excelData.length < 3) throw new Error('Excel sin suficientes filas.');
+      const excelHeaders = excelData[1] as any[];
+      const startSizeCol = 7;
+      for (let r = 2; r < excelData.length; r++) {
+        const row = excelData[r] as any[];
+        if (!row) continue;
+        const desc = String(row[2] || '').trim();
+        const cod = String(row[1] || '').trim().toLowerCase();
+        const wholesale = parseFloat(row[4] || 0);
+        if (cod) {
+          excelMap[cod] = { wholesale, sizes: {}, foundInShopify: false, title: desc };
+          for (let c = startSizeCol; c < excelHeaders.length; c++) {
+            const rawSize = String(excelHeaders[c] || '').trim();
+            if (!rawSize || rawSize.toLowerCase().includes('total')) continue;
+            let norm = rawSize;
+            if (config.brand === 'lecoq') norm = rawSize.replace(/^0+/, '');
+            if (config.brand === 'converse') {
+               const num = parseInt(rawSize, 10);
+               if (!isNaN(num)) norm = (num / 10).toString();
+            }
+            const cellVal = row[c];
+            if (cellVal !== undefined && cellVal !== null && String(cellVal).trim() !== '') {
+              const qty = parseFloat(cellVal);
+              if (!isNaN(qty)) {
+                excelMap[cod].sizes[norm] = qty;
+              }
             }
           }
         }
