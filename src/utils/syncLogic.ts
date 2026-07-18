@@ -77,6 +77,37 @@ export function calcCost(brand: SyncConfig['brand'], wholesale: number): number 
   return wholesale * (1 - cfg.providerDiscount);
 }
 
+// ---- ORDEN DE TALLES ----
+// Orden de la ropa. Los nombres se respetan tal cual vienen (3XL y 4XL quedan así).
+const LETTER_SIZES = ['XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', '5XL'];
+
+// Solo para ORDENAR: XXXL y 3XL valen lo mismo, XXXXL y 4XL también.
+function sizeRankName(size: string): string {
+  const s = String(size ?? '').trim().toUpperCase();
+  if (s === 'XXXL') return '3XL';
+  if (s === 'XXXXL') return '4XL';
+  if (s === 'XXXXXL') return '5XL';
+  if (s === '2XL') return 'XXL';
+  return s;
+}
+
+// Clave de orden: primero numéricos (por valor), después las letras en su orden, después el resto.
+function sizeSortKey(size: string): [number, number, string] {
+  const s = sizeRankName(size);
+  if (/^[0-9]+([.,][0-9]+)?$/.test(s)) return [0, parseFloat(s.replace(',', '.')), s];
+  const i = LETTER_SIZES.indexOf(s);
+  if (i >= 0) return [1, i, s];
+  return [2, 0, s];
+}
+
+// Ordena los pares [talle, cantidad] con el criterio de arriba.
+export function sortSizeEntries<T>(entries: [string, T][]): [string, T][] {
+  return [...entries].sort((a, b) => {
+    const ka = sizeSortKey(a[0]), kb = sizeSortKey(b[0]);
+    return (ka[0] - kb[0]) || (ka[1] - kb[1]) || ka[2].localeCompare(kb[2]);
+  });
+}
+
 // Peso en GRAMOS por tipo de artículo (Shopify necesita peso para calcular envíos).
 // Orchard se define por su ARTICULO; Converse/Le Coq son zapatillas; Bloque skate.
 const ORCHARD_WEIGHTS: Record<string, number> = {
@@ -528,7 +559,7 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _table
 
     let isFirstVariant = true;
 
-    for (const [size, qty] of Object.entries(prod.sizes)) {
+    for (const [size, qty] of sortSizeEntries(Object.entries(prod.sizes))) {
       const outRow: any = {};
       headers.forEach(h => outRow[h] = '');
 
@@ -624,7 +655,7 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
        }
     }
 
-    for (const [size, qty] of Object.entries(data.sizes)) {
+    for (const [size, qty] of sortSizeEntries(Object.entries(data.sizes))) {
       const outRow: any = {};
       headers.forEach(h => outRow[h] = '');
 
