@@ -4,7 +4,7 @@ export type SyncMode = 'all' | 'stock_only' | 'cost_only' | 'price_only';
 
 export interface SyncConfig {
   sheetName: string;
-  brand: 'lecoq' | 'converse' | 'bloque' | 'orchard';
+  brand: 'lecoq' | 'converse' | 'bloque' | 'orchard' | 'luxo';
 }
 
 export interface MissingProduct {
@@ -16,6 +16,7 @@ export interface MissingProduct {
   vendor?: string;
   descCod?: string;
   artType?: string;
+  costFinal?: number;
 }
 
 export interface UpdateAction {
@@ -58,6 +59,7 @@ export const BRAND_PRICING: Record<SyncConfig['brand'], { markup: number; provid
   lecoq:    { markup: 2.01, providerDiscount: 0,    usePublicPrice: false },
   orchard:  { markup: 0,    providerDiscount: 0.20, usePublicPrice: true  },
   bloque:   { markup: 2.0,  providerDiscount: 0.15, usePublicPrice: false },
+  luxo:     { markup: 0,    providerDiscount: 0,    usePublicPrice: true  },
 };
 
 // Precio de venta final según la marca.
@@ -113,10 +115,19 @@ export function sortSizeEntries<T>(entries: [string, T][]): [string, T][] {
 const ORCHARD_WEIGHTS: Record<string, number> = {
   remera: 250, buzo: 700, campera: 900, gorra: 150, gorro: 120, medias: 100,
 };
+// Peso por tipo genérico (Luxo trae distintos tipos de prenda).
+const TYPE_WEIGHTS: Record<string, number> = {
+  remera: 250, musculosa: 200, camiseta: 250, buzo: 700, hoodie: 700, canguro: 700,
+  campera: 900, chaqueta: 900, sweater: 400, sweaters: 400, camisa: 300,
+  short: 300, bermuda: 300, pantalon: 500, jogger: 500, jean: 500, vestido: 350,
+  gorra: 150, gorro: 120, piluso: 150, medias: 100, mochila: 700, bolso: 500,
+  rinonera: 300, banano: 300,
+};
 export function calcWeightGrams(brand: SyncConfig['brand'], artType?: string): number {
   if (brand === 'converse' || brand === 'lecoq') return 900; // zapatillas
   if (brand === 'bloque') return 2000; // skate (tentativo)
   if (brand === 'orchard') return ORCHARD_WEIGHTS[artType || ''] ?? 250; // default remera
+  if (brand === 'luxo') return TYPE_WEIGHTS[artType || ''] ?? 300; // por tipo, default 300
   return 0;
 }
 
@@ -191,7 +202,7 @@ export async function processFiles(
   config: SyncConfig
 ): Promise<SyncResult> {
   const alerts: AlertMessage[] = [];
-  const excelMap: Record<string, { wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyVariants?: any[], descCod?: string, artType?: string }> = {};
+  const excelMap: Record<string, { wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number }> = {};
 
   if (config.brand === 'bloque') {
     if (!remitoFile) throw new Error("Falta Remito de Bloque");
@@ -272,6 +283,38 @@ export async function processFiles(
       if (!isNaN(qty)) {
         excelMap[cod].sizes[rawSize] = (excelMap[cod].sizes[rawSize] || 0) + qty;
       }
+    }
+  } else if (config.brand === 'luxo') {
+    // Luxo: plantilla INDY (productos nuevos). Encabezado con "Código SKU"; una fila por talle.
+    //   A=Código SKU | C=Descripción | D=Costo sin descuento | E=Precio | F=Talle | G=Cantidad | I=Descuento (%)
+    // Precio = col E tal cual. Costo = col D menos el % de la col I. El link de foto se ignora.
+    const excelData = await readExcel(providerFile, config.sheetName);
+    let hRow = -1;
+    for (let r = 0; r < excelData.length; r++) {
+      const row = ((excelData[r] as any[]) || []).map(x => String(x || '').toLowerCase());
+      if (row.some(c => c.includes('digo sku'))) { hRow = r; break; }
+    }
+    if (hRow < 0) throw new Error('No encontré el encabezado "Código SKU" en la plantilla de Luxo.');
+    const luxoTypes = ['remera','musculosa','camiseta','buzo','hoodie','canguro','campera','chaqueta','sweaters','sweater','camisa','short','bermuda','pantalon','jogger','jean','vestido','gorra','gorro','piluso','medias','mochila','bolso','rinonera','banano'];
+    for (let r = hRow + 1; r < excelData.length; r++) {
+      const row = excelData[r] as any[];
+      if (!row) continue;
+      const cod = String(row[0] || '').trim();
+      if (!cod) continue;
+      const desc = String(row[2] || '').trim();
+      const costo = parseFloat(row[3] || 0);
+      const precio = parseFloat(row[4] || 0);
+      const rawSize = String(row[5] || '').trim() || 'unico';
+      const qty = parseFloat(row[6] || 0);
+      const dpct = parseFloat(row[8] || 0) || 0;
+      if (isNaN(costo) && isNaN(precio)) continue;
+      const norm = desc.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      const artType = luxoTypes.find(t => norm.includes(t)) || '';
+      const costFinal = Math.round(costo * (1 - dpct));
+      if (!excelMap[cod]) {
+        excelMap[cod] = { wholesale: costo, publicPrice: precio, costFinal, sizes: {}, foundInShopify: false, title: desc, vendor: 'Luxo', artType };
+      }
+      if (!isNaN(qty)) excelMap[cod].sizes[rawSize] = (excelMap[cod].sizes[rawSize] || 0) + qty;
     }
   } else {
     // Converse / Le Coq
@@ -460,7 +503,8 @@ export async function processFiles(
         sizes: data.sizes,
         vendor: data.vendor,
         descCod: data.descCod,
-        artType: data.artType
+        artType: data.artType,
+        costFinal: data.costFinal
       });
     }
   }
@@ -536,11 +580,11 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _table
 
   result.missingProducts.forEach(prod => {
     let handle = prod.coditm.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const vendorDefaults: Record<SyncConfig['brand'], string> = { lecoq: 'Le Coq Sportif', converse: 'Converse', orchard: 'Orchard', bloque: 'Bloque' };
+    const vendorDefaults: Record<SyncConfig['brand'], string> = { lecoq: 'Le Coq Sportif', converse: 'Converse', orchard: 'Orchard', bloque: 'Bloque', luxo: 'Luxo' };
     const vendor = prod.vendor || vendorDefaults[config.brand];
 
     const price = calcSellPrice(config.brand, prod.wholesale, prod.publicPrice || 0);
-    const cost = calcCost(config.brand, prod.wholesale);
+    const cost = prod.costFinal ?? calcCost(config.brand, prod.wholesale);
 
     // Orchard: nombre/tag/handle según tipo + descripción (gorro, gorra, remera, etc.)
     let displayTitle = prod.title;
@@ -555,6 +599,13 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _table
       displayTitle = `${typeLbl} Orchard ${descTitle}`.replace(/\s+/g, ' ').trim();
       tagValue = prod.descCod || prod.coditm;
       handle = `${aType}-orchard-${prod.descCod || ''}`.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    }
+    if (config.brand === 'luxo') {
+      const t = (prod.title || '').trim();
+      displayTitle = t ? t.charAt(0).toUpperCase() + t.slice(1) : prod.coditm;
+      tagValue = 'Luxo';
+      productType = (prod.artType || '') ? (prod.artType as string).charAt(0).toUpperCase() + (prod.artType as string).slice(1) : '';
+      handle = `${displayTitle}-${prod.coditm}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     }
 
     let isFirstVariant = true;
@@ -575,20 +626,29 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _table
         outRow['Status'] = 'Active';
       }
 
+      const isUnico = ['unico', 'único', 'tu', ''].includes(String(size).toLowerCase());
       let variantSku = prod.coditm;
       if (config.brand === 'converse' || config.brand === 'lecoq') {
         variantSku = `${prod.coditm}-${size}`;
       } else if (config.brand === 'orchard') {
         variantSku = `ORC-${(prod.descCod || '').toUpperCase()}-${String(size).toUpperCase()}`;
+      } else if (config.brand === 'luxo') {
+        variantSku = isUnico ? prod.coditm : `${prod.coditm}-${String(size).toUpperCase()}`;
       }
       outRow['SKU'] = variantSku;
-      outRow['Option1 name'] = 'Talle';
-      outRow['Option1 value'] = size;
+      if (config.brand === 'luxo' && isUnico) {
+        outRow['Option1 name'] = 'Title';
+        outRow['Option1 value'] = 'Default Title';
+      } else {
+        outRow['Option1 name'] = 'Talle';
+        outRow['Option1 value'] = size;
+      }
       outRow['Price'] = price;
       outRow['Cost per item'] = cost;
       outRow['Charge tax'] = 'TRUE';
       outRow['Inventory tracker'] = 'shopify';
-      outRow['Inventory quantity'] = qty.toString();
+      // En Luxo el stock va por separado a la sucursal LUXO -> el producto se crea en 0.
+      outRow['Inventory quantity'] = config.brand === 'luxo' ? '0' : qty.toString();
       outRow['Continue selling when out of stock'] = 'DENY';
       outRow['Weight value (grams)'] = String(calcWeightGrams(config.brand, prod.artType));
       outRow['Weight unit for display'] = 'g';
@@ -616,12 +676,33 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
     'Option3 Name', 'Option3 Value', 'SKU', 'Location', 'On hand (new)'
   ];
 
+  // Luxo: productos nuevos, stock directo a la sucursal LUXO.
+  if (config.brand === 'luxo') {
+    let csvLuxo = headers.join(',') + '\n';
+    for (const [cod, data] of Object.entries(result.excelMap)) {
+      const t = (data.title || '').trim();
+      const title = t ? t.charAt(0).toUpperCase() + t.slice(1) : cod;
+      const handle = `${title}-${cod}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+      for (const [size, qty] of sortSizeEntries(Object.entries(data.sizes))) {
+        const isUnico = ['unico', 'único', 'tu', ''].includes(String(size).toLowerCase());
+        const sku = isUnico ? cod : `${cod}-${String(size).toUpperCase()}`;
+        const oName = isUnico ? 'Title' : 'Talle';
+        const oValue = isUnico ? 'Default Title' : String(size).toUpperCase();
+        const row = [handle, title, oName, oValue, '', '', '', '', sku, 'LUXO', String(qty)];
+        csvLuxo += row.map(escapeCSV).join(',') + '\n';
+      }
+    }
+    triggerDownload(csvLuxo, `Stock_LUXO_${new Date().toISOString().split('T')[0]}.csv`);
+    return;
+  }
+
   // Sucursal donde se carga el stock, según la marca.
   const stockLocation: Record<SyncConfig['brand'], string> = {
     converse: 'ID (Converse - Le Coq Sportif)',
     lecoq: 'ID (Converse - Le Coq Sportif)',
     orchard: 'ORCHARD',
     bloque: 'ID (Converse - Le Coq Sportif)',
+    luxo: 'LUXO',
   };
   // Sucursales que deben quedar en 0 para esa marca (se maneja en una sola sucursal).
   const zeroLocations: Partial<Record<SyncConfig['brand'], string[]>> = {
