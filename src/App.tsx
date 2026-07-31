@@ -1,14 +1,16 @@
 import { useState } from 'react';
 import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, downloadInventoryCSV } from './utils/syncLogic';
 import type { SyncConfig, SyncResult } from './utils/syncLogic';
+import { analyzeRestock, downloadRestockCSV } from './utils/restockLogic';
+import type { RestockResult } from './utils/restockLogic';
 
 export default function App() {
   const [providerFile, setProviderFile] = useState<File | null>(null);
   const [remitoFile, setRemitoFile] = useState<File | null>(null); // Solo para Bloque
   const [shopifyFile, setShopifyFile] = useState<File | null>(null); // CSV exportado de Shopify
-  
+
   const [sheets, setSheets] = useState<string[]>([]);
-  
+
   const [config, setConfig] = useState<SyncConfig>({
     sheetName: '',
     brand: 'converse'
@@ -18,9 +20,29 @@ export default function App() {
   const [loadingText, setLoadingText] = useState('');
   const [result, setResult] = useState<SyncResult | null>(null);
   const [tableSelections, setTableSelections] = useState<Record<string, number>>({});
-  
+
   // Resumen antes de confirmar
   const [previewReady, setPreviewReady] = useState(false);
+
+  // ---- ANÁLISIS PARA PEDIDO (stock en vivo de la sucursal iD) ----
+  const [restockLoading, setRestockLoading] = useState(false);
+  const [restockResult, setRestockResult] = useState<RestockResult | null>(null);
+
+  const handleAnalyzeRestock = async () => {
+    setRestockLoading(true);
+    setRestockResult(null);
+    try {
+      const res = await analyzeRestock();
+      setRestockResult(res);
+      if (!res.locationFound) {
+        alert(`No encontré la sucursal "${res.locationName}" en Shopify. Revisá el nombre exacto de la ubicación.`);
+      }
+    } catch (err: any) {
+      alert('Error analizando el pedido: ' + err.message);
+    } finally {
+      setRestockLoading(false);
+    }
+  };
 
   const handleProviderDrop = async (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
@@ -86,7 +108,7 @@ export default function App() {
     setLoadingText('Analizando archivos y conectando con Shopify...');
     setResult(null);
     setPreviewReady(false);
-    
+
     try {
       const res = await processFiles(providerFile, remitoFile, shopifyFile, config);
       setResult(res);
@@ -97,7 +119,7 @@ export default function App() {
       setLoading(false);
     }
   };
-  
+
   const handleDownload = (type: 'updates' | 'matrix' | 'inventory') => {
     if (!result) return;
     try {
@@ -113,6 +135,8 @@ export default function App() {
     }
   };
 
+  const totalTalles = restockResult?.items.reduce((acc, it) => acc + it.sizes.length, 0) || 0;
+
   return (
     <div className="app-container">
       <header>
@@ -120,12 +144,94 @@ export default function App() {
         <p className="subtitle">Automatización Inteligente</p>
       </header>
 
+      {/* ====== ANÁLISIS PARA PEDIDO (stock en vivo iD) ====== */}
+      <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1.2rem', border: '1px solid #10b981' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <h2 style={{ margin: 0 }}>🛒 Pedido de reposición — Converse y Le Coq</h2>
+            <p style={{ margin: '4px 0 0', opacity: 0.8, fontSize: '0.9rem' }}>
+              Consulta Shopify en vivo y lista los talles agotados (stock 0 o 1) en la sucursal iD.
+            </p>
+          </div>
+          <button
+            className="btn-primary"
+            style={{ background: '#10b981', padding: '14px 20px' }}
+            onClick={handleAnalyzeRestock}
+            disabled={restockLoading}
+          >
+            {restockLoading ? <span className="loader"></span> : '🔍 Analizar pedido ahora'}
+          </button>
+        </div>
+        {restockLoading && (
+          <p style={{ marginTop: '10px', textAlign: 'center', color: '#10b981' }}>
+            Consultando stock en vivo de la sucursal iD...
+          </p>
+        )}
+
+        {restockResult && restockResult.locationFound && (
+          <div style={{ marginTop: '1.2rem' }}>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '20px', marginBottom: '1rem', fontSize: '0.9rem', opacity: 0.9 }}>
+              <span>📍 Sucursal: <strong>{restockResult.locationName}</strong></span>
+              <span>📦 Talles a reponer: <strong style={{ color: '#f59e0b' }}>{totalTalles}</strong></span>
+              <span>🧩 Modelos: <strong>{restockResult.items.length}</strong></span>
+              <span>🔎 Productos escaneados: {restockResult.productsScanned}</span>
+            </div>
+
+            {restockResult.items.length === 0 ? (
+              <p style={{ padding: '1rem', background: 'rgba(16,185,129,0.1)', borderRadius: '8px' }}>
+                ✅ No hay talles agotados en la sucursal iD. ¡Nada para pedir!
+              </p>
+            ) : (
+              <>
+                <button
+                  className="btn-primary"
+                  style={{ background: '#f59e0b', padding: '12px 18px', marginBottom: '1rem' }}
+                  onClick={() => downloadRestockCSV(restockResult)}
+                >
+                  📥 Descargar CSV del pedido
+                </button>
+
+                <div style={{ maxHeight: '460px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
+                  {restockResult.items.map((it, idx) => (
+                    <div key={idx} style={{ padding: '0.8rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }}>
+                      <div style={{ marginBottom: '0.5rem' }}>
+                        <span style={{
+                          fontSize: '0.7rem', fontWeight: 'bold', padding: '2px 8px', borderRadius: '10px',
+                          background: it.brand === 'lecoq' ? '#3b82f6' : '#8b5cf6', color: 'white', marginRight: '8px'
+                        }}>
+                          {it.brand === 'lecoq' ? 'LE COQ' : 'CONVERSE'}
+                        </span>
+                        <strong>{it.title}</strong>
+                      </div>
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                        {it.sizes.map((s, si) => (
+                          <span key={si} style={{
+                            fontSize: '0.8rem', padding: '4px 8px', borderRadius: '6px',
+                            border: `1px solid ${s.available === 0 ? '#dc2626' : '#f59e0b'}`,
+                            color: s.available === 0 ? '#fca5a5' : '#fcd34d',
+                            background: s.available === 0 ? 'rgba(220,38,38,0.12)' : 'rgba(245,158,11,0.12)'
+                          }}>
+                            Talle {s.shopifyTalle}
+                            {s.pedidoTalle !== s.shopifyTalle && <> → pedido {s.pedidoTalle}</>}
+                            {' '}· stock {s.available}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
       {!previewReady ? (
         <div className="main-grid">
           <div className="glass-panel dropzone-container">
             <h2>1. Archivos del Proveedor</h2>
-            
-            <div 
+
+            <div
               className={`dropzone ${providerFile ? 'has-file' : ''}`}
               onDrop={handleProviderDrop} onDragOver={preventDefault}
             >
@@ -134,7 +240,7 @@ export default function App() {
             </div>
 
             {config.brand === 'bloque' && (
-              <div 
+              <div
                 className={`dropzone ${remitoFile ? 'has-file' : ''}`}
                 onDrop={handleRemitoDrop} onDragOver={preventDefault}
               >
@@ -143,7 +249,7 @@ export default function App() {
               </div>
             )}
 
-            <div 
+            <div
               className={`dropzone ${shopifyFile ? 'has-file' : ''}`}
               onDrop={handleShopifyDrop} onDragOver={preventDefault}
               style={{ marginTop: '0.8rem', borderColor: shopifyFile ? '#10b981' : '#6366f1' }}
@@ -157,11 +263,11 @@ export default function App() {
 
           <div className="glass-panel settings-panel">
             <h2>2. Configuración</h2>
-            
+
             <div className="form-group">
               <label>Marca a procesar</label>
-              <select 
-                value={config.brand} 
+              <select
+                value={config.brand}
                 onChange={e => {
                   setConfig({...config, brand: e.target.value as any});
                   setProviderFile(null);
@@ -179,8 +285,8 @@ export default function App() {
             {config.brand !== 'bloque' && sheets.length > 0 && (
               <div className="form-group">
                 <label>Pestaña del Excel</label>
-                <select 
-                  value={config.sheetName} 
+                <select
+                  value={config.sheetName}
                   onChange={e => setConfig({...config, sheetName: e.target.value})}
                 >
                   {sheets.map(s => <option key={s} value={s}>{s}</option>)}
@@ -188,8 +294,8 @@ export default function App() {
               </div>
             )}
 
-            <button 
-              className="btn-primary" 
+            <button
+              className="btn-primary"
               onClick={handleAnalyze}
               disabled={!providerFile || (config.brand === 'bloque' && !remitoFile) || loading}
             >
@@ -202,7 +308,7 @@ export default function App() {
         <div className="glass-panel results-area" style={{ marginTop: '2rem' }}>
           <div className="results-header">
             <h2>📊 RESUMEN ANTES DE SINCRONIZAR</h2>
-            <button 
+            <button
               className="btn-success"
               style={{ background: '#dc2626', marginLeft: '10px' }}
               onClick={() => { setResult(null); setPreviewReady(false); }}
@@ -225,7 +331,7 @@ export default function App() {
           {result?.missingProducts && result.missingProducts.length > 0 && (
             <div className="missing-products-section" style={{ marginTop: '2rem', padding: '1rem', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid #f59e0b', borderRadius: '8px' }}>
               <h3 style={{ color: '#f59e0b', marginBottom: '1rem' }}>Configurar Tablas para Nuevos Productos</h3>
-              
+
               <div style={{ maxHeight: '300px', overflowY: 'auto', marginBottom: '1rem' }}>
                 {result.missingProducts.map(p => (
                   <div key={p.coditm} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
@@ -233,7 +339,7 @@ export default function App() {
                       <strong>{p.coditm.toUpperCase()}</strong> - {p.title}
                     </div>
                     {config.brand === 'converse' && (
-                      <select 
+                      <select
                         value={tableSelections[p.coditm] || 1}
                         onChange={e => setTableSelections({...tableSelections, [p.coditm]: parseInt(e.target.value)})}
                         style={{ padding: '0.3rem', borderRadius: '4px', background: 'var(--bg-color)', color: 'white', border: '1px solid var(--glass-border)' }}
@@ -253,24 +359,24 @@ export default function App() {
 
           <div style={{ marginTop: '30px', display: 'flex', flexDirection: 'column', gap: '15px', alignItems: 'center' }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '15px', width: '100%', maxWidth: '900px', justifyContent: 'center' }}>
-              <button 
-                className="btn-primary" 
+              <button
+                className="btn-primary"
                 style={{ background: '#3b82f6', padding: '15px', fontSize: '0.9rem' }}
                 onClick={() => handleDownload('updates')}
                 disabled={loading || !result || result.updatesToApply.length === 0}
               >
                 📥 CSV de Precios
               </button>
-              <button 
-                className="btn-primary" 
+              <button
+                className="btn-primary"
                 style={{ background: '#10b981', padding: '15px', fontSize: '0.9rem' }}
                 onClick={() => handleDownload('inventory')}
                 disabled={loading || !result || Object.keys(result.excelMap).length === 0}
               >
                 📥 CSV de Stock (Inventario)
               </button>
-              <button 
-                className="btn-primary" 
+              <button
+                className="btn-primary"
                 style={{ background: '#f59e0b', padding: '15px', fontSize: '0.9rem' }}
                 onClick={() => handleDownload('matrix')}
                 disabled={loading || !result || result.missingProducts.length === 0}
