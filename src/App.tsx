@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, downloadInventoryCSV } from './utils/syncLogic';
 import type { SyncConfig, SyncResult } from './utils/syncLogic';
 import { analyzeRestock, downloadRestockCSV } from './utils/restockLogic';
@@ -26,13 +26,20 @@ export default function App() {
 
   // ---- ANÁLISIS PARA PEDIDO (stock en vivo de la sucursal iD) ----
   const [restockLoading, setRestockLoading] = useState(false);
+  const [restockScanned, setRestockScanned] = useState(0);
   const [restockResult, setRestockResult] = useState<RestockResult | null>(null);
+
+  // Inputs de archivo ocultos: permiten seleccionar con un clic además de arrastrar.
+  const providerInputRef = useRef<HTMLInputElement>(null);
+  const remitoInputRef = useRef<HTMLInputElement>(null);
+  const shopifyInputRef = useRef<HTMLInputElement>(null);
 
   const handleAnalyzeRestock = async () => {
     setRestockLoading(true);
+    setRestockScanned(0);
     setRestockResult(null);
     try {
-      const res = await analyzeRestock();
+      const res = await analyzeRestock(setRestockScanned);
       setRestockResult(res);
       if (!res.locationFound) {
         alert(`No encontré la sucursal "${res.locationName}" en Shopify. Revisá el nombre exacto de la ubicación.`);
@@ -44,55 +51,65 @@ export default function App() {
     }
   };
 
-  const handleProviderDrop = async (e: React.DragEvent<HTMLDivElement>) => {
+  // --- Lógica central de cada archivo, reutilizada por drag & drop y por clic ---
+  const processProviderFile = async (file: File) => {
+    if (!file) return;
+    if (config.brand === 'bloque' && !file.name.toLowerCase().endsWith('.pdf')) {
+      alert("⚠️ Error: Para Bloque, por favor subí el PRESUPUESTO en formato PDF.");
+      return;
+    }
+    if (config.brand !== 'bloque' && !file.name.toLowerCase().endsWith('.xlsx') && !file.name.toLowerCase().endsWith('.xls')) {
+      alert("⚠️ Error: Por favor, subí el archivo Excel (.xlsx o .xls).");
+      return;
+    }
+    setProviderFile(file);
+    try {
+      if (config.brand !== 'bloque') {
+        const names = await extractSheetNames(file);
+        setSheets(names);
+        if (names.length > 0) {
+          setConfig(prev => ({ ...prev, sheetName: names[0] }));
+        }
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const processRemitoFile = (file: File) => {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.pdf')) {
+      alert("⚠️ Error: Por favor, subí el REMITO en formato PDF.");
+      return;
+    }
+    setRemitoFile(file);
+  };
+
+  const processShopifyFile = (file: File) => {
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith('.csv')) {
+      alert("⚠️ Error: Subí el CSV exportado de Shopify (products_export.csv).");
+      return;
+    }
+    setShopifyFile(file);
+  };
+
+  const handleProviderDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
-    if (file) {
-      if (config.brand === 'bloque' && !file.name.toLowerCase().endsWith('.pdf')) {
-        alert("⚠️ Error: Para Bloque, por favor arrastrá el PRESUPUESTO en formato PDF.");
-        return;
-      }
-      if (config.brand !== 'bloque' && !file.name.toLowerCase().endsWith('.xlsx') && !file.name.toLowerCase().endsWith('.xls')) {
-        alert("⚠️ Error: Por favor, arrastrá el archivo Excel (.xlsx o .xls).");
-        return;
-      }
-      setProviderFile(file);
-      try {
-        if (config.brand !== 'bloque') {
-          const names = await extractSheetNames(file);
-          setSheets(names);
-          if (names.length > 0) {
-            setConfig(prev => ({ ...prev, sheetName: names[0] }));
-          }
-        }
-      } catch (err) {
-        console.error(err);
-      }
-    }
+    if (file) processProviderFile(file);
   };
 
   const handleRemitoDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
-    if (file) {
-      if (!file.name.toLowerCase().endsWith('.pdf')) {
-        alert("⚠️ Error: Por favor, arrastrá el REMITO en formato PDF.");
-        return;
-      }
-      setRemitoFile(file);
-    }
+    if (file) processRemitoFile(file);
   };
 
   const handleShopifyDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
-    if (file) {
-      if (!file.name.toLowerCase().endsWith('.csv')) {
-        alert("⚠️ Error: Arrastrá el CSV exportado de Shopify (products_export.csv).");
-        return;
-      }
-      setShopifyFile(file);
-    }
+    if (file) processShopifyFile(file);
   };
 
   const preventDefault = (e: React.DragEvent) => e.preventDefault();
@@ -165,6 +182,7 @@ export default function App() {
         {restockLoading && (
           <p style={{ marginTop: '10px', textAlign: 'center', color: '#10b981' }}>
             Consultando stock en vivo de la sucursal iD...
+            {restockScanned > 0 && <> ({restockScanned} productos escaneados)</>}
           </p>
         )}
 
@@ -231,31 +249,59 @@ export default function App() {
           <div className="glass-panel dropzone-container">
             <h2>1. Archivos del Proveedor</h2>
 
+            <input
+              ref={providerInputRef}
+              type="file"
+              accept={config.brand === 'bloque' ? '.pdf' : '.xlsx,.xls'}
+              style={{ display: 'none' }}
+              onChange={e => { const f = e.target.files?.[0]; if (f) processProviderFile(f); e.target.value = ''; }}
+            />
             <div
               className={`dropzone ${providerFile ? 'has-file' : ''}`}
               onDrop={handleProviderDrop} onDragOver={preventDefault}
+              onClick={() => providerInputRef.current?.click()}
+              style={{ cursor: 'pointer' }}
             >
-              <h3>{providerFile ? '📄 Archivo Principal Listo' : (config.brand === 'bloque' ? '📥 Arrastra el PRESUPUESTO (PDF)' : '📥 Arrastra el Excel del Proveedor')}</h3>
+              <h3>{providerFile ? '📄 Archivo Principal Listo' : (config.brand === 'bloque' ? '📥 Arrastrá o hacé clic: PRESUPUESTO (PDF)' : '📥 Arrastrá o hacé clic: Excel del Proveedor')}</h3>
               <p>{providerFile?.name}</p>
             </div>
 
             {config.brand === 'bloque' && (
-              <div
-                className={`dropzone ${remitoFile ? 'has-file' : ''}`}
-                onDrop={handleRemitoDrop} onDragOver={preventDefault}
-              >
-                <h3>{remitoFile ? '📄 Remito Listo' : '📥 Arrastra el REMITO (PDF)'}</h3>
-                <p>{remitoFile?.name}</p>
-              </div>
+              <>
+                <input
+                  ref={remitoInputRef}
+                  type="file"
+                  accept=".pdf"
+                  style={{ display: 'none' }}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) processRemitoFile(f); e.target.value = ''; }}
+                />
+                <div
+                  className={`dropzone ${remitoFile ? 'has-file' : ''}`}
+                  onDrop={handleRemitoDrop} onDragOver={preventDefault}
+                  onClick={() => remitoInputRef.current?.click()}
+                  style={{ cursor: 'pointer' }}
+                >
+                  <h3>{remitoFile ? '📄 Remito Listo' : '📥 Arrastrá o hacé clic: REMITO (PDF)'}</h3>
+                  <p>{remitoFile?.name}</p>
+                </div>
+              </>
             )}
 
+            <input
+              ref={shopifyInputRef}
+              type="file"
+              accept=".csv"
+              style={{ display: 'none' }}
+              onChange={e => { const f = e.target.files?.[0]; if (f) processShopifyFile(f); e.target.value = ''; }}
+            />
             <div
               className={`dropzone ${shopifyFile ? 'has-file' : ''}`}
               onDrop={handleShopifyDrop} onDragOver={preventDefault}
-              style={{ marginTop: '0.8rem', borderColor: shopifyFile ? '#10b981' : '#6366f1' }}
+              onClick={() => shopifyInputRef.current?.click()}
+              style={{ marginTop: '0.8rem', borderColor: shopifyFile ? '#10b981' : '#6366f1', cursor: 'pointer' }}
             >
               <h3 style={{ color: shopifyFile ? '#10b981' : '#a5b4fc' }}>
-                {shopifyFile ? '✅ Shopify CSV Listo' : '🛒 Arrastra el CSV de Shopify (products_export)'}
+                {shopifyFile ? '✅ Shopify CSV Listo' : '🛒 Arrastrá o hacé clic: CSV de Shopify (products_export)'}
               </h3>
               <p>{shopifyFile?.name || 'Necesario para detectar si los productos ya existen'}</p>
             </div>

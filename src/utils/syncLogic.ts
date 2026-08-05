@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import { escapeCSV, triggerDownload, todayStamp } from './csv';
 
 export type SyncMode = 'all' | 'stock_only' | 'cost_only' | 'price_only';
 
@@ -129,26 +130,6 @@ export function calcWeightGrams(brand: SyncConfig['brand'], artType?: string): n
   if (brand === 'orchard') return ORCHARD_WEIGHTS[artType || ''] ?? 250; // default remera
   if (brand === 'luxo') return TYPE_WEIGHTS[artType || ''] ?? 300; // por tipo, default 300
   return 0;
-}
-
-// Utility: Call Shopify via our Vercel Serverless Function Proxy
-async function fetchShopifyGraphQL(query: string, variables: any = {}) {
-  const res = await fetch('/api/shopify', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, variables })
-  });
-  if (!res.ok) {
-    const rawText = await res.text();
-    console.error("Shopify Raw Error:", rawText);
-    throw new Error(`Error de Conexión (${res.status}): ${rawText.substring(0, 100)}`);
-  }
-  const json = await res.json();
-  if (json.errors) {
-     console.error(json.errors);
-     throw new Error('Shopify Error: ' + JSON.stringify(json.errors));
-  }
-  return json.data;
 }
 
 // Extract Sheet names
@@ -538,16 +519,7 @@ export function downloadUpdateCSV(result: SyncResult, config: SyncConfig) {
     }
   });
 
-  triggerDownload(csvContent, `Actualizacion_Precios_${config.brand}_${new Date().toISOString().split('T')[0]}.csv`);
-}
-
-function escapeCSV(val: any): string {
-  if (val === null || val === undefined) return '';
-  const str = String(val);
-  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-    return `"${str.replace(/"/g, '""')}"`;
-  }
-  return str;
+  triggerDownload(csvContent, `Actualizacion_Precios_${config.brand}_${todayStamp()}.csv`);
 }
 
 export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _tableSelections?: Record<string, number>) {
@@ -662,7 +634,7 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _table
     }
   });
 
-  triggerDownload(csvContent, `Matriz_Faltantes_${config.brand}_${new Date().toISOString().split('T')[0]}.csv`);
+  triggerDownload(csvContent, `Matriz_Faltantes_${config.brand}_${todayStamp()}.csv`);
 }
 
 export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
@@ -692,7 +664,7 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
         csvLuxo += row.map(escapeCSV).join(',') + '\n';
       }
     }
-    triggerDownload(csvLuxo, `Stock_LUXO_${new Date().toISOString().split('T')[0]}.csv`);
+    triggerDownload(csvLuxo, `Stock_LUXO_${todayStamp()}.csv`);
     return;
   }
 
@@ -794,19 +766,7 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
     }
   }
 
-  triggerDownload(csvContent, `Actualizacion_Stock_${config.brand}_${new Date().toISOString().split('T')[0]}.csv`);
-}
-
-function triggerDownload(content: string, filename: string) {
-  const blob = new Blob(["\uFEFF" + content], { type: 'text/csv;charset=utf-8;' });
-  const link = document.createElement("a");
-  const url = URL.createObjectURL(blob);
-  link.setAttribute("href", url);
-  link.setAttribute("download", filename);
-  link.style.visibility = 'hidden';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  triggerDownload(csvContent, `Actualizacion_Stock_${config.brand}_${todayStamp()}.csv`);
 }
 
 // redeploy: asegurar peso por tipo en produccion

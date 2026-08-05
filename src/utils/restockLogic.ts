@@ -1,4 +1,6 @@
 import { convTable1, convTable2, convTable3, convTable4, convTable5, sortSizeEntries } from './syncLogic';
+import { shopifyGraphQL } from './shopify';
+import { escapeCSV, triggerDownload, todayStamp } from './csv';
 
 // ============================================================================
 // ANÁLISIS PARA PEDIDO (en vivo contra Shopify)
@@ -36,29 +38,13 @@ export interface RestockResult {
   items: RestockItem[];
 }
 
-// Llama a Shopify a través del proxy /api/shopify (mismo que usa el resto de la app).
-async function shopifyGraphQL(query: string, variables: Record<string, unknown> = {}) {
-  const res = await fetch('/api/shopify', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ query, variables }),
-  });
-  if (!res.ok) {
-    const raw = await res.text();
-    throw new Error(`Error de conexión con Shopify (${res.status}): ${raw.substring(0, 120)}`);
-  }
-  const json = await res.json();
-  if (json.errors) throw new Error('Shopify error: ' + JSON.stringify(json.errors));
-  return json.data;
-}
-
 const LOCATIONS_QUERY = `
   query { locations(first: 50) { edges { node { id name } } } }
 `;
 
 const PRODUCTS_QUERY = `
   query Restock($cursor: String, $loc: ID!, $q: String!) {
-    products(first: 15, after: $cursor, query: $q) {
+    products(first: 50, after: $cursor, query: $q) {
       pageInfo { hasNextPage endCursor }
       edges {
         node {
@@ -100,9 +86,11 @@ function converseArgToUs(argTitles: string[]): Record<string, string> {
   return inv;
 }
 
-export async function analyzeRestock(): Promise<RestockResult> {
+export async function analyzeRestock(
+  onProgress?: (scanned: number) => void,
+): Promise<RestockResult> {
   // 1) Ubicación fija de iD.
-  const locData = await shopifyGraphQL(LOCATIONS_QUERY);
+  const locData = await shopifyGraphQL<any>(LOCATIONS_QUERY);
   const locEdges: Array<{ node: { id: string; name: string } }> = locData?.locations?.edges || [];
   const loc = locEdges.find(e => String(e.node.name).trim() === ID_LOCATION_NAME);
   if (!loc) {
@@ -127,7 +115,7 @@ export async function analyzeRestock(): Promise<RestockResult> {
 
   while (hasNext && guard < 200) {
     guard++;
-    const data = await shopifyGraphQL(PRODUCTS_QUERY, {
+    const data = await shopifyGraphQL<any>(PRODUCTS_QUERY, {
       cursor,
       loc: locId,
       q: 'vendor:Converse OR vendor:"Le Coq Sportif"',
@@ -176,6 +164,7 @@ export async function analyzeRestock(): Promise<RestockResult> {
     }
     hasNext = !!conn?.pageInfo?.hasNextPage;
     cursor = conn?.pageInfo?.endCursor || null;
+    onProgress?.(productsScanned);
   }
 
   items.sort((a, b) => a.brand.localeCompare(b.brand) || a.title.localeCompare(b.title));
@@ -190,15 +179,6 @@ export async function analyzeRestock(): Promise<RestockResult> {
   };
 }
 
-function escapeCSV(val: unknown): string {
-  if (val === null || val === undefined) return '';
-  const str = String(val);
-  if (str.includes(',') || str.includes('"') || str.includes('\n')) {
-    return `"${str.replace(/"/g, '""')}"`;
-  }
-  return str;
-}
-
 export function downloadRestockCSV(result: RestockResult) {
   if (!result.items.length) { alert('No hay talles agotados para descargar.'); return; }
   const headers = ['Marca', 'Modelo', 'Handle', 'Talle Shopify (ARG)', 'Talle Pedido', 'Stock actual', 'SKU'];
@@ -210,13 +190,5 @@ export function downloadRestockCSV(result: RestockResult) {
         .map(escapeCSV).join(',') + '\n';
     }
   }
-  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
-  const link = document.createElement('a');
-  const urlObj = URL.createObjectURL(blob);
-  link.setAttribute('href', urlObj);
-  link.setAttribute('download', `Pedido_Faltantes_iD_${new Date().toISOString().split('T')[0]}.csv`);
-  link.style.visibility = 'hidden';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
+  triggerDownload(csv, `Pedido_Faltantes_iD_${todayStamp()}.csv`);
 }
