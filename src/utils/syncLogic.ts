@@ -132,6 +132,35 @@ export function calcWeightGrams(brand: SyncConfig['brand'], artType?: string): n
   return 0;
 }
 
+// ---- MATCH POR NOMBRE (Orchard) ----
+// Convierte un texto a "slug": minúsculas, sin acentos, separado por guiones.
+// Ej: "Remera Orchard Icons 2.0" -> "remera-orchard-icons-2-0"
+export function slugify(s: string): string {
+  return String(s || '')
+    .toLowerCase()
+    .normalize('NFD').replace(/[̀-ͯ]/g, '')
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+}
+
+// El proveedor escribe los colores en inglés (BLACK/WHITE) y Shopify en español
+// (Negro/Blanco). Canonizamos ambos lados para que el match por nombre coincida.
+const COLOR_SYNONYMS: Record<string, string> = { black: 'negro', white: 'blanco' };
+export function canonName(slug: string): string {
+  return slug.split('-').map(tok => COLOR_SYNONYMS[tok] || tok).join('-');
+}
+
+// Compara un talle del proveedor con el "Option1 Value" de Shopify.
+// Trata como equivalentes todas las variantes de "talle único".
+export function talleMatches(provSize: string, shopTalle: string): boolean {
+  const norm = (t: string) => {
+    const u = String(t || '').trim().toUpperCase();
+    if (['UNICO', 'ÚNICO', 'U', 'TU', 'DEFAULT TITLE', ''].includes(u)) return 'UNICO';
+    return u;
+  };
+  return norm(provSize) === norm(shopTalle);
+}
+
 // Extract Sheet names
 export async function extractSheetNames(file: File): Promise<string[]> {
   const arrayBuffer = await file.arrayBuffer();
@@ -383,26 +412,43 @@ export async function processFiles(
           const wb = XLSX.read(e.target!.result, { type: 'array' });
           const sheet = wb.Sheets[wb.SheetNames[0]];
           const rows = XLSX.utils.sheet_to_json(sheet) as any[];
+          // Toma la primera columna que exista de una lista de nombres posibles.
+          // Así soportamos tanto el "Export de productos" (Variant SKU, Variant Price,
+          // Variant Inventory Qty) como el "Export de inventario" (SKU, On hand...).
+          const pick = (row: any, keys: string[]): string => {
+            for (const k of keys) {
+              const v = row[k];
+              if (v !== undefined && v !== null && String(v).trim() !== '') return String(v);
+            }
+            return '';
+          };
           const prodMap: Record<string, ShopifyProductNode> = {};
           for (const row of rows) {
             const handle = String(row['Handle'] || '').trim();
             if (!handle) continue;
+            const tagsVal = pick(row, ['Tags']);
             if (!prodMap[handle]) {
               prodMap[handle] = {
                 handle,
                 title: String(row['Title'] || ''),
-                tags: String(row['Tags'] || ''),
+                tags: tagsVal,
                 variants: { edges: [] }
               };
             }
-            if (row['Tags'] && !prodMap[handle].tags) prodMap[handle].tags = String(row['Tags']);
+            if (tagsVal && !prodMap[handle].tags) prodMap[handle].tags = tagsVal;
+            const sku = pick(row, ['Variant SKU', 'SKU']);
+            // Evita duplicar variantes: el export de inventario trae una fila por
+            // sucursal, así que una misma variante (SKU) puede venir repetida.
+            if (sku && prodMap[handle].variants.edges.some(e => e.node.sku === sku)) continue;
             prodMap[handle].variants.edges.push({
               node: {
-                id: String(row['Variant Inventory Item ID'] || ''),
-                title: String(row['Option1 Value'] || ''),
-                sku: String(row['Variant SKU'] || ''),
-                price: String(row['Variant Price'] || '0'),
-                inventoryQuantity: parseInt(row['Variant Inventory Qty'] || '0')
+                id: pick(row, ['Variant Inventory Item ID']),
+                title: pick(row, ['Option1 Value']),
+                sku,
+                price: pick(row, ['Variant Price']) || '0',
+                inventoryQuantity: parseInt(
+                  pick(row, ['Variant Inventory Qty', 'On hand (new)', 'On hand (current)', 'Available (not editable)']) || '0'
+                )
               }
             });
           }
@@ -426,12 +472,18 @@ export async function processFiles(
       if (config.brand === 'bloque') {
          match = prod.variants.edges.some((v) => v.node.sku?.toLowerCase() === cod);
       } else if (config.brand === 'orchard') {
-         // Matchea por descripción (tag) + tipo (título): distingue, por ejemplo,
-         // el gorro y la gorra que comparten la misma descripción ("SPIRIT").
-         const prodTitle = String(prod.title || '').toLowerCase();
-         const dCod = provData.descCod || '';
+         // Match POR NOMBRE: el título de Shopify tiene la forma
+         // "{Tipo} Orchard {Nombre}" (ej "Remera Orchard No More Tears Negro").
+         // Comparamos contra el nombre del Excel del proveedor, exigiendo que
+         // el título contenga la marca ("orchard"), el tipo (remera/buzo/…) y el
+         // nombre. Canonizamos colores EN/ES para que "Black" ↔ "Negro" coincidan.
+         const titleCanon = canonName(slugify(prod.title));
+         const dCod = canonName(provData.descCod || '');
          const aType = provData.artType || '';
-         match = !!dCod && tags.includes(dCod) && (!aType || prodTitle.includes(aType));
+         match = !!dCod
+           && titleCanon.includes('orchard')
+           && (!aType || titleCanon.includes(aType))
+           && titleCanon.includes(dCod);
       } else {
          match = tags.includes(cod.toLowerCase());
       }
@@ -449,8 +501,10 @@ export async function processFiles(
            const variantPrice = parseFloat(variant.price);
            
            // ACTUALIZACIÓN DE PRECIO
-           // Ojo: Si el precio de venta sugerido cambia, preparamos acción
-           if (calculatedPrice !== variantPrice && provData.wholesale > 0) {
+           // Ojo: Si el precio de venta sugerido cambia, preparamos acción.
+           // variantPrice > 0 evita falsos positivos cuando el CSV no trae precio
+           // (ej. el export de inventario), que dejaría el precio en 0.
+           if (calculatedPrice !== variantPrice && variantPrice > 0 && provData.wholesale > 0) {
               updatesToApply.push({
                 type: 'PRICE',
                 variantId: variant.id,
@@ -460,13 +514,42 @@ export async function processFiles(
                 newPrice: calculatedPrice
               });
            }
+        }
 
-           // ACTUALIZACIÓN DE STOCK A 0 (Para variantes que están en 0 en el proveedor)
-           // Por ahora la lógica antigua ponía en 0 lo que estaba en Deposito Martinez y el prov decía 0
-           // Con API, si el proveedor lo envía y la cantidad es 0 en el Excel, lo bajamos a 0.
-           // Pero necesitamos la Location ID! Asumiremos que se usa inventoryAdjustQuantities
-           // Para esta etapa de análisis, marcamos todo lo que está en 0
-           // ... A IMPLEMENTAR ...
+        // ---- REVISIÓN DE STOCK Y PRECIO (Orchard) ----
+        // Para cada talle del proveedor, buscamos la variante equivalente en Shopify
+        // y avisamos si el stock o el precio difieren, o si el talle no existe.
+        if (config.brand === 'orchard') {
+          const missingSizes: string[] = [];
+          for (const [size, provQtyRaw] of sortSizeEntries(Object.entries(provData.sizes))) {
+            const provQty = Number(provQtyRaw);
+            const vEdge = prod.variants.edges.find(e => talleMatches(size, e.node.title));
+            if (!vEdge) { missingSizes.push(size); continue; }
+            const shopQty = Number(vEdge.node.inventoryQuantity);
+            if (provQty !== shopQty) {
+              alerts.push({
+                type: 'warning',
+                title: 'Stock distinto',
+                message: `${prod.title} · talle ${size}: proveedor ${provQty} vs Shopify ${shopQty}`,
+              });
+            }
+            const shopPrice = parseFloat(vEdge.node.price);
+            const provPrice = provData.publicPrice || 0;
+            if (shopPrice > 0 && provPrice > 0 && shopPrice !== provPrice) {
+              alerts.push({
+                type: 'danger',
+                title: 'Precio distinto',
+                message: `${prod.title} · talle ${size}: proveedor $${provPrice} vs Shopify $${shopPrice}`,
+              });
+            }
+          }
+          if (missingSizes.length > 0) {
+            alerts.push({
+              type: 'info',
+              title: 'Talles del proveedor que no están en Shopify',
+              message: `${prod.title}: ${missingSizes.join(', ')}`,
+            });
+          }
         }
       }
     }

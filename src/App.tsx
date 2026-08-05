@@ -374,6 +374,30 @@ export default function App() {
             </div>
           </div>
 
+          {result?.alerts && result.alerts.length > 0 && (
+            <div style={{ marginTop: '2rem' }}>
+              <h3 style={{ marginBottom: '0.8rem' }}>
+                🔎 Revisión de stock y precios ({result.alerts.length})
+              </h3>
+              <div style={{ display: 'flex', gap: '16px', flexWrap: 'wrap', marginBottom: '0.8rem', fontSize: '0.85rem', opacity: 0.9 }}>
+                <span>📦 Stock distinto: <strong>{result.alerts.filter(a => a.title === 'Stock distinto').length}</strong></span>
+                <span>💲 Precio distinto: <strong>{result.alerts.filter(a => a.title === 'Precio distinto').length}</strong></span>
+                <span>➕ Talles faltantes: <strong>{result.alerts.filter(a => a.type === 'info').length}</strong></span>
+              </div>
+              <div style={{ maxHeight: '360px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                {result.alerts.map((a, i) => {
+                  const color = a.type === 'danger' ? '#dc2626' : a.type === 'warning' ? '#f59e0b' : '#6366f1';
+                  const bg = a.type === 'danger' ? 'rgba(220,38,38,0.10)' : a.type === 'warning' ? 'rgba(245,158,11,0.10)' : 'rgba(99,102,241,0.10)';
+                  return (
+                    <div key={i} style={{ padding: '0.5rem 0.7rem', borderLeft: `3px solid ${color}`, background: bg, borderRadius: '4px', fontSize: '0.85rem' }}>
+                      <strong style={{ color }}>{a.title}</strong> — {a.message}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
           {result?.missingProducts && result.missingProducts.length > 0 && (
             <div className="missing-products-section" style={{ marginTop: '2rem', padding: '1rem', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid #f59e0b', borderRadius: '8px' }}>
               <h3 style={{ color: '#f59e0b', marginBottom: '1rem' }}>Configurar Tablas para Nuevos Productos</h3>
