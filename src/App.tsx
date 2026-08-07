@@ -400,24 +400,32 @@ export default function App() {
               </>
             )}
 
-            <input
-              ref={shopifyInputRef}
-              type="file"
-              accept=".csv"
-              style={{ display: 'none' }}
-              onChange={e => { const f = e.target.files?.[0]; if (f) processShopifyFile(f); e.target.value = ''; }}
-            />
-            <div
-              className={`dropzone ${shopifyFile ? 'has-file' : ''}`}
-              onDrop={handleShopifyDrop} onDragOver={preventDefault}
-              onClick={() => shopifyInputRef.current?.click()}
-              style={{ marginTop: '0.8rem', borderColor: shopifyFile ? '#10b981' : '#6366f1', cursor: 'pointer' }}
-            >
-              <h3 style={{ color: shopifyFile ? '#10b981' : '#a5b4fc' }}>
-                {shopifyFile ? '✅ Shopify CSV Listo' : '🛒 CSV de Shopify (opcional)'}
-              </h3>
-              <p>{shopifyFile?.name || 'Opcional: si no lo subís, la app trae los datos de Shopify sola. (Para Bloque, subilo igual.)'}</p>
-            </div>
+            {config.brand === 'bloque' ? (
+              <>
+                <input
+                  ref={shopifyInputRef}
+                  type="file"
+                  accept=".csv"
+                  style={{ display: 'none' }}
+                  onChange={e => { const f = e.target.files?.[0]; if (f) processShopifyFile(f); e.target.value = ''; }}
+                />
+                <div
+                  className={`dropzone ${shopifyFile ? 'has-file' : ''}`}
+                  onDrop={handleShopifyDrop} onDragOver={preventDefault}
+                  onClick={() => shopifyInputRef.current?.click()}
+                  style={{ marginTop: '0.8rem', borderColor: shopifyFile ? '#10b981' : '#6366f1', cursor: 'pointer' }}
+                >
+                  <h3 style={{ color: shopifyFile ? '#10b981' : '#a5b4fc' }}>
+                    {shopifyFile ? '✅ Shopify CSV Listo' : '🛒 Arrastrá o hacé clic: CSV de Shopify (products_export)'}
+                  </h3>
+                  <p>{shopifyFile?.name || 'Necesario para detectar si los productos ya existen'}</p>
+                </div>
+              </>
+            ) : (
+              <p style={{ marginTop: '0.8rem', fontSize: '0.85rem', opacity: 0.75, textAlign: 'center' }}>
+                🔗 La app trae los datos de Shopify sola. No necesitás subir el CSV.
+              </p>
+            )}
           </div>
 
           <div className="glass-panel settings-panel">
