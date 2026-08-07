@@ -5,6 +5,7 @@ import { analyzeRestock, downloadRestockCSV } from './utils/restockLogic';
 import type { RestockResult } from './utils/restockLogic';
 import { planStockWrite, executeStockWrite } from './utils/writeStock';
 import type { StockPlan } from './utils/writeStock';
+import { createProducts } from './utils/createProducts';
 
 export default function App() {
   const [providerFile, setProviderFile] = useState<File | null>(null);
@@ -31,6 +32,24 @@ export default function App() {
   const [stockWriting, setStockWriting] = useState(false);
   const [writeConfirm, setWriteConfirm] = useState(false);
   const [writeDone, setWriteDone] = useState<string | null>(null);
+
+  // ---- CREAR PRODUCTOS NUEVOS EN SHOPIFY (borrador) ----
+  const [creating, setCreating] = useState(false);
+  const [createConfirm, setCreateConfirm] = useState(false);
+  const [createDone, setCreateDone] = useState<string | null>(null);
+
+  const handleCreateProducts = async (limit?: number) => {
+    if (!result || result.missingProducts.length === 0) return;
+    setCreating(true); setCreateDone(null);
+    try {
+      const res = await createProducts(result, config, limit);
+      setCreateDone(`Creados ${res.created} · fallidos ${res.failed}` + (res.errors.length ? ` · ${res.errors.slice(0, 2).join(' | ')}` : ''));
+    } catch (e: any) {
+      alert('Error creando productos: ' + e.message);
+    } finally {
+      setCreating(false);
+    }
+  };
 
   // ---- CAJITA DE ÓRDENES (mini-asistente sin costo) ----
   const [cmdInput, setCmdInput] = useState('');
@@ -477,6 +496,34 @@ export default function App() {
                   );
                 })}
               </div>
+            </div>
+          )}
+
+          {/* ====== CREAR PRODUCTOS NUEVOS DIRECTO EN SHOPIFY ====== */}
+          {result?.missingProducts && result.missingProducts.length > 0 && (
+            <div style={{ marginTop: '2rem', padding: '1rem', border: '1px solid #8b5cf6', borderRadius: '8px', background: 'rgba(139,92,246,0.06)' }}>
+              <h3 style={{ color: '#a78bfa', marginTop: 0 }}>🚀 Crear los nuevos directo en Shopify</h3>
+              <p style={{ fontSize: '0.85rem', opacity: 0.85, marginTop: 0 }}>
+                Crea los {result.missingProducts.length} productos nuevos como <strong>borrador</strong> (no se publican solos, los revisás vos). Probá primero con 1.
+              </p>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+                <button className="btn-primary" style={{ background: '#3b82f6' }} onClick={() => handleCreateProducts(1)} disabled={creating}>
+                  {creating ? <span className="loader"></span> : '🧪 Crear 1 de prueba (borrador)'}
+                </button>
+              </div>
+              <label style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '0.8rem', fontSize: '0.9rem' }}>
+                <input type="checkbox" checked={createConfirm} onChange={e => setCreateConfirm(e.target.checked)} />
+                Ya probé con 1 y quiero <strong>&nbsp;crear todos&nbsp;</strong> en Shopify (como borrador).
+              </label>
+              <button
+                className="btn-primary"
+                style={{ background: createConfirm ? '#8b5cf6' : '#6b7280', marginTop: '0.6rem' }}
+                onClick={() => handleCreateProducts()}
+                disabled={!createConfirm || creating}
+              >
+                {creating ? <span className="loader"></span> : `🚀 Crear todos (${result.missingProducts.length}) en Shopify`}
+              </button>
+              {createDone && <p style={{ marginTop: '0.8rem', color: '#a78bfa', fontWeight: 'bold' }}>✅ {createDone}</p>}
             </div>
           )}
 

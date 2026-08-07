@@ -343,7 +343,10 @@ export async function processFiles(
       const catU = currentCat.toUpperCase();
       const subU = currentSub.toUpperCase();
       let catWord = '';
-      if (subU.includes('KEYCHAIN') || catU.includes('KEYCHAIN')) catWord = 'Llavero';
+      if (subU.includes('KNEE')) catWord = 'Rodilleras';
+      else if (subU.includes('WRIST')) catWord = 'Muñequeras';
+      else if (subU.includes('HIP') || subU.includes('CULERA')) catWord = 'Protectores de cadera';
+      else if (subU.includes('KEYCHAIN') || catU.includes('KEYCHAIN')) catWord = 'Llavero';
       else if (catU.includes('HELMET')) catWord = 'Casco';
       else if (catU.includes('PAD')) catWord = 'Protecciones';
       const title = [catWord, name, color].filter(Boolean).join(' ').trim();
@@ -820,6 +823,64 @@ export function downloadUpdateCSV(result: SyncResult, config: SyncConfig) {
   });
 
   triggerDownload(csvContent, `Actualizacion_Precios_${config.brand}_${todayStamp()}.csv`);
+}
+
+// Versión estructurada de la matriz (misma lógica que el CSV) para poder crear
+// los productos directo por la API además de exportarlos.
+export interface MatrixVariant { sku: string; optionName: string; optionValue: string; price: number; cost: number; qty: number; }
+export interface MatrixProduct { handle: string; title: string; vendor: string; productType: string; tags: string; weightGrams: number; hasSizes: boolean; variants: MatrixVariant[]; }
+
+export function buildMatrixProducts(result: SyncResult, config: SyncConfig): MatrixProduct[] {
+  const out: MatrixProduct[] = [];
+  const vendorDefaults: Record<SyncConfig['brand'], string> = { lecoq: 'Le Coq Sportif', converse: 'Converse', orchard: 'Orchard', bloque: 'Bloque', luxo: 'Luxo' };
+
+  for (const prod of result.missingProducts) {
+    let handle = prod.coditm.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const vendor = prod.vendor || vendorDefaults[config.brand];
+    const price = calcSellPrice(config.brand, prod.wholesale, prod.publicPrice || 0);
+    const cost = prod.costFinal ?? calcCost(config.brand, prod.wholesale);
+    let displayTitle = prod.title;
+    let tagValue = prod.coditm;
+    let productType = '';
+    if (config.brand === 'orchard') {
+      const typeLabels: Record<string, string> = { gorra: 'Gorra', gorro: 'Gorro Beanie', remera: 'Remera', buzo: 'Buzo', campera: 'Campera', medias: 'Medias' };
+      const aType = prod.artType || '';
+      productType = typeLabels[aType] || (aType ? aType.charAt(0).toUpperCase() + aType.slice(1) : '');
+      const descTitle = prod.title.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+      displayTitle = `${productType} Orchard ${descTitle}`.replace(/\s+/g, ' ').trim();
+      tagValue = prod.descCod || prod.coditm;
+      handle = `${aType}-orchard-${prod.descCod || ''}`.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    }
+    if (config.brand === 'luxo') {
+      const t = (prod.title || '').trim();
+      displayTitle = t ? t.charAt(0).toUpperCase() + t.slice(1) : prod.coditm;
+      tagValue = 'Luxo';
+      productType = (prod.artType || '') ? (prod.artType as string).charAt(0).toUpperCase() + (prod.artType as string).slice(1) : '';
+      handle = `${displayTitle}-${prod.coditm}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    }
+
+    const variants: MatrixVariant[] = [];
+    let hasSizes = false;
+    for (const [size, qty] of sortSizeEntries(Object.entries(prod.sizes))) {
+      const isUnico = ['unico', 'único', 'tu', ''].includes(String(size).toLowerCase());
+      let variantSku = prod.coditm;
+      if (config.brand === 'converse' || config.brand === 'lecoq') variantSku = `${prod.coditm}-${size}`;
+      else if (config.brand === 'orchard') variantSku = `ORC-${(prod.descCod || '').toUpperCase()}-${String(size).toUpperCase()}`;
+      else if (config.brand === 'luxo') variantSku = isUnico ? prod.coditm : `${prod.coditm}-${String(size).toUpperCase()}`;
+      const useTitleOption = config.brand === 'luxo' && isUnico;
+      if (!useTitleOption) hasSizes = true;
+      variants.push({
+        sku: variantSku,
+        optionName: useTitleOption ? 'Title' : 'Talle',
+        optionValue: useTitleOption ? 'Default Title' : String(size),
+        price,
+        cost,
+        qty: config.brand === 'luxo' ? 0 : Number(qty) || 0,
+      });
+    }
+    out.push({ handle, title: displayTitle, vendor, productType, tags: tagValue, weightGrams: calcWeightGrams(config.brand, prod.artType), hasSizes, variants });
+  }
+  return out;
 }
 
 export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _tableSelections?: Record<string, number>) {
