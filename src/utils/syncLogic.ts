@@ -316,19 +316,37 @@ export async function processFiles(
     const cCosto = idx('costo');
     const cPublico = idx('publico');
     const cCant = idx('cantidad');
+    // Vamos siguiendo la categoría principal (col C: HELMETS, PADS, ACCESORIES)
+    // y el subgrupo (col B: KEYCHAINS, etc.) para anteponer la palabra en español.
+    let currentCat = '';
+    let currentSub = '';
     for (let r = h + 1; r < rows.length; r++) {
       const row = rows[r] as any[];
       if (!row) continue;
       const sku = String(row[0] || '').trim().toLowerCase();
-      if (!/[0-9a-z]/.test(sku)) continue; // saltea encabezados de sección (sin código)
-      const name = cName >= 0 ? String(row[cName] || '').trim() : '';
+      const colB = cName >= 0 ? String(row[cName] || '').trim() : String(row[1] || '').trim();
+      const colC = String(row[2] || '').trim();
+      if (!/[0-9a-z]/.test(sku)) {
+        // Fila de encabezado (sin código): actualizamos categoría o subgrupo.
+        if (colC) { currentCat = colC; currentSub = ''; }
+        else if (colB) { currentSub = colB; }
+        continue;
+      }
+      const name = colB;
       if (!name) continue;
       const color = cColor >= 0 ? String(row[cColor] || '').trim() : '';
       const talle = (cTalle >= 0 ? String(row[cTalle] || '').trim() : '') || 'unico';
       const costo = cCosto >= 0 ? (parseFloat(row[cCosto]) || 0) : 0;
       const publico = cPublico >= 0 ? (parseFloat(row[cPublico]) || 0) : 0;
       const qty = cCant >= 0 ? (parseFloat(row[cCant]) || 0) : 0;
-      const title = (name + (color ? ` ${color}` : '')).trim();
+      // Palabra de categoría en español según la sección.
+      const catU = currentCat.toUpperCase();
+      const subU = currentSub.toUpperCase();
+      let catWord = '';
+      if (subU.includes('KEYCHAIN') || catU.includes('KEYCHAIN')) catWord = 'Llavero';
+      else if (catU.includes('HELMET')) catWord = 'Casco';
+      else if (catU.includes('PAD')) catWord = 'Protecciones';
+      const title = [catWord, name, color].filter(Boolean).join(' ').trim();
       if (!excelMap[sku]) excelMap[sku] = { wholesale: costo, publicPrice: publico, sizes: {}, foundInShopify: false, title, vendor: 'Bloque' };
       excelMap[sku].sizes[talle] = (excelMap[sku].sizes[talle] || 0) + qty;
     }
