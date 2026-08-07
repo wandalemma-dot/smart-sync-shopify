@@ -33,6 +33,11 @@ export default function App() {
   const [writeConfirm, setWriteConfirm] = useState(false);
   const [writeDone, setWriteDone] = useState<string | null>(null);
 
+  // ---- CAJITA DE ÓRDENES (mini-asistente sin costo) ----
+  const [cmdInput, setCmdInput] = useState('');
+  const [cmdLog, setCmdLog] = useState<{ from: 'yo' | 'app'; text: string }[]>([]);
+  const say = (from: 'yo' | 'app', text: string) => setCmdLog(prev => [...prev, { from, text }]);
+
   const handleSimulateStock = async () => {
     if (!result) return;
     setStockPlanning(true); setStockPlan(null); setWriteDone(null); setWriteConfirm(false);
@@ -59,6 +64,49 @@ export default function App() {
     } finally {
       setStockWriting(false);
     }
+  };
+
+  // Interpreta una orden corta escrita en la cajita y ejecuta la acción.
+  const runCommand = async () => {
+    const raw = cmdInput.trim();
+    if (!raw) return;
+    say('yo', raw);
+    setCmdInput('');
+    const t = raw.toLowerCase();
+
+    // 1) Detectar marca mencionada
+    const brandWords: [string, SyncConfig['brand']][] = [
+      ['orchard', 'orchard'], ['converse', 'converse'], ['le coq', 'lecoq'],
+      ['lecoq', 'lecoq'], ['coq', 'lecoq'], ['bloque', 'bloque'], ['luxo', 'luxo'],
+    ];
+    let brand: SyncConfig['brand'] | null = null;
+    for (const [w, b] of brandWords) { if (t.includes(w)) { brand = b; break; } }
+    if (brand) { setConfig(prev => ({ ...prev, brand: brand! })); }
+
+    // 2) Detectar intención
+    if (t.includes('ayuda') || t.includes('help') || t.trim() === '?') {
+      say('app', 'Podés escribir: "analizá orchard", "pedido" (reposición Converse/Le Coq), "simular stock", o el nombre de una marca para elegirla. Recordá subir arriba el Excel del proveedor antes de analizar.');
+      return;
+    }
+    if (t.includes('pedido') || t.includes('reposic') || t.includes('repon')) {
+      say('app', 'Dale, analizo el pedido de reposición (Converse y Le Coq)…');
+      handleAnalyzeRestock();
+      return;
+    }
+    if (t.includes('simular') || t.includes('escrib') || (t.includes('stock') && !t.includes('analiz'))) {
+      if (!result) { say('app', 'Primero analizá una marca (ej: "analizá orchard"). Después puedo simular el stock.'); return; }
+      say('app', 'Simulo la escritura de stock y te muestro qué cambiaría abajo…');
+      handleSimulateStock();
+      return;
+    }
+    if (t.includes('analiz') || t.includes('revis') || t.includes('resumen')) {
+      if (!providerFile) { say('app', 'Subí primero el Excel del proveedor en el casillero de arriba y volvé a escribirme.'); return; }
+      say('app', `Analizo${brand ? ' ' + raw.match(/orchard|converse|le coq|lecoq|coq|bloque|luxo/i)?.[0] : ''}…`);
+      handleAnalyze(brand || undefined);
+      return;
+    }
+    if (brand) { say('app', `Listo, marca puesta en "${brand}". Ahora escribime "analizá" (con el Excel ya subido).`); return; }
+    say('app', 'No te entendí 🤔. Probá: "analizá orchard", "pedido", "simular stock", o "ayuda".');
   };
 
   // ---- ANÁLISIS PARA PEDIDO (stock en vivo de la sucursal iD) ----
@@ -151,9 +199,12 @@ export default function App() {
 
   const preventDefault = (e: React.DragEvent) => e.preventDefault();
 
-  const handleAnalyze = async () => {
+  const handleAnalyze = async (overrideBrand?: SyncConfig['brand']) => {
     if (!providerFile) return;
-    if (config.brand === 'bloque' && !remitoFile) {
+    // La cajita de órdenes puede pedir analizar una marca distinta a la elegida.
+    const cfg: SyncConfig = overrideBrand ? { ...config, brand: overrideBrand } : config;
+    if (overrideBrand && overrideBrand !== config.brand) setConfig(cfg);
+    if (cfg.brand === 'bloque' && !remitoFile) {
       alert("⚠️ Error: Para Bloque necesitas subir también el PDF del Remito.");
       return;
     }
@@ -164,7 +215,7 @@ export default function App() {
     setPreviewReady(false);
 
     try {
-      const res = await processFiles(providerFile, remitoFile, shopifyFile, config);
+      const res = await processFiles(providerFile, remitoFile, shopifyFile, cfg);
       setResult(res);
       setPreviewReady(true);
     } catch (err: any) {
@@ -197,6 +248,31 @@ export default function App() {
         <h1>Sincronización de Stock e Inventario</h1>
         <p className="subtitle">Automatización Inteligente</p>
       </header>
+
+      {/* ====== CAJITA DE ÓRDENES ====== */}
+      <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1rem', border: '1px solid #6366f1' }}>
+        <h2 style={{ margin: '0 0 6px', fontSize: '1.05rem' }}>💬 Escribile a la app</h2>
+        {cmdLog.length > 0 && (
+          <div style={{ maxHeight: '160px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '6px', margin: '8px 0' }}>
+            {cmdLog.map((m, i) => (
+              <div key={i} style={{ alignSelf: m.from === 'yo' ? 'flex-end' : 'flex-start', maxWidth: '85%', padding: '6px 10px', borderRadius: '10px', fontSize: '0.85rem', background: m.from === 'yo' ? '#6366f1' : 'rgba(255,255,255,0.08)' }}>
+                {m.text}
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: '8px' }}>
+          <input
+            type="text"
+            value={cmdInput}
+            onChange={e => setCmdInput(e.target.value)}
+            onKeyDown={e => { if (e.key === 'Enter') runCommand(); }}
+            placeholder='Ej: "analizá orchard", "pedido", "simular stock", "ayuda"'
+            style={{ flex: 1, padding: '10px 12px', borderRadius: '8px', border: '1px solid var(--glass-border)', background: 'var(--bg-color)', color: 'white' }}
+          />
+          <button className="btn-primary" style={{ background: '#6366f1', padding: '10px 18px' }} onClick={runCommand}>Enviar</button>
+        </div>
+      </div>
 
       {/* ====== ANÁLISIS PARA PEDIDO (stock en vivo iD) ====== */}
       <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1.2rem', border: '1px solid #10b981' }}>
@@ -379,7 +455,7 @@ export default function App() {
 
             <button
               className="btn-primary"
-              onClick={handleAnalyze}
+              onClick={() => handleAnalyze()}
               disabled={!providerFile || (config.brand === 'bloque' && !remitoFile) || loading}
             >
               {loading ? <span className="loader"></span> : '🔍 Analizar y Preparar Resumen'}
