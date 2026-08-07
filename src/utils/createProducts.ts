@@ -67,7 +67,9 @@ function buildProductSetInput(p: MatrixProduct, locationId: string | null): any 
       },
     };
     if (p.hasSizes) variant.optionValues = [{ optionName: 'Talle', name: v.optionValue }];
-    if (v.qty > 0 && locationId) {
+    // Cargamos el stock (de la columna CANTIDAD del archivo) en la sucursal de la
+    // marca. Lo hacemos siempre, aunque sea 0, para activar el inventario ahí.
+    if (locationId) {
       variant.inventoryQuantities = [{ locationId, name: 'available', quantity: v.qty }];
     }
     return variant;

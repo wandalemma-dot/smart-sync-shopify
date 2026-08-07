@@ -151,6 +151,34 @@ export function canonName(slug: string): string {
   return slug.split('-').map(tok => COLOR_SYNONYMS[tok] || tok).join('-');
 }
 
+// Traduce nombres de colores del inglés al español dentro de un texto.
+// Las frases de varias palabras (ej "army green") van primero.
+const COLOR_ES: [RegExp, string][] = [
+  [/\barmy green\b/gi, 'verde militar'],
+  [/\barmy\b/gi, 'verde militar'],
+  [/\bblack\b/gi, 'negro'],
+  [/\bwhite\b/gi, 'blanco'],
+  [/\bgrey\b/gi, 'gris'],
+  [/\bgray\b/gi, 'gris'],
+  [/\bnavy\b/gi, 'azul marino'],
+  [/\bblue\b/gi, 'azul'],
+  [/\bred\b/gi, 'rojo'],
+  [/\bgreen\b/gi, 'verde'],
+  [/\byellow\b/gi, 'amarillo'],
+  [/\bpink\b/gi, 'rosa'],
+  [/\borange\b/gi, 'naranja'],
+  [/\bpurple\b/gi, 'violeta'],
+  [/\bbrown\b/gi, 'marrón'],
+  [/\bsilver\b/gi, 'plateado'],
+  [/\bgold\b/gi, 'dorado'],
+  [/\bmatte\b/gi, 'mate'],
+];
+export function colorsToEs(text: string): string {
+  let t = String(text || '');
+  for (const [re, es] of COLOR_ES) t = t.replace(re, es);
+  return t;
+}
+
 // Compara un talle del proveedor con el "Option1 Value" de Shopify.
 // Trata como equivalentes todas las variantes de "talle único".
 export function talleMatches(provSize: string, shopTalle: string): boolean {
@@ -349,9 +377,9 @@ export async function processFiles(
       else if (subU.includes('KEYCHAIN') || catU.includes('KEYCHAIN')) catWord = 'Llavero';
       else if (catU.includes('HELMET')) catWord = 'Casco';
       else if (catU.includes('PAD')) catWord = 'Protecciones';
-      // Título en formato normal (Primera Letra De Cada Palabra), no TODO EN MAYÚSCULA.
+      // Título en formato normal (Primera Letra De Cada Palabra), colores en español.
       const titleCase = (s: string) => s.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
-      const title = [catWord, titleCase(name), titleCase(color)].filter(Boolean).join(' ').trim();
+      const title = [catWord, titleCase(colorsToEs(name)), titleCase(colorsToEs(color))].filter(Boolean).join(' ').trim();
       if (!excelMap[sku]) excelMap[sku] = { wholesale: costo, publicPrice: publico, sizes: {}, foundInShopify: false, title, vendor: 'Bloque' };
       excelMap[sku].sizes[talle] = (excelMap[sku].sizes[talle] || 0) + qty;
     }
