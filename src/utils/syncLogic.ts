@@ -167,7 +167,7 @@ export const STOCK_LOCATION: Record<SyncConfig['brand'], string> = {
   converse: 'ID (Converse - Le Coq Sportif)',
   lecoq: 'ID (Converse - Le Coq Sportif)',
   orchard: 'ORCHARD',
-  bloque: 'ID (Converse - Le Coq Sportif)',
+  bloque: 'BLOQUE DISTRIBUTION',
   luxo: 'LUXO',
 };
 
@@ -955,7 +955,7 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
     converse: 'ID (Converse - Le Coq Sportif)',
     lecoq: 'ID (Converse - Le Coq Sportif)',
     orchard: 'ORCHARD',
-    bloque: 'ID (Converse - Le Coq Sportif)',
+    bloque: 'BLOQUE DISTRIBUTION',
     luxo: 'LUXO',
   };
   // Sucursales que deben quedar en 0 para esa marca (se maneja en una sola sucursal).
