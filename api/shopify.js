@@ -10,7 +10,8 @@
 
 const ALLOWED_MUTATIONS = [
   'inventorySetQuantities', // escribir stock (cantidades)
-  'productSet',             // crear productos nuevos (como borrador)
+  'productSet',             // crear productos nuevos
+  'publishablePublish',     // publicar productos en un canal (Point of Sale)
 ];
 
 function isAllowed(query) {

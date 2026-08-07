@@ -504,7 +504,7 @@ export default function App() {
             <div style={{ marginTop: '2rem', padding: '1rem', border: '1px solid #8b5cf6', borderRadius: '8px', background: 'rgba(139,92,246,0.06)' }}>
               <h3 style={{ color: '#a78bfa', marginTop: 0 }}>🚀 Crear los nuevos directo en Shopify</h3>
               <p style={{ fontSize: '0.85rem', opacity: 0.85, marginTop: 0 }}>
-                Crea los {result.missingProducts.length} productos nuevos como <strong>borrador</strong> (no se publican solos, los revisás vos). Probá primero con 1.
+                Crea los {result.missingProducts.length} productos nuevos en <strong>Activo</strong>, publicados <strong>solo en Point of Sale</strong>, con el stock del archivo. Probá primero con 1.
               </p>
               <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
                 <button className="btn-primary" style={{ background: '#3b82f6' }} onClick={() => handleCreateProducts(1)} disabled={creating}>

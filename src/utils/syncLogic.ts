@@ -349,7 +349,9 @@ export async function processFiles(
       else if (subU.includes('KEYCHAIN') || catU.includes('KEYCHAIN')) catWord = 'Llavero';
       else if (catU.includes('HELMET')) catWord = 'Casco';
       else if (catU.includes('PAD')) catWord = 'Protecciones';
-      const title = [catWord, name, color].filter(Boolean).join(' ').trim();
+      // Título en formato normal (Primera Letra De Cada Palabra), no TODO EN MAYÚSCULA.
+      const titleCase = (s: string) => s.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+      const title = [catWord, titleCase(name), titleCase(color)].filter(Boolean).join(' ').trim();
       if (!excelMap[sku]) excelMap[sku] = { wholesale: costo, publicPrice: publico, sizes: {}, foundInShopify: false, title, vendor: 'Bloque' };
       excelMap[sku].sizes[talle] = (excelMap[sku].sizes[talle] || 0) + qty;
     }

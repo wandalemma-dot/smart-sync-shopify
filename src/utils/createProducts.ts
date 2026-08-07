@@ -12,6 +12,8 @@ import type { SyncResult, SyncConfig, MatrixProduct } from './syncLogic';
 
 const LOCATIONS_QUERY = `query { locations(first: 50) { edges { node { id name } } } }`;
 
+const PUBLICATIONS_QUERY = `query { publications(first: 30) { edges { node { id name } } } }`;
+
 const PRODUCT_SET = `
   mutation CrearProducto($input: ProductSetInput!) {
     productSet(input: $input, synchronous: true) {
@@ -20,6 +22,25 @@ const PRODUCT_SET = `
     }
   }
 `;
+
+const PUBLISH = `
+  mutation Publicar($id: ID!, $input: [PublicationInput!]!) {
+    publishablePublish(id: $id, input: $input) {
+      userErrors { field message }
+    }
+  }
+`;
+
+// Busca la publicación (canal de venta) "Point of Sale".
+async function getPosPublicationId(): Promise<string | null> {
+  const data = await shopifyGraphQL<any>(PUBLICATIONS_QUERY);
+  const edges: any[] = data?.publications?.edges || [];
+  const pos = edges.find((e) => {
+    const n = String(e.node.name || '').toLowerCase();
+    return n.includes('point of sale') || n.includes('punto de venta') || n === 'pos';
+  });
+  return pos ? pos.node.id : null;
+}
 
 export interface CreateResult {
   created: number;
@@ -55,7 +76,7 @@ function buildProductSetInput(p: MatrixProduct, locationId: string | null): any 
   const input: any = {
     title: p.title,
     vendor: p.vendor,
-    status: 'DRAFT', // borrador: no se publica solo
+    status: 'ACTIVE', // se crean activos
     variants,
   };
   if (p.productType) input.productType = p.productType;
@@ -77,6 +98,7 @@ export async function createProducts(
   if (limit && limit > 0) products = products.slice(0, limit);
 
   const locId = await getLocationId(STOCK_LOCATION[config.brand]);
+  const posId = await getPosPublicationId();
 
   let created = 0;
   let failed = 0;
@@ -88,7 +110,16 @@ export async function createProducts(
       const data = await shopifyGraphQL<any>(PRODUCT_SET, { input: buildProductSetInput(p, locId) });
       const ue = data?.productSet?.userErrors || [];
       if (ue.length) { failed++; errors.push(`${p.title}: ${ue.map((e: any) => e.message).join('; ')}`); }
-      else created++;
+      else {
+        created++;
+        // Publicar SOLO en Point of Sale (no en la tienda online).
+        const productId = data?.productSet?.product?.id;
+        if (productId && posId) {
+          try {
+            await shopifyGraphQL<any>(PUBLISH, { id: productId, input: [{ publicationId: posId }] });
+          } catch { /* si falla la publicación, el producto igual quedó creado */ }
+        }
+      }
     } catch (e: any) {
       failed++;
       errors.push(`${p.title}: ${e?.message || 'error'}`);
