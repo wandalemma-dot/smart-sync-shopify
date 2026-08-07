@@ -213,6 +213,29 @@ const LIVE_PRODUCTS_QUERY = `
   }
 `;
 
+// Para Bloque no hay vendor fijo: buscamos las variantes por SKU (los códigos que
+// salen de los PDFs del proveedor).
+const LIVE_VARIANTS_BY_SKU_QUERY = `
+  query($q: String!, $loc: ID!) {
+    productVariants(first: 100, query: $q) {
+      edges {
+        node {
+          title
+          sku
+          price
+          inventoryItem {
+            id
+            inventoryLevel(locationId: $loc) {
+              quantities(names: ["available"]) { name quantity }
+            }
+          }
+          product { handle title tags }
+        }
+      }
+    }
+  }
+`;
+
 async function fetchLocationIdByName(name: string): Promise<string | null> {
   const data = await shopifyGraphQL<any>(LIVE_LOCATIONS_QUERY);
   const edges: any[] = data?.locations?.edges || [];
@@ -518,6 +541,46 @@ export async function processFiles(
       reader.onerror = () => reject(new Error('Error al leer el archivo CSV'));
       reader.readAsArrayBuffer(shopifyExportFile);
     });
+  } else if (config.brand === 'bloque') {
+    // Bloque: sin vendor fijo. Buscamos por los SKU que salieron de los PDFs.
+    const skus = Object.keys(excelMap);
+    if (skus.length) {
+      const locId = await fetchLocationIdByName(STOCK_LOCATION.bloque);
+      if (!locId) throw new Error(`No encontré la sucursal "${STOCK_LOCATION.bloque}" en Shopify.`);
+      const prodMap: Record<string, { handle: string; title: string; tags: string; variants: { edges: { node: any }[] } }> = {};
+      const CHUNK = 20;
+      for (let i = 0; i < skus.length; i += CHUNK) {
+        const chunk = skus.slice(i, i + CHUNK);
+        const q = chunk.map((s) => `sku:${s.toUpperCase()}`).join(' OR ');
+        const data: any = await shopifyGraphQL<any>(LIVE_VARIANTS_BY_SKU_QUERY, { q, loc: locId });
+        for (const edge of (data?.productVariants?.edges || [])) {
+          const node = edge.node;
+          const p = node.product;
+          if (!p) continue;
+          const handle = String(p.handle || '');
+          if (!prodMap[handle]) {
+            prodMap[handle] = {
+              handle,
+              title: String(p.title || ''),
+              tags: Array.isArray(p.tags) ? p.tags.join(', ') : String(p.tags || ''),
+              variants: { edges: [] },
+            };
+          }
+          const lvl = node.inventoryItem?.inventoryLevel;
+          const qEntry = (lvl?.quantities || []).find((x: any) => x.name === 'available');
+          prodMap[handle].variants.edges.push({
+            node: {
+              id: String(node.inventoryItem?.id || ''),
+              title: String(node.title || ''),
+              sku: String(node.sku || ''),
+              price: String(node.price || '0'),
+              inventoryQuantity: qEntry ? Number(qEntry.quantity) : 0,
+            },
+          });
+        }
+      }
+      Object.values(prodMap).forEach((p) => shopifyProducts.push(p as any));
+    }
   } else {
     // Sin CSV: traemos los productos directo de Shopify (en vivo).
     const vendorQuery = VENDOR_QUERY[config.brand];

@@ -9,7 +9,6 @@ import type { StockPlan } from './utils/writeStock';
 export default function App() {
   const [providerFile, setProviderFile] = useState<File | null>(null);
   const [remitoFile, setRemitoFile] = useState<File | null>(null); // Solo para Bloque
-  const [shopifyFile, setShopifyFile] = useState<File | null>(null); // CSV exportado de Shopify
 
   const [sheets, setSheets] = useState<string[]>([]);
 
@@ -117,7 +116,6 @@ export default function App() {
   // Inputs de archivo ocultos: permiten seleccionar con un clic además de arrastrar.
   const providerInputRef = useRef<HTMLInputElement>(null);
   const remitoInputRef = useRef<HTMLInputElement>(null);
-  const shopifyInputRef = useRef<HTMLInputElement>(null);
 
   const handleAnalyzeRestock = async () => {
     setRestockLoading(true);
@@ -170,15 +168,6 @@ export default function App() {
     setRemitoFile(file);
   };
 
-  const processShopifyFile = (file: File) => {
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith('.csv')) {
-      alert("⚠️ Error: Subí el CSV exportado de Shopify (products_export.csv).");
-      return;
-    }
-    setShopifyFile(file);
-  };
-
   const handleProviderDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
@@ -189,12 +178,6 @@ export default function App() {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
     if (file) processRemitoFile(file);
-  };
-
-  const handleShopifyDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (file) processShopifyFile(file);
   };
 
   const preventDefault = (e: React.DragEvent) => e.preventDefault();
@@ -215,7 +198,7 @@ export default function App() {
     setPreviewReady(false);
 
     try {
-      const res = await processFiles(providerFile, remitoFile, shopifyFile, cfg);
+      const res = await processFiles(providerFile, remitoFile, null, cfg);
       setResult(res);
       setPreviewReady(true);
     } catch (err: any) {
@@ -400,32 +383,9 @@ export default function App() {
               </>
             )}
 
-            {config.brand === 'bloque' ? (
-              <>
-                <input
-                  ref={shopifyInputRef}
-                  type="file"
-                  accept=".csv"
-                  style={{ display: 'none' }}
-                  onChange={e => { const f = e.target.files?.[0]; if (f) processShopifyFile(f); e.target.value = ''; }}
-                />
-                <div
-                  className={`dropzone ${shopifyFile ? 'has-file' : ''}`}
-                  onDrop={handleShopifyDrop} onDragOver={preventDefault}
-                  onClick={() => shopifyInputRef.current?.click()}
-                  style={{ marginTop: '0.8rem', borderColor: shopifyFile ? '#10b981' : '#6366f1', cursor: 'pointer' }}
-                >
-                  <h3 style={{ color: shopifyFile ? '#10b981' : '#a5b4fc' }}>
-                    {shopifyFile ? '✅ Shopify CSV Listo' : '🛒 Arrastrá o hacé clic: CSV de Shopify (products_export)'}
-                  </h3>
-                  <p>{shopifyFile?.name || 'Necesario para detectar si los productos ya existen'}</p>
-                </div>
-              </>
-            ) : (
-              <p style={{ marginTop: '0.8rem', fontSize: '0.85rem', opacity: 0.75, textAlign: 'center' }}>
-                🔗 La app trae los datos de Shopify sola. No necesitás subir el CSV.
-              </p>
-            )}
+            <p style={{ marginTop: '0.8rem', fontSize: '0.85rem', opacity: 0.75, textAlign: 'center' }}>
+              🔗 La app se conecta sola a Shopify. No necesitás subir ningún CSV.
+            </p>
           </div>
 
           <div className="glass-panel settings-panel">
