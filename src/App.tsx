@@ -497,7 +497,13 @@ export default function App() {
                   {stockPlan.notFound.length > 0 && <> · No ubicados: {stockPlan.notFound.length}</>}
                 </div>
                 {stockPlan.changes.length === 0 ? (
-                  <p style={{ padding: '0.8rem', background: 'rgba(16,185,129,0.1)', borderRadius: '6px' }}>✅ El stock ya coincide con el proveedor. Nada para escribir.</p>
+                  (stockPlan.unchanged === 0 && stockPlan.notFound.length === 0) ? (
+                    <p style={{ padding: '0.8rem', background: 'rgba(245,158,11,0.12)', border: '1px solid #f59e0b', borderRadius: '6px' }}>
+                      ⚠️ No encontré en Shopify ninguno de esos productos. Casi siempre es porque el SKU del proveedor no coincide con el de Shopify (o la sucursal). Revisá el SKU.
+                    </p>
+                  ) : (
+                    <p style={{ padding: '0.8rem', background: 'rgba(16,185,129,0.1)', borderRadius: '6px' }}>✅ El stock ya coincide con el proveedor. Nada para escribir.</p>
+                  )
                 ) : (
                   <>
                     <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px' }}>
