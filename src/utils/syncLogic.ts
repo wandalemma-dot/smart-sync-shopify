@@ -296,7 +296,43 @@ export async function processFiles(
   const alerts: AlertMessage[] = [];
   const excelMap: Record<string, { wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number }> = {};
 
-  if (config.brand === 'bloque') {
+  if (config.brand === 'bloque' && /\.xlsx?$/i.test(providerFile.name)) {
+    // Bloque en Excel (ej. la preventa de Protec).
+    // Columnas: A=SKU | PRODUCTO | (barcode) | COLOR | TALLE | COSTO | PUBLICO | CANTIDAD
+    const ab = await providerFile.arrayBuffer();
+    const wb = XLSX.read(ab, { type: 'array' });
+    const rows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1 }) as any[];
+    let h = -1;
+    for (let r = 0; r < rows.length; r++) {
+      const line = Array.from((rows[r] as any[]) || [], x => String(x || '').toLowerCase());
+      if (line.some(c => c.includes('producto')) && line.some(c => c.includes('talle'))) { h = r; break; }
+    }
+    if (h < 0) throw new Error('No encontré el encabezado (PRODUCTO / TALLE) en el Excel de Bloque.');
+    const hdr = Array.from((rows[h] as any[]) || [], x => String(x || '').toLowerCase());
+    const idx = (needle: string) => hdr.findIndex(c => c.includes(needle));
+    const cName = idx('producto');
+    const cColor = idx('color');
+    const cTalle = idx('talle');
+    const cCosto = idx('costo');
+    const cPublico = idx('publico');
+    const cCant = idx('cantidad');
+    for (let r = h + 1; r < rows.length; r++) {
+      const row = rows[r] as any[];
+      if (!row) continue;
+      const sku = String(row[0] || '').trim().toLowerCase();
+      if (!/[0-9a-z]/.test(sku)) continue; // saltea encabezados de sección (sin código)
+      const name = cName >= 0 ? String(row[cName] || '').trim() : '';
+      if (!name) continue;
+      const color = cColor >= 0 ? String(row[cColor] || '').trim() : '';
+      const talle = (cTalle >= 0 ? String(row[cTalle] || '').trim() : '') || 'unico';
+      const costo = cCosto >= 0 ? (parseFloat(row[cCosto]) || 0) : 0;
+      const publico = cPublico >= 0 ? (parseFloat(row[cPublico]) || 0) : 0;
+      const qty = cCant >= 0 ? (parseFloat(row[cCant]) || 0) : 0;
+      const title = (name + (color ? ` ${color}` : '')).trim();
+      if (!excelMap[sku]) excelMap[sku] = { wholesale: costo, publicPrice: publico, sizes: {}, foundInShopify: false, title, vendor: 'Bloque' };
+      excelMap[sku].sizes[talle] = (excelMap[sku].sizes[talle] || 0) + qty;
+    }
+  } else if (config.brand === 'bloque') {
     if (!remitoFile) throw new Error("Falta Remito de Bloque");
     const presupuestoText = await readPdfText(providerFile);
     const remitoText = await readPdfText(remitoFile);

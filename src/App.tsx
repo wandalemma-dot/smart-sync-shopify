@@ -137,8 +137,8 @@ export default function App() {
   // --- Lógica central de cada archivo, reutilizada por drag & drop y por clic ---
   const processProviderFile = async (file: File) => {
     if (!file) return;
-    if (config.brand === 'bloque' && !file.name.toLowerCase().endsWith('.pdf')) {
-      alert("⚠️ Error: Para Bloque, por favor subí el PRESUPUESTO en formato PDF.");
+    if (config.brand === 'bloque' && !/\.(pdf|xlsx|xls)$/i.test(file.name)) {
+      alert("⚠️ Error: Para Bloque subí el PRESUPUESTO en PDF, o un Excel (.xlsx).");
       return;
     }
     if (config.brand !== 'bloque' && !file.name.toLowerCase().endsWith('.xlsx') && !file.name.toLowerCase().endsWith('.xls')) {
@@ -187,8 +187,9 @@ export default function App() {
     // La cajita de órdenes puede pedir analizar una marca distinta a la elegida.
     const cfg: SyncConfig = overrideBrand ? { ...config, brand: overrideBrand } : config;
     if (overrideBrand && overrideBrand !== config.brand) setConfig(cfg);
-    if (cfg.brand === 'bloque' && !remitoFile) {
-      alert("⚠️ Error: Para Bloque necesitas subir también el PDF del Remito.");
+    const providerIsPdf = /\.pdf$/i.test(providerFile.name);
+    if (cfg.brand === 'bloque' && providerIsPdf && !remitoFile) {
+      alert("⚠️ Error: Para Bloque con PDF necesitás subir también el PDF del Remito. (Si subís un Excel, no hace falta.)");
       return;
     }
 
@@ -348,7 +349,7 @@ export default function App() {
             <input
               ref={providerInputRef}
               type="file"
-              accept={config.brand === 'bloque' ? '.pdf' : '.xlsx,.xls'}
+              accept={config.brand === 'bloque' ? '.pdf,.xlsx,.xls' : '.xlsx,.xls'}
               style={{ display: 'none' }}
               onChange={e => { const f = e.target.files?.[0]; if (f) processProviderFile(f); e.target.value = ''; }}
             />
@@ -358,11 +359,11 @@ export default function App() {
               onClick={() => providerInputRef.current?.click()}
               style={{ cursor: 'pointer' }}
             >
-              <h3>{providerFile ? '📄 Archivo Principal Listo' : (config.brand === 'bloque' ? '📥 Arrastrá o hacé clic: PRESUPUESTO (PDF)' : '📥 Arrastrá o hacé clic: Excel del Proveedor')}</h3>
+              <h3>{providerFile ? '📄 Archivo Principal Listo' : (config.brand === 'bloque' ? '📥 Arrastrá o hacé clic: PRESUPUESTO (PDF) o Excel' : '📥 Arrastrá o hacé clic: Excel del Proveedor')}</h3>
               <p>{providerFile?.name}</p>
             </div>
 
-            {config.brand === 'bloque' && (
+            {config.brand === 'bloque' && (!providerFile || /\.pdf$/i.test(providerFile.name)) && (
               <>
                 <input
                   ref={remitoInputRef}
@@ -424,7 +425,7 @@ export default function App() {
             <button
               className="btn-primary"
               onClick={() => handleAnalyze()}
-              disabled={!providerFile || (config.brand === 'bloque' && !remitoFile) || loading}
+              disabled={!providerFile || (config.brand === 'bloque' && !!providerFile && /\.pdf$/i.test(providerFile.name) && !remitoFile) || loading}
             >
               {loading ? <span className="loader"></span> : '🔍 Analizar y Preparar Resumen'}
             </button>
