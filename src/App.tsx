@@ -414,9 +414,9 @@ export default function App() {
               style={{ marginTop: '0.8rem', borderColor: shopifyFile ? '#10b981' : '#6366f1', cursor: 'pointer' }}
             >
               <h3 style={{ color: shopifyFile ? '#10b981' : '#a5b4fc' }}>
-                {shopifyFile ? '✅ Shopify CSV Listo' : '🛒 Arrastrá o hacé clic: CSV de Shopify (products_export)'}
+                {shopifyFile ? '✅ Shopify CSV Listo' : '🛒 CSV de Shopify (opcional)'}
               </h3>
-              <p>{shopifyFile?.name || 'Necesario para detectar si los productos ya existen'}</p>
+              <p>{shopifyFile?.name || 'Opcional: si no lo subís, la app trae los datos de Shopify sola. (Para Bloque, subilo igual.)'}</p>
             </div>
           </div>
 

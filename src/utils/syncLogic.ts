@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { escapeCSV, triggerDownload, todayStamp } from './csv';
+import { shopifyGraphQL } from './shopify';
 
 export type SyncMode = 'all' | 'stock_only' | 'cost_only' | 'price_only';
 
@@ -169,6 +170,55 @@ export const STOCK_LOCATION: Record<SyncConfig['brand'], string> = {
   bloque: 'ID (Converse - Le Coq Sportif)',
   luxo: 'LUXO',
 };
+
+// ---- TRAER PRODUCTOS DE SHOPIFY EN VIVO (sin subir CSV) ----
+// Filtro por marca (vendor) para cada opción. Bloque matchea por SKU y su vendor
+// no es fijo, así que ese sigue usando el flujo de PDFs.
+const VENDOR_QUERY: Partial<Record<SyncConfig['brand'], string>> = {
+  converse: 'vendor:Converse',
+  lecoq: 'vendor:"Le Coq Sportif"',
+  orchard: 'vendor:Orchard',
+  luxo: 'vendor:Luxo',
+};
+
+const LIVE_LOCATIONS_QUERY = `query { locations(first: 50) { edges { node { id name } } } }`;
+
+const LIVE_PRODUCTS_QUERY = `
+  query($cursor: String, $q: String!, $loc: ID!) {
+    products(first: 50, after: $cursor, query: $q) {
+      pageInfo { hasNextPage endCursor }
+      edges {
+        node {
+          handle
+          title
+          tags
+          variants(first: 100) {
+            edges {
+              node {
+                title
+                sku
+                price
+                inventoryItem {
+                  id
+                  inventoryLevel(locationId: $loc) {
+                    quantities(names: ["available"]) { name quantity }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+async function fetchLocationIdByName(name: string): Promise<string | null> {
+  const data = await shopifyGraphQL<any>(LIVE_LOCATIONS_QUERY);
+  const edges: any[] = data?.locations?.edges || [];
+  const loc = edges.find((e) => String(e.node.name).trim() === name);
+  return loc ? loc.node.id : null;
+}
 
 // Extract Sheet names
 export async function extractSheetNames(file: File): Promise<string[]> {
@@ -468,6 +518,47 @@ export async function processFiles(
       reader.onerror = () => reject(new Error('Error al leer el archivo CSV'));
       reader.readAsArrayBuffer(shopifyExportFile);
     });
+  } else {
+    // Sin CSV: traemos los productos directo de Shopify (en vivo).
+    const vendorQuery = VENDOR_QUERY[config.brand];
+    if (vendorQuery) {
+      const locName = STOCK_LOCATION[config.brand];
+      const locId = await fetchLocationIdByName(locName);
+      if (!locId) throw new Error(`No encontré la sucursal "${locName}" en Shopify.`);
+      let cursor: string | null = null;
+      let hasNext = true;
+      let guard = 0;
+      while (hasNext && guard < 200) {
+        guard++;
+        const data: any = await shopifyGraphQL<any>(LIVE_PRODUCTS_QUERY, { cursor, q: vendorQuery, loc: locId });
+        const conn = data?.products;
+        for (const edge of (conn?.edges || [])) {
+          const n = edge.node;
+          const variants = (n.variants?.edges || []).map((ve: any) => {
+            const node = ve.node;
+            const lvl = node.inventoryItem?.inventoryLevel;
+            const qEntry = (lvl?.quantities || []).find((x: any) => x.name === 'available');
+            return {
+              node: {
+                id: String(node.inventoryItem?.id || ''),
+                title: String(node.title || ''),
+                sku: String(node.sku || ''),
+                price: String(node.price || '0'),
+                inventoryQuantity: qEntry ? Number(qEntry.quantity) : 0,
+              },
+            };
+          });
+          shopifyProducts.push({
+            handle: String(n.handle || ''),
+            title: String(n.title || ''),
+            tags: Array.isArray(n.tags) ? n.tags.join(', ') : String(n.tags || ''),
+            variants: { edges: variants },
+          });
+        }
+        hasNext = !!conn?.pageInfo?.hasNextPage;
+        cursor = conn?.pageInfo?.endCursor || null;
+      }
+    }
   }
 
   const updatesToApply: UpdateAction[] = [];
