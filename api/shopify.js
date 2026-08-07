@@ -9,7 +9,7 @@
 //    ALLOWED_MUTATIONS y nada más.
 
 const ALLOWED_MUTATIONS = [
-  // 'inventorySetQuantities',  // <- se habilitará cuando hagamos la escritura de stock
+  'inventorySetQuantities', // escribir stock (cantidades). Es la ÚNICA escritura permitida.
 ];
 
 function isAllowed(query) {

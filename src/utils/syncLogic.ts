@@ -161,6 +161,15 @@ export function talleMatches(provSize: string, shopTalle: string): boolean {
   return norm(provSize) === norm(shopTalle);
 }
 
+// Sucursal de Shopify donde se carga/escribe el stock, según la marca.
+export const STOCK_LOCATION: Record<SyncConfig['brand'], string> = {
+  converse: 'ID (Converse - Le Coq Sportif)',
+  lecoq: 'ID (Converse - Le Coq Sportif)',
+  orchard: 'ORCHARD',
+  bloque: 'ID (Converse - Le Coq Sportif)',
+  luxo: 'LUXO',
+};
+
 // Extract Sheet names
 export async function extractSheetNames(file: File): Promise<string[]> {
   const arrayBuffer = await file.arrayBuffer();

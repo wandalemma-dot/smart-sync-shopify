@@ -3,6 +3,8 @@ import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, 
 import type { SyncConfig, SyncResult } from './utils/syncLogic';
 import { analyzeRestock, downloadRestockCSV } from './utils/restockLogic';
 import type { RestockResult } from './utils/restockLogic';
+import { planStockWrite, executeStockWrite } from './utils/writeStock';
+import type { StockPlan } from './utils/writeStock';
 
 export default function App() {
   const [providerFile, setProviderFile] = useState<File | null>(null);
@@ -23,6 +25,41 @@ export default function App() {
 
   // Resumen antes de confirmar
   const [previewReady, setPreviewReady] = useState(false);
+
+  // ---- ESCRITURA DE STOCK EN SHOPIFY (simular -> confirmar -> escribir) ----
+  const [stockPlan, setStockPlan] = useState<StockPlan | null>(null);
+  const [stockPlanning, setStockPlanning] = useState(false);
+  const [stockWriting, setStockWriting] = useState(false);
+  const [writeConfirm, setWriteConfirm] = useState(false);
+  const [writeDone, setWriteDone] = useState<string | null>(null);
+
+  const handleSimulateStock = async () => {
+    if (!result) return;
+    setStockPlanning(true); setStockPlan(null); setWriteDone(null); setWriteConfirm(false);
+    try {
+      const plan = await planStockWrite(result, config);
+      setStockPlan(plan);
+      if (!plan.locationFound) alert(`No encontré la sucursal "${plan.locationName}" en Shopify. Revisá el nombre exacto.`);
+    } catch (e: any) {
+      alert('Error simulando: ' + e.message);
+    } finally {
+      setStockPlanning(false);
+    }
+  };
+
+  const handleWriteStock = async () => {
+    if (!stockPlan || stockPlan.changes.length === 0) return;
+    setStockWriting(true); setWriteDone(null);
+    try {
+      const res = await executeStockWrite(stockPlan);
+      setWriteDone(`Escritos ${res.written} · fallidos ${res.failed}` + (res.errors.length ? ` · ${res.errors.slice(0, 2).join('; ')}` : ''));
+      setStockPlan(null); setWriteConfirm(false);
+    } catch (e: any) {
+      alert('Error escribiendo: ' + e.message);
+    } finally {
+      setStockWriting(false);
+    }
+  };
 
   // ---- ANÁLISIS PARA PEDIDO (stock en vivo de la sucursal iD) ----
   const [restockLoading, setRestockLoading] = useState(false);
@@ -397,6 +434,67 @@ export default function App() {
               </div>
             </div>
           )}
+
+          {/* ====== ESCRIBIR STOCK DIRECTO EN SHOPIFY ====== */}
+          <div style={{ marginTop: '2rem', padding: '1rem', border: '1px solid #10b981', borderRadius: '8px', background: 'rgba(16,185,129,0.06)' }}>
+            <h3 style={{ color: '#10b981', marginTop: 0 }}>✍️ Escribir stock directo en Shopify</h3>
+            <p style={{ fontSize: '0.85rem', opacity: 0.85, marginTop: 0 }}>
+              Primero simulá: te muestro exactamente qué cambiaría, sin tocar nada. Recién si tildás la confirmación, se escribe.
+            </p>
+            <button className="btn-primary" style={{ background: '#3b82f6' }} onClick={handleSimulateStock} disabled={stockPlanning || stockWriting}>
+              {stockPlanning ? <span className="loader"></span> : '🧪 Simular (ver qué cambiaría)'}
+            </button>
+
+            {stockPlan && stockPlan.locationFound && (
+              <div style={{ marginTop: '1rem' }}>
+                <div style={{ fontSize: '0.9rem', marginBottom: '0.6rem' }}>
+                  📍 Sucursal: <strong>{stockPlan.locationName}</strong> · Cambios: <strong style={{ color: '#f59e0b' }}>{stockPlan.changes.length}</strong> · Sin cambios: {stockPlan.unchanged}
+                  {stockPlan.notFound.length > 0 && <> · No ubicados: {stockPlan.notFound.length}</>}
+                </div>
+                {stockPlan.changes.length === 0 ? (
+                  <p style={{ padding: '0.8rem', background: 'rgba(16,185,129,0.1)', borderRadius: '6px' }}>✅ El stock ya coincide con el proveedor. Nada para escribir.</p>
+                ) : (
+                  <>
+                    <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px' }}>
+                      <table style={{ width: '100%', fontSize: '0.82rem', borderCollapse: 'collapse' }}>
+                        <thead>
+                          <tr style={{ position: 'sticky', top: 0, background: '#1f2937' }}>
+                            <th style={{ textAlign: 'left', padding: '6px 10px' }}>Producto</th>
+                            <th style={{ padding: '6px' }}>Talle</th>
+                            <th style={{ padding: '6px' }}>Actual</th>
+                            <th style={{ padding: '6px' }}>Nuevo</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {stockPlan.changes.map((c, i) => (
+                            <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                              <td style={{ padding: '6px 10px' }}>{c.title}</td>
+                              <td style={{ padding: '6px', textAlign: 'center' }}>{c.talle}</td>
+                              <td style={{ padding: '6px', textAlign: 'center', opacity: 0.7 }}>{c.current}</td>
+                              <td style={{ padding: '6px', textAlign: 'center', fontWeight: 'bold', color: '#10b981' }}>{c.desired}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <label style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '0.8rem', fontSize: '0.9rem' }}>
+                      <input type="checkbox" checked={writeConfirm} onChange={e => setWriteConfirm(e.target.checked)} />
+                      Entiendo que esto va a <strong>&nbsp;modificar el stock real&nbsp;</strong> en Shopify.
+                    </label>
+                    <button
+                      className="btn-primary"
+                      style={{ background: writeConfirm ? '#dc2626' : '#6b7280', marginTop: '0.6rem' }}
+                      onClick={handleWriteStock}
+                      disabled={!writeConfirm || stockWriting}
+                    >
+                      {stockWriting ? <span className="loader"></span> : `✍️ Escribir ${stockPlan.changes.length} cambios en Shopify`}
+                    </button>
+                  </>
+                )}
+              </div>
+            )}
+            {writeDone && <p style={{ marginTop: '0.8rem', color: '#10b981', fontWeight: 'bold' }}>✅ {writeDone}</p>}
+          </div>
 
           {result?.missingProducts && result.missingProducts.length > 0 && (
             <div className="missing-products-section" style={{ marginTop: '2rem', padding: '1rem', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid #f59e0b', borderRadius: '8px' }}>
