@@ -9,7 +9,6 @@ import { createProducts } from './utils/createProducts';
 
 export default function App() {
   const [providerFile, setProviderFile] = useState<File | null>(null);
-  const [remitoFile, setRemitoFile] = useState<File | null>(null); // Solo para Bloque
 
   const [sheets, setSheets] = useState<string[]>([]);
 
@@ -134,7 +133,6 @@ export default function App() {
 
   // Inputs de archivo ocultos: permiten seleccionar con un clic además de arrastrar.
   const providerInputRef = useRef<HTMLInputElement>(null);
-  const remitoInputRef = useRef<HTMLInputElement>(null);
 
   const handleAnalyzeRestock = async () => {
     setRestockLoading(true);
@@ -178,25 +176,10 @@ export default function App() {
     }
   };
 
-  const processRemitoFile = (file: File) => {
-    if (!file) return;
-    if (!file.name.toLowerCase().endsWith('.pdf')) {
-      alert("⚠️ Error: Por favor, subí el REMITO en formato PDF.");
-      return;
-    }
-    setRemitoFile(file);
-  };
-
   const handleProviderDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     const file = e.dataTransfer.files[0];
     if (file) processProviderFile(file);
-  };
-
-  const handleRemitoDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (file) processRemitoFile(file);
   };
 
   const preventDefault = (e: React.DragEvent) => e.preventDefault();
@@ -206,11 +189,6 @@ export default function App() {
     // La cajita de órdenes puede pedir analizar una marca distinta a la elegida.
     const cfg: SyncConfig = overrideBrand ? { ...config, brand: overrideBrand } : config;
     if (overrideBrand && overrideBrand !== config.brand) setConfig(cfg);
-    const providerIsPdf = /\.pdf$/i.test(providerFile.name);
-    if (cfg.brand === 'bloque' && providerIsPdf && !remitoFile) {
-      alert("⚠️ Error: Para Bloque con PDF necesitás subir también el PDF del Remito. (Si subís un Excel, no hace falta.)");
-      return;
-    }
 
     setLoading(true);
     setLoadingText('Analizando archivos y conectando con Shopify...');
@@ -218,7 +196,7 @@ export default function App() {
     setPreviewReady(false);
 
     try {
-      const res = await processFiles(providerFile, remitoFile, null, cfg);
+      const res = await processFiles(providerFile, null, null, cfg);
       setResult(res);
       setPreviewReady(true);
     } catch (err: any) {
@@ -382,27 +360,6 @@ export default function App() {
               <p>{providerFile?.name}</p>
             </div>
 
-            {config.brand === 'bloque' && (!providerFile || /\.pdf$/i.test(providerFile.name)) && (
-              <>
-                <input
-                  ref={remitoInputRef}
-                  type="file"
-                  accept=".pdf"
-                  style={{ display: 'none' }}
-                  onChange={e => { const f = e.target.files?.[0]; if (f) processRemitoFile(f); e.target.value = ''; }}
-                />
-                <div
-                  className={`dropzone ${remitoFile ? 'has-file' : ''}`}
-                  onDrop={handleRemitoDrop} onDragOver={preventDefault}
-                  onClick={() => remitoInputRef.current?.click()}
-                  style={{ cursor: 'pointer' }}
-                >
-                  <h3>{remitoFile ? '📄 Remito Listo' : '📥 Arrastrá o hacé clic: REMITO (PDF)'}</h3>
-                  <p>{remitoFile?.name}</p>
-                </div>
-              </>
-            )}
-
             <p style={{ marginTop: '0.8rem', fontSize: '0.85rem', opacity: 0.75, textAlign: 'center' }}>
               🔗 La app se conecta sola a Shopify. No necesitás subir ningún CSV.
             </p>
@@ -418,7 +375,6 @@ export default function App() {
                 onChange={e => {
                   setConfig({...config, brand: e.target.value as any});
                   setProviderFile(null);
-                  setRemitoFile(null);
                 }}
               >
                 <option value="converse">Converse</option>
@@ -444,7 +400,7 @@ export default function App() {
             <button
               className="btn-primary"
               onClick={() => handleAnalyze()}
-              disabled={!providerFile || (config.brand === 'bloque' && !!providerFile && /\.pdf$/i.test(providerFile.name) && !remitoFile) || loading}
+              disabled={!providerFile || loading}
             >
               {loading ? <span className="loader"></span> : '🔍 Analizar y Preparar Resumen'}
             </button>

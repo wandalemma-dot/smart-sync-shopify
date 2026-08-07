@@ -317,7 +317,7 @@ async function readPdfText(file: File): Promise<string> {
 // Analiza los archivos (Excel o PDFs de Bloque) y genera los UpdateActions
 export async function processFiles(
   providerFile: File,
-  remitoFile: File | null,
+  _remitoFile: File | null,
   shopifyExportFile: File | null,
   config: SyncConfig
 ): Promise<SyncResult> {
@@ -384,47 +384,32 @@ export async function processFiles(
       excelMap[sku].sizes[talle] = (excelMap[sku].sizes[talle] || 0) + qty;
     }
   } else if (config.brand === 'bloque') {
-    if (!remitoFile) throw new Error("Falta Remito de Bloque");
-    const presupuestoText = await readPdfText(providerFile);
-    const remitoText = await readPdfText(remitoFile);
-    
-    // 1. Extraer precios del presupuesto
-    // Formato: SKAWI004 SKATE WORLD INDUSTRIES DETENTION MULTIC 6.5 1.00 122,500.00 122,500.00
-    const priceMap: Record<string, number> = {};
-    const linesP = presupuestoText.split('\n');
-    for (const line of linesP) {
+    // Presupuesto/factura de Bloque en PDF, formato "todo en una línea":
+    //   SKU  NOMBRE...  COLOR  TALLE  CANTIDAD  PRECIO  [%DES]  MONTO
+    // Ej: PADPRO002 PROTEC STREET JR. 3 PACK PAD SET BLACK BLACK YM 1.00 69,500.00
+    // Lee CUALQUIER marca (PADPRO, SKAWI, etc.), no solo las que empiezan con SK.
+    const text = await readPdfText(providerFile);
+    const titleCaseB = (s: string) => s.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+    for (const line of text.split('\n')) {
       const parts = line.trim().split(/\s+/);
-      if (parts.length > 3) {
-         const sku = parts[0].toLowerCase();
-         // El precio mayorista suele ser el antepenúltimo o último número largo
-         // Buscamos números con coma o punto
-         const priceStr = parts[parts.length - 2]?.replace(/,/g, '');
-         const price = parseFloat(priceStr);
-         if (sku.startsWith('sk') && !isNaN(price)) {
-            priceMap[sku] = price;
-         }
-      }
-    }
-
-    // 2. Extraer Título, Color y Talles del Remito
-    // Formato: 1 SKAWI004 SKATE WORLD INDUSTRIES DETENTION MULTICOLOR 6.5
-    const linesR = remitoText.split('\n');
-    for (const line of linesR) {
-      const parts = line.trim().split(/\s+/);
-      if (parts.length > 4 && !isNaN(parseInt(parts[0]))) {
-         const qty = parseFloat(parts[0]);
-         const sku = parts[1].toLowerCase();
-         const size = parts[parts.length - 1]; // Último elemento es talle
-         const color = parts[parts.length - 2]; // Anteúltimo es color
-         const title = parts.slice(2, parts.length - 2).join(' ') + ' ' + color; // Título largo con color
-         
-         const wholesale = priceMap[sku] || 0;
-         
-         if (!excelMap[sku]) {
-            excelMap[sku] = { wholesale, sizes: {}, foundInShopify: false, title, vendor: 'Bloque Distribution' };
-         }
-         excelMap[sku].sizes[size] = (excelMap[sku].sizes[size] || 0) + qty;
-      }
+      if (parts.length < 6) continue;
+      const skuRaw = parts[0];
+      // El SKU son letras seguidas de números (PADPRO002) o un código numérico largo.
+      if (!/^[A-Za-z]{2,}\d/.test(skuRaw) && !/^\d{4,}$/.test(skuRaw)) continue;
+      // Números al final: CANTIDAD, PRECIO, [%DES], MONTO.
+      const nums: string[] = [];
+      let j = parts.length;
+      while (j > 0 && /^[\d.,]+$/.test(parts[j - 1])) { nums.unshift(parts[j - 1]); j--; }
+      if (nums.length < 2 || j < 3) continue;
+      const talle = parts[j - 1];
+      const color = parts[j - 2];
+      const name = parts.slice(1, j - 2).join(' ');
+      const cantidad = parseFloat(nums[0].replace(/,/g, '')) || 0;
+      const precio = parseFloat(nums[1].replace(/,/g, '')) || 0;
+      const sku = skuRaw.toLowerCase();
+      const title = titleCaseB(colorsToEs(name || color));
+      if (!excelMap[sku]) excelMap[sku] = { wholesale: precio, sizes: {}, foundInShopify: false, title, vendor: 'Bloque' };
+      excelMap[sku].sizes[talle] = (excelMap[sku].sizes[talle] || 0) + cantidad;
     }
   } else if (config.brand === 'orchard') {
     // Orchard: la hoja tiene la columna A vacía, pero SheetJS la descarta (rango B1:G),
