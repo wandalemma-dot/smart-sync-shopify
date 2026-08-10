@@ -890,7 +890,10 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
   for (const prod of result.missingProducts) {
     let handle = prod.coditm.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     const vendor = prod.vendor || vendorDefaults[config.brand];
-    const price = calcSellPrice(config.brand, prod.wholesale, prod.publicPrice || 0);
+    // Si el archivo no trae ni costo ni precio público, el producto se crea en 0
+    // (la usuaria le pone el precio a mano). Si trae precio, se calcula normal.
+    const hasPriceInfo = prod.wholesale > 0 || (prod.publicPrice || 0) > 0;
+    const price = hasPriceInfo ? calcSellPrice(config.brand, prod.wholesale, prod.publicPrice || 0) : 0;
     const cost = prod.costFinal ?? calcCost(config.brand, prod.wholesale);
     let displayTitle = prod.title;
     let tagValue = prod.coditm;
