@@ -179,6 +179,18 @@ export function colorsToEs(text: string): string {
   return t;
 }
 
+// Palabra de categoría en español detectada por el texto del producto (Bloque/Protec).
+export function bloqueCategoryWord(text: string): string {
+  const t = String(text || '').toUpperCase();
+  if (t.includes('KNEE')) return 'Rodilleras';
+  if (t.includes('WRIST')) return 'Muñequeras';
+  if (t.includes('HIP') || t.includes('CULERA')) return 'Protectores de cadera';
+  if (t.includes('KEYCHAIN')) return 'Llavero';
+  if (t.includes('HELMET') || t.includes('LOW PRO') || t.includes('FULL CUT')) return 'Casco';
+  if (t.includes('PAD')) return 'Protecciones';
+  return '';
+}
+
 // Compara un talle del proveedor con el "Option1 Value" de Shopify.
 // Trata como equivalentes todas las variantes de "talle único".
 export function talleMatches(provSize: string, shopTalle: string): boolean {
@@ -407,7 +419,8 @@ export async function processFiles(
       const cantidad = parseFloat(nums[0].replace(/,/g, '')) || 0;
       const precio = parseFloat(nums[1].replace(/,/g, '')) || 0;
       const sku = skuRaw.toLowerCase();
-      const title = titleCaseB(colorsToEs(name || color));
+      const catWordB = bloqueCategoryWord(name);
+      const title = [catWordB, titleCaseB(colorsToEs(name || color))].filter(Boolean).join(' ').trim();
       if (!excelMap[sku]) excelMap[sku] = { wholesale: precio, sizes: {}, foundInShopify: false, title, vendor: 'Bloque' };
       excelMap[sku].sizes[talle] = (excelMap[sku].sizes[talle] || 0) + cantidad;
     }
