@@ -869,6 +869,19 @@ export function downloadUpdateCSV(result: SyncResult, config: SyncConfig) {
 export interface MatrixVariant { sku: string; optionName: string; optionValue: string; price: number; cost: number; qty: number; }
 export interface MatrixProduct { handle: string; title: string; vendor: string; productType: string; tags: string; weightGrams: number; hasSizes: boolean; variants: MatrixVariant[]; }
 
+// Adivina la categoría de un producto Converse por sus talles:
+//   0  = Accesorio (talle único / TU) -> sin variantes de talle
+//   -1 = Indumentaria (talles en letras S/M/L) -> se dejan como vienen
+//   1  = Zapatilla (talles numéricos) -> aplica tabla de talle (default Tabla 1)
+export function detectConverseKind(sizes: Record<string, number>): number {
+  const keys = Object.keys(sizes || {});
+  if (keys.length === 0) return 0;
+  const esTU = (s: string) => ['tu', 'unico', 'único', 'u', ''].includes(s.toLowerCase());
+  if (keys.every(esTU)) return 0;
+  if (keys.some(k => /^\d/.test(k))) return 1;
+  return -1;
+}
+
 export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tableSelections: Record<string, number> = {}): MatrixProduct[] {
   const out: MatrixProduct[] = [];
   const vendorDefaults: Record<SyncConfig['brand'], string> = { lecoq: 'Le Coq Sportif', converse: 'Converse', orchard: 'Orchard', bloque: 'Bloque', luxo: 'Luxo' };
@@ -899,32 +912,43 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
       handle = `${displayTitle}-${prod.coditm}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     }
 
-    // Converse: convertimos el talle US del proveedor al talle ARG según la tabla
-    // que la usuaria elige en pantalla (Tabla 1 a 5). Por defecto la Tabla 1.
-    const convTable = config.brand === 'converse'
-      ? (convTables[(tableSelections[prod.coditm] || 1) - 1] || convTable1)
-      : null;
-
     const variants: MatrixVariant[] = [];
     let hasSizes = false;
-    for (const [size, qty] of sortSizeEntries(Object.entries(prod.sizes))) {
-      const isUnico = ['unico', 'único', 'tu', ''].includes(String(size).toLowerCase());
-      // Talle que se muestra (ARG para Converse según la tabla).
-      const talleShown = convTable ? (convTable[String(size)] || String(size)) : String(size);
-      let variantSku = prod.coditm;
-      if (config.brand === 'converse' || config.brand === 'lecoq') variantSku = `${prod.coditm}-${talleShown}`;
-      else if (config.brand === 'orchard') variantSku = `ORC-${(prod.descCod || '').toUpperCase()}-${String(size).toUpperCase()}`;
-      else if (config.brand === 'luxo') variantSku = isUnico ? prod.coditm : `${prod.coditm}-${String(size).toUpperCase()}`;
-      const useTitleOption = config.brand === 'luxo' && isUnico;
-      if (!useTitleOption) hasSizes = true;
-      variants.push({
-        sku: variantSku,
-        optionName: useTitleOption ? 'Title' : 'Talle',
-        optionValue: useTitleOption ? 'Default Title' : talleShown,
-        price,
-        cost,
-        qty: config.brand === 'luxo' ? 0 : Number(qty) || 0,
-      });
+
+    if (config.brand === 'converse') {
+      // Categoría: la que eligió la usuaria, o la que adivinamos por los talles.
+      const kind = tableSelections[prod.coditm] ?? detectConverseKind(prod.sizes);
+      if (kind === 0) {
+        // Accesorio: una sola variante, sin talle. Sumamos las cantidades.
+        const totalQty = Object.values(prod.sizes).reduce((a, b) => a + (Number(b) || 0), 0);
+        variants.push({ sku: prod.coditm, optionName: 'Title', optionValue: 'Default Title', price, cost, qty: totalQty });
+      } else {
+        // Zapatilla (kind>=1): aplica la tabla US->ARG. Indumentaria (kind=-1): talle tal cual.
+        const table = kind >= 1 ? (convTables[kind - 1] || convTable1) : null;
+        for (const [size, qty] of sortSizeEntries(Object.entries(prod.sizes))) {
+          const talleShown = table ? (table[String(size)] || String(size)) : String(size);
+          variants.push({ sku: `${prod.coditm}-${talleShown}`, optionName: 'Talle', optionValue: talleShown, price, cost, qty: Number(qty) || 0 });
+          hasSizes = true;
+        }
+      }
+    } else {
+      for (const [size, qty] of sortSizeEntries(Object.entries(prod.sizes))) {
+        const isUnico = ['unico', 'único', 'tu', ''].includes(String(size).toLowerCase());
+        let variantSku = prod.coditm;
+        if (config.brand === 'lecoq') variantSku = `${prod.coditm}-${size}`;
+        else if (config.brand === 'orchard') variantSku = `ORC-${(prod.descCod || '').toUpperCase()}-${String(size).toUpperCase()}`;
+        else if (config.brand === 'luxo') variantSku = isUnico ? prod.coditm : `${prod.coditm}-${String(size).toUpperCase()}`;
+        const useTitleOption = config.brand === 'luxo' && isUnico;
+        if (!useTitleOption) hasSizes = true;
+        variants.push({
+          sku: variantSku,
+          optionName: useTitleOption ? 'Title' : 'Talle',
+          optionValue: useTitleOption ? 'Default Title' : String(size),
+          price,
+          cost,
+          qty: config.brand === 'luxo' ? 0 : Number(qty) || 0,
+        });
+      }
     }
     out.push({ handle, title: displayTitle, vendor, productType, tags: tagValue, weightGrams: calcWeightGrams(config.brand, prod.artType), hasSizes, variants });
   }

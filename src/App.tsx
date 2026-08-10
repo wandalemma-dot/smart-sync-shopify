@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, downloadInventoryCSV } from './utils/syncLogic';
+import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, downloadInventoryCSV, detectConverseKind } from './utils/syncLogic';
 import type { SyncConfig, SyncResult } from './utils/syncLogic';
 import { analyzeRestock, downloadRestockCSV } from './utils/restockLogic';
 import type { RestockResult } from './utils/restockLogic';
@@ -564,15 +564,17 @@ export default function App() {
                     </div>
                     {config.brand === 'converse' && (
                       <select
-                        value={tableSelections[p.coditm] || 1}
+                        value={tableSelections[p.coditm] ?? detectConverseKind(p.sizes)}
                         onChange={e => setTableSelections({...tableSelections, [p.coditm]: parseInt(e.target.value)})}
                         style={{ padding: '0.3rem', borderRadius: '4px', background: 'var(--bg-color)', color: 'white', border: '1px solid var(--glass-border)' }}
                       >
-                        <option value={1}>Tabla 1 (Empieza en ARG 34 = US 3)</option>
-                        <option value={2}>Tabla 2 (Empieza en ARG 35 = US 3)</option>
-                        <option value={3}>Tabla Mujer (Empieza en ARG 35 = US 5)</option>
-                        <option value={4}>Tabla Niño (Empieza en ARG 27 = US 10.5)</option>
-                        <option value={5}>Tabla Bebe (Empieza en ARG 20 = US 4)</option>
+                        <option value={0}>🎒 Accesorio (sin talle)</option>
+                        <option value={-1}>👕 Indumentaria (talle como viene)</option>
+                        <option value={1}>👟 Tabla 1 (Empieza en ARG 34 = US 3)</option>
+                        <option value={2}>👟 Tabla 2 (Empieza en ARG 35 = US 3)</option>
+                        <option value={3}>👟 Tabla Mujer (Empieza en ARG 35 = US 5)</option>
+                        <option value={4}>👟 Tabla Niño (Empieza en ARG 27 = US 10.5)</option>
+                        <option value={5}>👟 Tabla Bebe (Empieza en ARG 20 = US 4)</option>
                       </select>
                     )}
                   </div>
