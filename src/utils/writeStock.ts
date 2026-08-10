@@ -18,6 +18,7 @@ export interface StockChange {
   title: string;
   talle: string;
   sku: string;
+  code: string; // código del proveedor (Código Item del Excel)
   inventoryItemId: string;
   current: number;
   desired: number;
@@ -90,12 +91,13 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     return { locationName: locName, locationId: null, locationFound: false, changes: [], unchanged: 0, notFound: [] };
   }
 
-  // Productos que ya matchearon contra Shopify (tienen handle).
+  // Productos que ya matchearon contra Shopify (tienen handle). Guardamos el
+  // código del proveedor (la clave del excelMap) para mostrarlo en la tabla.
   const entries = Object.entries(result.excelMap)
-    .map(([, d]) => d)
-    .filter((d: any) => d.foundInShopify && d.shopifyHandle);
+    .filter(([, d]: [string, any]) => d.foundInShopify && d.shopifyHandle)
+    .map(([cod, d]) => ({ cod, d }));
 
-  const handles = [...new Set(entries.map((d: any) => d.shopifyHandle as string))];
+  const handles = [...new Set(entries.map((e) => e.d.shopifyHandle as string))];
 
   // Traemos las variantes en vivo (con inventoryItem id y stock actual) por lotes de handles.
   const liveByHandle: Record<string, any[]> = {};
@@ -116,11 +118,12 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
   let unchanged = 0;
   const notFound: string[] = [];
 
-  for (const d of entries as any[]) {
+  for (const { cod, d } of entries as { cod: string; d: any }[]) {
     const handle = d.shopifyHandle as string;
     const live = liveByHandle[handle] || [];
     // Como ya existe en Shopify, mostramos el título REAL de Shopify (no el del Excel).
     const shopTitle = titleByHandle[handle] || d.title;
+    const code = cod.toUpperCase(); // código del proveedor (Código Item del Excel)
     for (const [size, qtyRaw] of Object.entries(d.sizes || {})) {
       const desired = Number(qtyRaw);
       const v = live.find((n: any) => talleMatches(size, n.title));
@@ -137,6 +140,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
         title: shopTitle,
         talle: String(size),
         sku: String(v.sku || ''),
+        code,
         inventoryItemId: v.inventoryItem.id,
         current,
         desired,
@@ -145,59 +149,6 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
   }
 
   return { locationName: locName, locationId: locId, locationFound: true, changes, unchanged, notFound };
-}
-
-// ============================================================================
-// AGREGAR EL CÓDIGO DEL PROVEEDOR A LAS ETIQUETAS (Converse / Le Coq)
-// Toma el "Código Item (SKU)" del Excel y lo suma a los tags del producto en
-// Shopify, sin borrar las etiquetas que ya tiene.
-// ============================================================================
-const PRODUCTS_ID_BY_HANDLE = `query($q: String!) { products(first: 50, query: $q) { edges { node { id handle } } } }`;
-const TAGS_ADD = `mutation($id: ID!, $tags: [String!]!) { tagsAdd(id: $id, tags: $tags) { userErrors { field message } } }`;
-
-export interface TagResult { updated: number; failed: number; errors: string[]; }
-
-export async function addProviderTags(
-  result: SyncResult,
-  _config: SyncConfig,
-  onProgress?: (done: number, total: number) => void,
-): Promise<TagResult> {
-  // { handle, código } para los productos que ya existen en Shopify.
-  const items: { handle: string; code: string }[] = [];
-  for (const [cod, d] of Object.entries(result.excelMap)) {
-    const dd = d as any;
-    if (dd.foundInShopify && dd.shopifyHandle) items.push({ handle: dd.shopifyHandle, code: cod.toUpperCase() });
-  }
-  const handles = [...new Set(items.map((i) => i.handle))];
-
-  const idByHandle: Record<string, string> = {};
-  const CHUNK = 20;
-  for (let i = 0; i < handles.length; i += CHUNK) {
-    const chunk = handles.slice(i, i + CHUNK);
-    const q = chunk.map((h) => `handle:${JSON.stringify(h)}`).join(' OR ');
-    const data = await shopifyGraphQL<any>(PRODUCTS_ID_BY_HANDLE, { q });
-    for (const e of (data?.products?.edges || [])) idByHandle[e.node.handle] = e.node.id;
-  }
-
-  let updated = 0;
-  let failed = 0;
-  const errors: string[] = [];
-  for (let i = 0; i < items.length; i++) {
-    const it = items[i];
-    const id = idByHandle[it.handle];
-    if (!id) { failed++; continue; }
-    try {
-      const data = await shopifyGraphQL<any>(TAGS_ADD, { id, tags: [it.code] });
-      const ue = data?.tagsAdd?.userErrors || [];
-      if (ue.length) { failed++; errors.push(ue.map((e: any) => e.message).join('; ')); }
-      else updated++;
-    } catch (e: any) {
-      failed++;
-      errors.push(e?.message || 'error');
-    }
-    onProgress?.(i + 1, items.length);
-  }
-  return { updated, failed, errors };
 }
 
 // PASO 2 — Escribe de verdad, en lotes. Solo cantidades.

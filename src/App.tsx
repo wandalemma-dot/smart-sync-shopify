@@ -3,7 +3,7 @@ import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, 
 import type { SyncConfig, SyncResult } from './utils/syncLogic';
 import { analyzeRestock, downloadRestockCSV } from './utils/restockLogic';
 import type { RestockResult } from './utils/restockLogic';
-import { planStockWrite, executeStockWrite, addProviderTags } from './utils/writeStock';
+import { planStockWrite, executeStockWrite } from './utils/writeStock';
 import type { StockPlan } from './utils/writeStock';
 import { createProducts } from './utils/createProducts';
 
@@ -31,21 +31,6 @@ export default function App() {
   const [stockWriting, setStockWriting] = useState(false);
   const [writeConfirm, setWriteConfirm] = useState(false);
   const [writeDone, setWriteDone] = useState<string | null>(null);
-  const [tagging, setTagging] = useState(false);
-  const [tagDone, setTagDone] = useState<string | null>(null);
-
-  const handleAddTags = async () => {
-    if (!result) return;
-    setTagging(true); setTagDone(null);
-    try {
-      const res = await addProviderTags(result, config);
-      setTagDone(`Etiquetados ${res.updated} · fallidos ${res.failed}` + (res.errors.length ? ` · ${res.errors.slice(0, 2).join(' | ')}` : ''));
-    } catch (e: any) {
-      alert('Error agregando etiquetas: ' + e.message);
-    } finally {
-      setTagging(false);
-    }
-  };
 
   // ---- CREAR PRODUCTOS NUEVOS EN SHOPIFY (borrador) ----
   const [creating, setCreating] = useState(false);
@@ -508,18 +493,6 @@ export default function App() {
               {stockPlanning ? <span className="loader"></span> : '🧪 Simular (ver qué cambiaría)'}
             </button>
 
-            {(config.brand === 'converse' || config.brand === 'lecoq') && (
-              <div style={{ marginTop: '0.8rem', paddingTop: '0.8rem', borderTop: '1px solid rgba(255,255,255,0.1)' }}>
-                <button className="btn-primary" style={{ background: '#0ea5e9' }} onClick={handleAddTags} disabled={tagging}>
-                  {tagging ? <span className="loader"></span> : '🏷️ Agregar código del proveedor a las etiquetas'}
-                </button>
-                <p style={{ fontSize: '0.8rem', opacity: 0.7, margin: '6px 0 0' }}>
-                  Suma el Código Item (SKU) del Excel a las etiquetas de cada producto que ya existe, sin borrar las que tiene.
-                </p>
-                {tagDone && <p style={{ marginTop: '0.5rem', color: '#0ea5e9', fontWeight: 'bold' }}>✅ {tagDone}</p>}
-              </div>
-            )}
-
             {stockPlan && stockPlan.locationFound && (
               <div style={{ marginTop: '1rem' }}>
                 <div style={{ fontSize: '0.9rem', marginBottom: '0.6rem' }}>
@@ -541,6 +514,7 @@ export default function App() {
                         <thead>
                           <tr style={{ position: 'sticky', top: 0, background: '#1f2937' }}>
                             <th style={{ textAlign: 'left', padding: '6px 10px' }}>Producto</th>
+                            <th style={{ textAlign: 'left', padding: '6px' }}>Código</th>
                             <th style={{ padding: '6px' }}>Talle</th>
                             <th style={{ padding: '6px' }}>Actual</th>
                             <th style={{ padding: '6px' }}>Nuevo</th>
@@ -550,6 +524,7 @@ export default function App() {
                           {stockPlan.changes.map((c, i) => (
                             <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                               <td style={{ padding: '6px 10px' }}>{c.title}</td>
+                              <td style={{ padding: '6px', fontFamily: 'monospace', opacity: 0.85 }}>{c.code}</td>
                               <td style={{ padding: '6px', textAlign: 'center' }}>{c.talle}</td>
                               <td style={{ padding: '6px', textAlign: 'center', opacity: 0.7 }}>{c.current}</td>
                               <td style={{ padding: '6px', textAlign: 'center', fontWeight: 'bold', color: '#10b981' }}>{c.desired}</td>

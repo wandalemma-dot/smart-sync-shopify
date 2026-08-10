@@ -12,7 +12,6 @@ const ALLOWED_MUTATIONS = [
   'inventorySetQuantities', // escribir stock (cantidades)
   'productSet',             // crear productos nuevos
   'publishablePublish',     // publicar productos en un canal (Point of Sale)
-  'tagsAdd',                // agregar etiquetas a un producto (sin borrar las que tiene)
 ];
 
 function isAllowed(query) {
