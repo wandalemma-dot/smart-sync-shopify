@@ -66,7 +66,11 @@ function buildProductSetInput(p: MatrixProduct, locationId: string | null): any 
         measurement: { weight: { value: p.weightGrams, unit: 'GRAMS' } },
       },
     };
-    if (p.hasSizes) variant.optionValues = [{ optionName: 'Talle', name: v.optionValue }];
+    // La variante SIEMPRE necesita optionValues (aunque sea producto sin talle:
+    // ahí usamos la opción por defecto "Title / Default Title").
+    variant.optionValues = p.hasSizes
+      ? [{ optionName: 'Talle', name: v.optionValue }]
+      : [{ optionName: 'Title', name: 'Default Title' }];
     // Cargamos el stock (de la columna CANTIDAD del archivo) en la sucursal de la
     // marca. Lo hacemos siempre, aunque sea 0, para activar el inventario ahí.
     if (locationId) {
@@ -80,11 +84,13 @@ function buildProductSetInput(p: MatrixProduct, locationId: string | null): any 
     vendor: p.vendor,
     status: 'ACTIVE', // se crean activos
     variants,
+    productOptions: p.hasSizes
+      ? [{ name: 'Talle', values: [...new Set(p.variants.map((v) => v.optionValue))].map((name) => ({ name })) }]
+      : [{ name: 'Title', values: [{ name: 'Default Title' }] }],
   };
   if (p.productType) input.productType = p.productType;
   if (p.tags) input.tags = [p.tags];
   if (p.handle) input.handle = p.handle;
-  if (p.hasSizes) input.productOptions = [{ name: 'Talle', values: p.variants.map((v) => ({ name: v.optionValue })) }];
 
   return input;
 }
