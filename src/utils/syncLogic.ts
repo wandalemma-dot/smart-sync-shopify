@@ -180,6 +180,16 @@ export function colorsToEs(text: string): string {
   return t;
 }
 
+// Título en formato normal: Primera Letra De Cada Palabra, colores en español,
+// y sin basura al final (barras, guiones sueltos).
+export function niceTitle(text: string): string {
+  return colorsToEs(String(text || ''))
+    .toLowerCase()
+    .replace(/\b\w/g, c => c.toUpperCase())
+    .replace(/[\s/\-]+$/, '')
+    .trim();
+}
+
 // Palabra de categoría en español detectada por el texto del producto (Bloque/Protec).
 export function bloqueCategoryWord(text: string): string {
   const t = String(text || '').toUpperCase();
@@ -987,6 +997,14 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
         });
       }
     }
+    // Título lindo (Título Normal + colores en español) para TODAS las marcas.
+    // Converse lleva el prefijo del estilo de tu tienda ("Zapatillas Converse …").
+    if (config.brand === 'converse') {
+      displayTitle = (converseKind && converseKind >= 1 ? 'Zapatillas Converse ' : 'Converse ') + niceTitle(prod.title);
+    } else {
+      displayTitle = niceTitle(displayTitle);
+    }
+
     // Etiquetas: el código (o tag de la marca) + la etiqueta de la tabla de talle
     // para las zapatillas Converse, así la próxima sync la lee sola.
     const tags: string[] = [tagValue];
