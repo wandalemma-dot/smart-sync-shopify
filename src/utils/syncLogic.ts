@@ -812,10 +812,12 @@ export async function processFiles(
     }
   }
 
-  // Identificar faltantes
+  // Identificar faltantes: cualquier producto del proveedor que NO exista en
+  // Shopify. Antes se exigía precio > 0, pero los archivos de solo stock (Converse
+  // formato nuevo) vienen sin precio, y esos faltantes hay que crearlos igual.
   const missingProducts: MissingProduct[] = [];
   for (const [cod, data] of Object.entries(excelMap)) {
-    if (!data.foundInShopify && data.wholesale > 0) {
+    if (!data.foundInShopify && Object.keys(data.sizes).length > 0) {
       missingProducts.push({
         coditm: cod,
         title: data.title,
