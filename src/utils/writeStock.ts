@@ -99,6 +99,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
 
   // Traemos las variantes en vivo (con inventoryItem id y stock actual) por lotes de handles.
   const liveByHandle: Record<string, any[]> = {};
+  const titleByHandle: Record<string, string> = {}; // título REAL de Shopify
   const CHUNK = 20;
   for (let i = 0; i < handles.length; i += CHUNK) {
     const chunk = handles.slice(i, i + CHUNK);
@@ -107,6 +108,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     for (const edge of (data?.products?.edges || [])) {
       const p = edge.node;
       liveByHandle[p.handle] = (p.variants?.edges || []).map((e: any) => e.node);
+      titleByHandle[p.handle] = String(p.title || '');
     }
   }
 
@@ -117,11 +119,13 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
   for (const d of entries as any[]) {
     const handle = d.shopifyHandle as string;
     const live = liveByHandle[handle] || [];
+    // Como ya existe en Shopify, mostramos el título REAL de Shopify (no el del Excel).
+    const shopTitle = titleByHandle[handle] || d.title;
     for (const [size, qtyRaw] of Object.entries(d.sizes || {})) {
       const desired = Number(qtyRaw);
       const v = live.find((n: any) => talleMatches(size, n.title));
       if (!v || !v.inventoryItem?.id) {
-        notFound.push(`${d.title} · ${size}`);
+        notFound.push(`${shopTitle} · ${size}`);
         continue;
       }
       const lvl = v.inventoryItem.inventoryLevel;
@@ -130,7 +134,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
       if (current === desired) { unchanged++; continue; }
       changes.push({
         handle,
-        title: d.title,
+        title: shopTitle,
         talle: String(size),
         sku: String(v.sku || ''),
         inventoryItemId: v.inventoryItem.id,
