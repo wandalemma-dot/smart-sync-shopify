@@ -733,9 +733,18 @@ export async function processFiles(
            && (!aType || titleCanon.includes(aType))
            && titleCanon.includes(dCod);
       } else {
-         match = tags.includes(cod.toLowerCase());
+         // Converse / Le Coq: matchea por etiqueta (código en tags) O por el SKU
+         // de las variantes (que empieza con el código, ej "a15201c-055").
+         // Así funciona aunque al producto le falte la etiqueta.
+         const cl = cod.toLowerCase();
+         const inTags = tags.includes(cl);
+         const inSku = prod.variants.edges.some((v) => {
+           const s = String(v.node.sku || '').toLowerCase();
+           return s === cl || s.startsWith(cl + '-');
+         });
+         match = inTags || inSku;
       }
-      
+
       if (match) {
         provData.foundInShopify = true;
         provData.shopifyHandle = prod.handle;
