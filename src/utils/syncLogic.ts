@@ -869,9 +869,10 @@ export function downloadUpdateCSV(result: SyncResult, config: SyncConfig) {
 export interface MatrixVariant { sku: string; optionName: string; optionValue: string; price: number; cost: number; qty: number; }
 export interface MatrixProduct { handle: string; title: string; vendor: string; productType: string; tags: string; weightGrams: number; hasSizes: boolean; variants: MatrixVariant[]; }
 
-export function buildMatrixProducts(result: SyncResult, config: SyncConfig): MatrixProduct[] {
+export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tableSelections: Record<string, number> = {}): MatrixProduct[] {
   const out: MatrixProduct[] = [];
   const vendorDefaults: Record<SyncConfig['brand'], string> = { lecoq: 'Le Coq Sportif', converse: 'Converse', orchard: 'Orchard', bloque: 'Bloque', luxo: 'Luxo' };
+  const convTables = [convTable1, convTable2, convTable3, convTable4, convTable5];
 
   for (const prod of result.missingProducts) {
     let handle = prod.coditm.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -898,12 +899,20 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig): Mat
       handle = `${displayTitle}-${prod.coditm}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     }
 
+    // Converse: convertimos el talle US del proveedor al talle ARG según la tabla
+    // que la usuaria elige en pantalla (Tabla 1 a 5). Por defecto la Tabla 1.
+    const convTable = config.brand === 'converse'
+      ? (convTables[(tableSelections[prod.coditm] || 1) - 1] || convTable1)
+      : null;
+
     const variants: MatrixVariant[] = [];
     let hasSizes = false;
     for (const [size, qty] of sortSizeEntries(Object.entries(prod.sizes))) {
       const isUnico = ['unico', 'único', 'tu', ''].includes(String(size).toLowerCase());
+      // Talle que se muestra (ARG para Converse según la tabla).
+      const talleShown = convTable ? (convTable[String(size)] || String(size)) : String(size);
       let variantSku = prod.coditm;
-      if (config.brand === 'converse' || config.brand === 'lecoq') variantSku = `${prod.coditm}-${size}`;
+      if (config.brand === 'converse' || config.brand === 'lecoq') variantSku = `${prod.coditm}-${talleShown}`;
       else if (config.brand === 'orchard') variantSku = `ORC-${(prod.descCod || '').toUpperCase()}-${String(size).toUpperCase()}`;
       else if (config.brand === 'luxo') variantSku = isUnico ? prod.coditm : `${prod.coditm}-${String(size).toUpperCase()}`;
       const useTitleOption = config.brand === 'luxo' && isUnico;
@@ -911,7 +920,7 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig): Mat
       variants.push({
         sku: variantSku,
         optionName: useTitleOption ? 'Title' : 'Talle',
-        optionValue: useTitleOption ? 'Default Title' : String(size),
+        optionValue: useTitleOption ? 'Default Title' : talleShown,
         price,
         cost,
         qty: config.brand === 'luxo' ? 0 : Number(qty) || 0,

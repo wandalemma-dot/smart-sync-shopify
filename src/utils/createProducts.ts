@@ -93,10 +93,11 @@ function buildProductSetInput(p: MatrixProduct, locationId: string | null): any 
 export async function createProducts(
   result: SyncResult,
   config: SyncConfig,
+  tableSelections: Record<string, number> = {},
   limit?: number,
   onProgress?: (done: number, total: number) => void,
 ): Promise<CreateResult> {
-  let products = buildMatrixProducts(result, config);
+  let products = buildMatrixProducts(result, config, tableSelections);
   if (limit && limit > 0) products = products.slice(0, limit);
 
   const locId = await getLocationId(STOCK_LOCATION[config.brand]);

@@ -41,7 +41,7 @@ export default function App() {
     if (!result || result.missingProducts.length === 0) return;
     setCreating(true); setCreateDone(null);
     try {
-      const res = await createProducts(result, config, limit);
+      const res = await createProducts(result, config, tableSelections, limit);
       setCreateDone(`Creados ${res.created} · fallidos ${res.failed}` + (res.errors.length ? ` · ${res.errors.slice(0, 2).join(' | ')}` : ''));
     } catch (e: any) {
       alert('Error creando productos: ' + e.message);
