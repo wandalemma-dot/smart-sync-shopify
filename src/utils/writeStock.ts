@@ -147,6 +147,59 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
   return { locationName: locName, locationId: locId, locationFound: true, changes, unchanged, notFound };
 }
 
+// ============================================================================
+// AGREGAR EL CÓDIGO DEL PROVEEDOR A LAS ETIQUETAS (Converse / Le Coq)
+// Toma el "Código Item (SKU)" del Excel y lo suma a los tags del producto en
+// Shopify, sin borrar las etiquetas que ya tiene.
+// ============================================================================
+const PRODUCTS_ID_BY_HANDLE = `query($q: String!) { products(first: 50, query: $q) { edges { node { id handle } } } }`;
+const TAGS_ADD = `mutation($id: ID!, $tags: [String!]!) { tagsAdd(id: $id, tags: $tags) { userErrors { field message } } }`;
+
+export interface TagResult { updated: number; failed: number; errors: string[]; }
+
+export async function addProviderTags(
+  result: SyncResult,
+  _config: SyncConfig,
+  onProgress?: (done: number, total: number) => void,
+): Promise<TagResult> {
+  // { handle, código } para los productos que ya existen en Shopify.
+  const items: { handle: string; code: string }[] = [];
+  for (const [cod, d] of Object.entries(result.excelMap)) {
+    const dd = d as any;
+    if (dd.foundInShopify && dd.shopifyHandle) items.push({ handle: dd.shopifyHandle, code: cod.toUpperCase() });
+  }
+  const handles = [...new Set(items.map((i) => i.handle))];
+
+  const idByHandle: Record<string, string> = {};
+  const CHUNK = 20;
+  for (let i = 0; i < handles.length; i += CHUNK) {
+    const chunk = handles.slice(i, i + CHUNK);
+    const q = chunk.map((h) => `handle:${JSON.stringify(h)}`).join(' OR ');
+    const data = await shopifyGraphQL<any>(PRODUCTS_ID_BY_HANDLE, { q });
+    for (const e of (data?.products?.edges || [])) idByHandle[e.node.handle] = e.node.id;
+  }
+
+  let updated = 0;
+  let failed = 0;
+  const errors: string[] = [];
+  for (let i = 0; i < items.length; i++) {
+    const it = items[i];
+    const id = idByHandle[it.handle];
+    if (!id) { failed++; continue; }
+    try {
+      const data = await shopifyGraphQL<any>(TAGS_ADD, { id, tags: [it.code] });
+      const ue = data?.tagsAdd?.userErrors || [];
+      if (ue.length) { failed++; errors.push(ue.map((e: any) => e.message).join('; ')); }
+      else updated++;
+    } catch (e: any) {
+      failed++;
+      errors.push(e?.message || 'error');
+    }
+    onProgress?.(i + 1, items.length);
+  }
+  return { updated, failed, errors };
+}
+
 // PASO 2 — Escribe de verdad, en lotes. Solo cantidades.
 export async function executeStockWrite(
   plan: StockPlan,
