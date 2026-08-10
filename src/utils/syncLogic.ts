@@ -734,13 +734,14 @@ export async function processFiles(
            && titleCanon.includes(dCod);
       } else {
          // Converse / Le Coq: matchea por etiqueta (código en tags) O por el SKU
-         // de las variantes (que empieza con el código, ej "a15201c-055").
-         // Así funciona aunque al producto le falte la etiqueta.
+         // de las variantes que EMPIEZA con el código. Ignoramos espacios y guiones
+         // para que agarre cualquier formato: "A15206C-055", "A15206C 37.5", etc.
          const cl = cod.toLowerCase();
-         const inTags = tags.includes(cl);
+         const clNorm = cl.replace(/[^a-z0-9]/g, '');
+         const inTags = tags.replace(/[^a-z0-9,]/g, '').includes(clNorm);
          const inSku = prod.variants.edges.some((v) => {
-           const s = String(v.node.sku || '').toLowerCase();
-           return s === cl || s.startsWith(cl + '-');
+           const s = String(v.node.sku || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+           return !!clNorm && s.startsWith(clNorm);
          });
          match = inTags || inSku;
       }
