@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import { escapeCSV, triggerDownload, todayStamp } from './csv';
 import { shopifyGraphQL } from './shopify';
+import { CONVERSE_CODE_TABLE } from './converseCurvas';
 
 export type SyncMode = 'all' | 'stock_only' | 'cost_only' | 'price_only';
 
@@ -894,6 +895,14 @@ export function detectConverseKind(sizes: Record<string, number>): number {
   return -1;
 }
 
+// Elige la tabla del producto Converse: primero por el MAESTRO de curvas (código ->
+// tabla oficial), y si no está, adivina por los talles.
+export function autoConverseTable(coditm: string, sizes: Record<string, number>): number {
+  const t = CONVERSE_CODE_TABLE[String(coditm || '').toUpperCase()];
+  if (t) return t;
+  return detectConverseKind(sizes);
+}
+
 export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tableSelections: Record<string, number> = {}): MatrixProduct[] {
   const out: MatrixProduct[] = [];
   const vendorDefaults: Record<SyncConfig['brand'], string> = { lecoq: 'Le Coq Sportif', converse: 'Converse', orchard: 'Orchard', bloque: 'Bloque', luxo: 'Luxo' };
@@ -932,8 +941,9 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
     let hasSizes = false;
 
     if (config.brand === 'converse') {
-      // Categoría: la que eligió la usuaria, o la que adivinamos por los talles.
-      const kind = tableSelections[prod.coditm] ?? detectConverseKind(prod.sizes);
+      // Categoría: la que eligió la usuaria, o la del maestro de curvas (por código),
+      // o la que adivinamos por los talles.
+      const kind = tableSelections[prod.coditm] ?? autoConverseTable(prod.coditm, prod.sizes);
       if (kind === 0) {
         // Accesorio: una sola variante, sin talle. Sumamos las cantidades.
         const totalQty = Object.values(prod.sizes).reduce((a, b) => a + (Number(b) || 0), 0);

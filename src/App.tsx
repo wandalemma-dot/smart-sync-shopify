@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, downloadInventoryCSV, detectConverseKind } from './utils/syncLogic';
+import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, downloadInventoryCSV, autoConverseTable } from './utils/syncLogic';
 import type { SyncConfig, SyncResult } from './utils/syncLogic';
 import { analyzeRestock, downloadRestockCSV } from './utils/restockLogic';
 import type { RestockResult } from './utils/restockLogic';
@@ -564,7 +564,7 @@ export default function App() {
                     </div>
                     {config.brand === 'converse' && (
                       <select
-                        value={tableSelections[p.coditm] ?? detectConverseKind(p.sizes)}
+                        value={tableSelections[p.coditm] ?? autoConverseTable(p.coditm, p.sizes)}
                         onChange={e => setTableSelections({...tableSelections, [p.coditm]: parseInt(e.target.value)})}
                         style={{ padding: '0.3rem', borderRadius: '4px', background: 'var(--bg-color)', color: 'white', border: '1px solid var(--glass-border)' }}
                       >
