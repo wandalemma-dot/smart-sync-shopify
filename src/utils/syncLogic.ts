@@ -880,7 +880,15 @@ export function downloadUpdateCSV(result: SyncResult, config: SyncConfig) {
 // Versión estructurada de la matriz (misma lógica que el CSV) para poder crear
 // los productos directo por la API además de exportarlos.
 export interface MatrixVariant { sku: string; optionName: string; optionValue: string; price: number; cost: number; qty: number; }
-export interface MatrixProduct { handle: string; title: string; vendor: string; productType: string; tags: string; weightGrams: number; hasSizes: boolean; variants: MatrixVariant[]; }
+export interface MatrixProduct { handle: string; title: string; vendor: string; productType: string; tags: string[]; weightGrams: number; hasSizes: boolean; variants: MatrixVariant[]; }
+
+const CONVERSE_TABLE_TAG: Record<number, string> = {
+  1: 'TABLA DE TALLE CONVERSE 1',
+  2: 'TABLA DE TALLE CONVERSE 2',
+  3: 'TABLA DE TALLE CONVERSE MUJER',
+  4: 'TABLA DE TALLE CONVERSE NIÑO',
+  5: 'TABLA DE TALLE CONVERSE BEBE',
+};
 
 // Adivina la categoría de un producto Converse por sus talles:
 //   0  = Accesorio (talle único / TU) -> sin variantes de talle
@@ -937,13 +945,16 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
       handle = `${displayTitle}-${prod.coditm}`.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
     }
 
+    // Tabla/categoría de Converse (elegida, del maestro, o adivinada).
+    const converseKind = config.brand === 'converse'
+      ? (tableSelections[prod.coditm] ?? autoConverseTable(prod.coditm, prod.sizes))
+      : null;
+
     const variants: MatrixVariant[] = [];
     let hasSizes = false;
 
     if (config.brand === 'converse') {
-      // Categoría: la que eligió la usuaria, o la del maestro de curvas (por código),
-      // o la que adivinamos por los talles.
-      const kind = tableSelections[prod.coditm] ?? autoConverseTable(prod.coditm, prod.sizes);
+      const kind = converseKind as number;
       if (kind === 0) {
         // Accesorio: una sola variante, sin talle. Sumamos las cantidades.
         const totalQty = Object.values(prod.sizes).reduce((a, b) => a + (Number(b) || 0), 0);
@@ -976,7 +987,13 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
         });
       }
     }
-    out.push({ handle, title: displayTitle, vendor, productType, tags: tagValue, weightGrams: calcWeightGrams(config.brand, prod.artType), hasSizes, variants });
+    // Etiquetas: el código (o tag de la marca) + la etiqueta de la tabla de talle
+    // para las zapatillas Converse, así la próxima sync la lee sola.
+    const tags: string[] = [tagValue];
+    if (config.brand === 'converse' && converseKind && converseKind >= 1 && CONVERSE_TABLE_TAG[converseKind]) {
+      tags.push(CONVERSE_TABLE_TAG[converseKind]);
+    }
+    out.push({ handle, title: displayTitle, vendor, productType, tags, weightGrams: calcWeightGrams(config.brand, prod.artType), hasSizes, variants });
   }
   return out;
 }

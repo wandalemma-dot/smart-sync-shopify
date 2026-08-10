@@ -89,7 +89,7 @@ function buildProductSetInput(p: MatrixProduct, locationId: string | null): any 
       : [{ name: 'Title', values: [{ name: 'Default Title' }] }],
   };
   if (p.productType) input.productType = p.productType;
-  if (p.tags) input.tags = [p.tags];
+  if (p.tags && p.tags.length) input.tags = p.tags;
   if (p.handle) input.handle = p.handle;
 
   return input;
