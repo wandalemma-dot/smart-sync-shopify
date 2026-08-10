@@ -10,7 +10,7 @@
 // ============================================================================
 
 import { shopifyGraphQL } from './shopify';
-import { talleMatches, STOCK_LOCATION } from './syncLogic';
+import { talleMatches, STOCK_LOCATION, converseTableFromTags } from './syncLogic';
 import type { SyncResult, SyncConfig } from './syncLogic';
 
 export interface StockChange {
@@ -48,6 +48,7 @@ const PRODUCTS_BY_HANDLE = `
         node {
           handle
           title
+          tags
           variants(first: 100) {
             edges {
               node {
@@ -102,6 +103,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
   // Traemos las variantes en vivo (con inventoryItem id y stock actual) por lotes de handles.
   const liveByHandle: Record<string, any[]> = {};
   const titleByHandle: Record<string, string> = {}; // título REAL de Shopify
+  const tagsByHandle: Record<string, string> = {};   // etiquetas (para la tabla de talle)
   const CHUNK = 20;
   for (let i = 0; i < handles.length; i += CHUNK) {
     const chunk = handles.slice(i, i + CHUNK);
@@ -111,6 +113,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
       const p = edge.node;
       liveByHandle[p.handle] = (p.variants?.edges || []).map((e: any) => e.node);
       titleByHandle[p.handle] = String(p.title || '');
+      tagsByHandle[p.handle] = Array.isArray(p.tags) ? p.tags.join(', ') : String(p.tags || '');
     }
   }
 
@@ -124,9 +127,14 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     // Como ya existe en Shopify, mostramos el título REAL de Shopify (no el del Excel).
     const shopTitle = titleByHandle[handle] || d.title;
     const code = cod.toUpperCase(); // código del proveedor (Código Item del Excel)
+    // Converse: el proveedor manda talles US; Shopify los tiene en ARG. Convertimos
+    // usando la tabla que indica la etiqueta del producto (TABLA DE TALLE CONVERSE X).
+    const convTable = config.brand === 'converse' ? converseTableFromTags(tagsByHandle[handle] || '') : null;
     for (const [size, qtyRaw] of Object.entries(d.sizes || {})) {
       const desired = Number(qtyRaw);
-      const v = live.find((n: any) => talleMatches(size, n.title));
+      const argSize = convTable ? (convTable[String(size)] || String(size)) : String(size);
+      // Matchea por el talle convertido (ARG) o, por las dudas, por el talle tal cual.
+      const v = live.find((n: any) => talleMatches(argSize, n.title) || talleMatches(size, n.title));
       if (!v || !v.inventoryItem?.id) {
         notFound.push(`${shopTitle} · ${size}`);
         continue;
@@ -138,7 +146,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
       changes.push({
         handle,
         title: shopTitle,
-        talle: String(size),
+        talle: String(v.title || argSize),
         sku: String(v.sku || ''),
         code,
         inventoryItemId: v.inventoryItem.id,

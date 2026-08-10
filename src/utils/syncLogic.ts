@@ -202,6 +202,17 @@ export function talleMatches(provSize: string, shopTalle: string): boolean {
   return norm(provSize) === norm(shopTalle);
 }
 
+// A partir de las ETIQUETAS del producto en Shopify (ej. "TABLA DE TALLE CONVERSE 1",
+// "TABLA DE TALLE CONVERSE NIÑO", etc.) devuelve la tabla US->ARG que le corresponde.
+export function converseTableFromTags(tags: string): Record<string, string> {
+  const t = String(tags || '').toUpperCase();
+  if (t.includes('NIÑO') || t.includes('NINO')) return convTable4;
+  if (t.includes('BEBE') || t.includes('BEBÉ')) return convTable5;
+  if (t.includes('MUJER') || t.includes('WOMEN') || t.includes('WOS')) return convTable3;
+  if (/CONVERSE\s*2\b/.test(t) || t.includes('TABLA 2')) return convTable2;
+  return convTable1; // por defecto, la tabla 1 (hombre)
+}
+
 // Sucursal de Shopify donde se carga/escribe el stock, según la marca.
 export const STOCK_LOCATION: Record<SyncConfig['brand'], string> = {
   converse: 'ID (Converse - Le Coq Sportif)',
