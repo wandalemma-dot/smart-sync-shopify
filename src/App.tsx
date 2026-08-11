@@ -1,8 +1,6 @@
 import { useState, useRef } from 'react';
 import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, downloadInventoryCSV, autoConverseTable } from './utils/syncLogic';
 import type { SyncConfig, SyncResult } from './utils/syncLogic';
-import { analyzeRestock, downloadRestockCSV } from './utils/restockLogic';
-import type { RestockResult } from './utils/restockLogic';
 import { planStockWrite, executeStockWrite } from './utils/writeStock';
 import type { StockPlan } from './utils/writeStock';
 import { createProducts } from './utils/createProducts';
@@ -102,12 +100,7 @@ export default function App() {
 
     // 2) Detectar intención
     if (t.includes('ayuda') || t.includes('help') || t.trim() === '?') {
-      say('app', 'Podés escribir: "analizá orchard", "pedido" (reposición Converse/Le Coq), "simular stock", o el nombre de una marca para elegirla. Recordá subir arriba el Excel del proveedor antes de analizar.');
-      return;
-    }
-    if (t.includes('pedido') || t.includes('reposic') || t.includes('repon')) {
-      say('app', 'Dale, analizo el pedido de reposición (Converse y Le Coq)…');
-      handleAnalyzeRestock();
+      say('app', 'Podés escribir: "analizá orchard", "simular stock", o el nombre de una marca para elegirla. Recordá subir arriba el Excel del proveedor antes de analizar.');
       return;
     }
     if (t.includes('simular') || t.includes('escrib') || (t.includes('stock') && !t.includes('analiz'))) {
@@ -123,33 +116,11 @@ export default function App() {
       return;
     }
     if (brand) { say('app', `Listo, marca puesta en "${brand}". Ahora escribime "analizá" (con el Excel ya subido).`); return; }
-    say('app', 'No te entendí 🤔. Probá: "analizá orchard", "pedido", "simular stock", o "ayuda".');
+    say('app', 'No te entendí 🤔. Probá: "analizá orchard", "simular stock", o "ayuda".');
   };
-
-  // ---- ANÁLISIS PARA PEDIDO (stock en vivo de la sucursal iD) ----
-  const [restockLoading, setRestockLoading] = useState(false);
-  const [restockScanned, setRestockScanned] = useState(0);
-  const [restockResult, setRestockResult] = useState<RestockResult | null>(null);
 
   // Inputs de archivo ocultos: permiten seleccionar con un clic además de arrastrar.
   const providerInputRef = useRef<HTMLInputElement>(null);
-
-  const handleAnalyzeRestock = async () => {
-    setRestockLoading(true);
-    setRestockScanned(0);
-    setRestockResult(null);
-    try {
-      const res = await analyzeRestock(setRestockScanned);
-      setRestockResult(res);
-      if (!res.locationFound) {
-        alert(`No encontré la sucursal "${res.locationName}" en Shopify. Revisá el nombre exacto de la ubicación.`);
-      }
-    } catch (err: any) {
-      alert('Error analizando el pedido: ' + err.message);
-    } finally {
-      setRestockLoading(false);
-    }
-  };
 
   // --- Lógica central de cada archivo, reutilizada por drag & drop y por clic ---
   const processProviderFile = async (file: File) => {
@@ -221,8 +192,6 @@ export default function App() {
     }
   };
 
-  const totalTalles = restockResult?.items.reduce((acc, it) => acc + it.sizes.length, 0) || 0;
-
   return (
     <div className="app-container">
       <header>
@@ -253,89 +222,6 @@ export default function App() {
           />
           <button className="btn-primary" style={{ background: '#6366f1', padding: '10px 18px' }} onClick={runCommand}>Enviar</button>
         </div>
-      </div>
-
-      {/* ====== ANÁLISIS PARA PEDIDO (stock en vivo iD) ====== */}
-      <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1.2rem', border: '1px solid #10b981' }}>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'center', justifyContent: 'space-between' }}>
-          <div>
-            <h2 style={{ margin: 0 }}>🛒 Pedido de reposición — Converse y Le Coq</h2>
-            <p style={{ margin: '4px 0 0', opacity: 0.8, fontSize: '0.9rem' }}>
-              Consulta Shopify en vivo y lista los talles agotados (stock 0 o 1) en la sucursal iD.
-            </p>
-          </div>
-          <button
-            className="btn-primary"
-            style={{ background: '#10b981', padding: '14px 20px' }}
-            onClick={handleAnalyzeRestock}
-            disabled={restockLoading}
-          >
-            {restockLoading ? <span className="loader"></span> : '🔍 Analizar pedido ahora'}
-          </button>
-        </div>
-        {restockLoading && (
-          <p style={{ marginTop: '10px', textAlign: 'center', color: '#10b981' }}>
-            Consultando stock en vivo de la sucursal iD...
-            {restockScanned > 0 && <> ({restockScanned} productos escaneados)</>}
-          </p>
-        )}
-
-        {restockResult && restockResult.locationFound && (
-          <div style={{ marginTop: '1.2rem' }}>
-            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '20px', marginBottom: '1rem', fontSize: '0.9rem', opacity: 0.9 }}>
-              <span>📍 Sucursal: <strong>{restockResult.locationName}</strong></span>
-              <span>📦 Talles a reponer: <strong style={{ color: '#f59e0b' }}>{totalTalles}</strong></span>
-              <span>🧩 Modelos: <strong>{restockResult.items.length}</strong></span>
-              <span>🔎 Productos escaneados: {restockResult.productsScanned}</span>
-            </div>
-
-            {restockResult.items.length === 0 ? (
-              <p style={{ padding: '1rem', background: 'rgba(16,185,129,0.1)', borderRadius: '8px' }}>
-                ✅ No hay talles agotados en la sucursal iD. ¡Nada para pedir!
-              </p>
-            ) : (
-              <>
-                <button
-                  className="btn-primary"
-                  style={{ background: '#f59e0b', padding: '12px 18px', marginBottom: '1rem' }}
-                  onClick={() => downloadRestockCSV(restockResult)}
-                >
-                  📥 Descargar CSV del pedido
-                </button>
-
-                <div style={{ maxHeight: '460px', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '10px' }}>
-                  {restockResult.items.map((it, idx) => (
-                    <div key={idx} style={{ padding: '0.8rem', background: 'rgba(255,255,255,0.05)', borderRadius: '8px', border: '1px solid rgba(255,255,255,0.1)' }}>
-                      <div style={{ marginBottom: '0.5rem' }}>
-                        <span style={{
-                          fontSize: '0.7rem', fontWeight: 'bold', padding: '2px 8px', borderRadius: '10px',
-                          background: it.brand === 'lecoq' ? '#3b82f6' : '#8b5cf6', color: 'white', marginRight: '8px'
-                        }}>
-                          {it.brand === 'lecoq' ? 'LE COQ' : 'CONVERSE'}
-                        </span>
-                        <strong>{it.title}</strong>
-                      </div>
-                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
-                        {it.sizes.map((s, si) => (
-                          <span key={si} style={{
-                            fontSize: '0.8rem', padding: '4px 8px', borderRadius: '6px',
-                            border: `1px solid ${s.available === 0 ? '#dc2626' : '#f59e0b'}`,
-                            color: s.available === 0 ? '#fca5a5' : '#fcd34d',
-                            background: s.available === 0 ? 'rgba(220,38,38,0.12)' : 'rgba(245,158,11,0.12)'
-                          }}>
-                            Talle {s.shopifyTalle}
-                            {s.pedidoTalle !== s.shopifyTalle && <> → pedido {s.pedidoTalle}</>}
-                            {' '}· stock {s.available}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        )}
       </div>
 
       {!previewReady ? (
