@@ -17,8 +17,9 @@ const readline = require('readline');
 const clientId = '52788b0204c81f321e0c23c959793921'; // el Client ID no es secreto
 const shop = 'indy-com-ar.myshopify.com';
 const redirectUri = 'http://localhost:3000/callback';
-// Scopes: incluye write_inventory para poder escribir stock.
-const scopes = 'write_products,read_products,write_inventory,read_inventory,read_locations,read_publications,write_publications';
+// Scopes: incluye write_inventory (escribir stock) y read_orders/read_returns
+// (ventas y devoluciones, para la pestaña de Reposición).
+const scopes = 'write_products,read_products,write_inventory,read_inventory,read_locations,read_publications,write_publications,read_orders,read_returns';
 
 function ask(question) {
   return new Promise((resolve) => {
