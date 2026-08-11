@@ -4,8 +4,11 @@ import type { SyncConfig, SyncResult } from './utils/syncLogic';
 import { planStockWrite, executeStockWrite } from './utils/writeStock';
 import type { StockPlan } from './utils/writeStock';
 import { createProducts } from './utils/createProducts';
+import Reposicion from './Reposicion';
 
 export default function App() {
+  // Pestaña activa: sincronización (lo de siempre) o reposición (pedido a iD).
+  const [tab, setTab] = useState<'sync' | 'reposicion'>('sync');
   const [providerFile, setProviderFile] = useState<File | null>(null);
 
   const [sheets, setSheets] = useState<string[]>([]);
@@ -198,6 +201,26 @@ export default function App() {
         <h1>Sincronización de Stock e Inventario</h1>
         <p className="subtitle">Automatización Inteligente</p>
       </header>
+
+      {/* ====== PESTAÑAS ====== */}
+      <div style={{ display: 'flex', gap: '8px', marginBottom: '1.2rem' }}>
+        {([['sync', '🔄 Sincronización'], ['reposicion', '📦 Reposición']] as const).map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setTab(id)}
+            style={{
+              padding: '10px 18px', borderRadius: '8px', cursor: 'pointer', fontSize: '0.9rem', fontWeight: 'bold',
+              border: tab === id ? '1px solid #6366f1' : '1px solid rgba(255,255,255,0.15)',
+              background: tab === id ? '#6366f1' : 'rgba(255,255,255,0.05)',
+              color: 'white',
+            }}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'reposicion' ? <Reposicion /> : (<>
 
       {/* ====== CAJITA DE ÓRDENES ====== */}
       <div className="glass-panel" style={{ marginBottom: '1.5rem', padding: '1rem', border: '1px solid #6366f1' }}>
@@ -500,6 +523,8 @@ export default function App() {
           {loading && <p style={{marginTop: '15px', textAlign: 'center', color: '#10b981', fontWeight: 'bold'}}>{loadingText}</p>}
         </div>
       )}
+
+      </>)}
     </div>
   );
 }
