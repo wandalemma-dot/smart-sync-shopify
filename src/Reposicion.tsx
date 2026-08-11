@@ -34,11 +34,11 @@ export default function Reposicion() {
 
   const exportar = () => {
     if (!res) return;
-    const headers = ['Código', 'Producto', 'Marca', 'Talle AR', 'Talle a pedir', 'Escala', 'Cantidad', 'Stock Martinez', 'Stock iD', 'Vendidos', 'Devueltos'];
+    const headers = ['Código', 'Producto', 'Marca', 'Talle AR', 'Talle a pedir', 'Escala', 'Cantidad', 'Stock Martinez', 'Stock iD', 'Vendidos Martinez', 'Vendidos iD', 'Devueltos'];
     let csv = headers.join(',') + '\n';
     for (const f of res.filas) {
       const c = cant[keyDe(f)] ?? '';
-      csv += [f.codigo || '', f.titulo, f.marca === 'lecoq' ? 'Le Coq' : 'Converse', f.talleAr, f.tallePedido || '', f.escala || '', c, f.stockMartinez, f.stockId, f.vendidos, f.devueltos]
+      csv += [f.codigo || '', f.titulo, f.marca === 'lecoq' ? 'Le Coq' : 'Converse', f.talleAr, f.tallePedido || '', f.escala || '', c, f.stockMartinez, f.stockId, f.vendMartinez, f.vendId, f.devueltos]
         .map(escapeCSV).join(',') + '\n';
     }
     if (res.revisar.length) {
@@ -110,9 +110,10 @@ export default function Reposicion() {
                   <th style={th}>Producto</th>
                   <th style={{ ...th, textAlign: 'center' }}>Talle AR</th>
                   <th style={{ ...th, textAlign: 'center' }}>A pedir</th>
-                  <th style={{ ...th, textAlign: 'center' }}>Martínez</th>
-                  <th style={{ ...th, textAlign: 'center' }}>iD</th>
-                  <th style={{ ...th, textAlign: 'center' }}>Vend.</th>
+                  <th style={{ ...th, textAlign: 'center' }}>Stock Mart.</th>
+                  <th style={{ ...th, textAlign: 'center' }}>Stock iD</th>
+                  <th style={{ ...th, textAlign: 'center', color: '#34d399' }}>Vend. Mart.</th>
+                  <th style={{ ...th, textAlign: 'center', color: '#c4b5fd' }}>Vend. iD</th>
                   <th style={{ ...th, textAlign: 'center' }}>Dev.</th>
                   <th style={{ ...th, textAlign: 'center' }}>Cantidad</th>
                 </tr>
@@ -133,7 +134,8 @@ export default function Reposicion() {
                       </td>
                       <td style={{ ...td, textAlign: 'center', fontWeight: 'bold', color: semaforo(f.stockMartinez) }}>{f.stockMartinez}</td>
                       <td style={{ ...td, textAlign: 'center' }}>{f.stockId}</td>
-                      <td style={{ ...td, textAlign: 'center' }}>{f.vendidos || ''}</td>
+                      <td style={{ ...td, textAlign: 'center', fontWeight: f.vendMartinez ? 'bold' : undefined, color: f.vendMartinez ? '#34d399' : undefined }}>{f.vendMartinez || ''}</td>
+                      <td style={{ ...td, textAlign: 'center', fontWeight: f.vendId ? 'bold' : undefined, color: f.vendId ? '#c4b5fd' : undefined }}>{f.vendId || ''}</td>
                       <td style={{ ...td, textAlign: 'center', color: f.devueltos ? '#f59e0b' : undefined }}>{f.devueltos || ''}</td>
                       <td style={{ ...td, textAlign: 'center' }}>
                         <input
@@ -147,7 +149,7 @@ export default function Reposicion() {
                   );
                 })}
                 {res.filas.length === 0 && (
-                  <tr><td colSpan={9} style={{ ...td, textAlign: 'center', opacity: 0.7 }}>Nada para reponer en este período.</td></tr>
+                  <tr><td colSpan={10} style={{ ...td, textAlign: 'center', opacity: 0.7 }}>Nada para reponer en este período.</td></tr>
                 )}
               </tbody>
             </table>

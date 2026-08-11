@@ -59,7 +59,9 @@ export interface FilaReposicion {
   escala: string | null;
   stockMartinez: number;
   stockId: number;
-  vendidos: number;
+  vendMartinez: number;  // vendido despachado desde Martínez
+  vendId: number;        // vendido despachado desde iD
+  vendidos: number;      // total (Martínez + iD + sin asignar)
   devueltos: number;
   disponibleEnId: boolean;     // si iD no tiene, se muestra en gris
   motivoRevisar?: string;      // si no se pudo convertir
@@ -116,6 +118,12 @@ const ORDERS_QUERY = `
         node {
           name
           createdAt
+          fulfillments(first: 10) {
+            location { name }
+            fulfillmentLineItems(first: 100) {
+              edges { node { quantity lineItem { sku variant { sku } } } }
+            }
+          }
           lineItems(first: 100) {
             edges { node { quantity sku refundableQuantity variant { sku } } }
           }
@@ -140,10 +148,23 @@ function qty(level: any): number {
   return q ? Number(q.quantity) : 0;
 }
 
-// Trae ventas (y devoluciones) por SKU desde una fecha.
-async function traerVentas(desde: string): Promise<{ ventas: Record<string, number>; devol: Record<string, number>; error?: string }> {
-  const ventas: Record<string, number> = {};
+// Trae ventas por SKU desde una fecha, SEPARADAS por sucursal de despacho
+// (de dónde salió la mercadería), más las devoluciones.
+interface Ventas {
+  mar: Record<string, number>;   // despachado desde DEPOSITO MARTINEZ
+  id: Record<string, number>;    // despachado desde iD
+  otras: Record<string, number>; // otra sucursal o todavía sin despachar
+  devol: Record<string, number>;
+  error?: string;
+}
+
+async function traerVentas(desde: string): Promise<Ventas> {
+  const mar: Record<string, number> = {};
+  const idl: Record<string, number> = {};
+  const otras: Record<string, number> = {};
   const devol: Record<string, number> = {};
+  const sum = (obj: Record<string, number>, sku: string, n: number) => { obj[sku] = (obj[sku] || 0) + n; };
+
   try {
     let cursor: string | null = null;
     let hasNext = true;
@@ -153,25 +174,48 @@ async function traerVentas(desde: string): Promise<{ ventas: Record<string, numb
       const data: any = await shopifyGraphQL<any>(ORDERS_QUERY, { cursor, q: `created_at:>=${desde}` });
       const conn = data?.orders;
       for (const edge of (conn?.edges || [])) {
-        for (const li of (edge.node.lineItems?.edges || [])) {
+        const orden = edge.node;
+
+        // Ventas por sucursal: miramos de dónde se despachó cada ítem.
+        const despachado: Record<string, number> = {};
+        for (const f of (orden.fulfillments || [])) {
+          const locName = String(f?.location?.name || '').trim().toUpperCase();
+          const destino = locName === LOC_MARTINEZ.toUpperCase() ? mar
+            : locName === LOC_ID.toUpperCase() ? idl
+            : otras;
+          for (const fli of (f?.fulfillmentLineItems?.edges || [])) {
+            const n = fli.node;
+            const sku = String(n.lineItem?.variant?.sku || n.lineItem?.sku || '').toUpperCase();
+            if (!sku) continue;
+            const cant = Number(n.quantity) || 0;
+            sum(destino, sku, cant);
+            sum(despachado, sku, cant);
+          }
+        }
+
+        // Lo que se vendió pero todavía no se despachó -> "otras" (sin asignar).
+        for (const li of (orden.lineItems?.edges || [])) {
           const n = li.node;
           const sku = String(n.variant?.sku || n.sku || '').toUpperCase();
           if (!sku) continue;
           const cant = Number(n.quantity) || 0;
-          ventas[sku] = (ventas[sku] || 0) + cant;
-          // Lo devuelto = lo que ya no es reembolsable respecto de lo vendido.
+          const yaDespachado = despachado[sku] || 0;
+          const pendiente = Math.max(0, cant - yaDespachado);
+          if (pendiente > 0) sum(otras, sku, pendiente);
+
+          // Devuelto = lo que ya no es reembolsable respecto de lo vendido.
           const refundable = n.refundableQuantity === undefined || n.refundableQuantity === null
             ? cant : Number(n.refundableQuantity);
           const dev = Math.max(0, cant - refundable);
-          if (dev > 0) devol[sku] = (devol[sku] || 0) + dev;
+          if (dev > 0) sum(devol, sku, dev);
         }
       }
       hasNext = !!conn?.pageInfo?.hasNextPage;
       cursor = conn?.pageInfo?.endCursor || null;
     }
-    return { ventas, devol };
+    return { mar, id: idl, otras, devol };
   } catch (e: any) {
-    return { ventas, devol, error: e?.message || 'No se pudieron leer las órdenes' };
+    return { mar, id: idl, otras, devol, error: e?.message || 'No se pudieron leer las órdenes' };
   }
 }
 
@@ -184,7 +228,8 @@ export async function analizarReposicion(
   if (!locs.id) throw new Error(`No encontré la sucursal "${LOC_ID}" en Shopify.`);
 
   // Ventas y devoluciones (si el token no tiene read_orders, seguimos sin ellas).
-  const { ventas, devol, error: errOrdenes } = await traerVentas(desde);
+  const ventas = await traerVentas(desde);
+  const errOrdenes = ventas.error;
 
   const filas: FilaReposicion[] = [];
   const revisar: FilaReposicion[] = [];
@@ -219,8 +264,10 @@ export async function analizarReposicion(
         const stockMartinez = qty(v.inventoryItem?.mar);
         const stockId = qty(v.inventoryItem?.idl);
         const sku = String(v.sku || '').toUpperCase();
-        const vendidos = ventas[sku] || 0;
-        const devueltos = devol[sku] || 0;
+        const vendMartinez = ventas.mar[sku] || 0;
+        const vendId = ventas.id[sku] || 0;
+        const vendidos = vendMartinez + vendId + (ventas.otras[sku] || 0);
+        const devueltos = ventas.devol[sku] || 0;
 
         // Si iD no lo tiene, no se puede reponer: no va a la lista.
         if (stockId <= 0) continue;
@@ -242,6 +289,8 @@ export async function analizarReposicion(
           escala: conv.ok ? conv.escala : null,
           stockMartinez,
           stockId,
+          vendMartinez,
+          vendId,
           vendidos,
           devueltos,
           disponibleEnId: stockId > 0,
@@ -256,9 +305,10 @@ export async function analizarReposicion(
     onProgress?.(escaneados);
   }
 
-  // Orden: primero lo más urgente (Martínez en 0), después por más vendido.
+  // Orden: primero lo MÁS VENDIDO (es lo que más importa para pedir), y dentro
+  // de eso, lo más urgente por stock bajo en Martínez.
   const orden = (a: FilaReposicion, b: FilaReposicion) =>
-    (a.stockMartinez - b.stockMartinez) || (b.vendidos - a.vendidos) || a.titulo.localeCompare(b.titulo);
+    (b.vendidos - a.vendidos) || (a.stockMartinez - b.stockMartinez) || a.titulo.localeCompare(b.titulo);
   filas.sort(orden);
   revisar.sort(orden);
 
