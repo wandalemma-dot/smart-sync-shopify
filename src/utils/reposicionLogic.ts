@@ -19,31 +19,32 @@ export const LOC_MARTINEZ = 'DEPOSITO MARTINEZ';
 export const LOC_ID = 'ID (Converse - Le Coq Sportif)';
 
 // ---- Extracción del código de proveedor desde las ETIQUETAS del producto ----
-// El código vive en los tags, no en el SKU. Formatos vistos:
-//   Converse: A15621C, 172180C, 652517B   (letra/dígitos + letra final)
-//   Le Coq:   D1604101                     (D + dígitos)
-// Configurable a propósito: el brief pide no hardcodear hasta confirmar.
-export const PATRON_CODIGO = /^(?:[A-Z]?\d{5,7}[A-Z]|D\d{6,8})$/;
+// Regla (confirmada por Wanda): el código es la etiqueta que mezcla LETRAS Y
+// NÚMEROS, sin espacios. Ejemplos reales: A15621C, D1604101, MA5676023,
+// 172180C, 652517B. Las etiquetas de categoría son solo palabras
+// (INDUMENTARIA, CALZADO) y las de tabla de talle tienen espacios.
+export const PATRON_CODIGO = /^(?=.*\d)[A-Z0-9]{4,}$/;
 
-// Etiquetas que NUNCA son código (categorías, tablas de talle, marcas, etc.)
-const TAGS_IGNORADOS = [
-  'TABLA DE TALLE', 'INDUMENTARIA', 'CALZADO', 'ACCESORIOS', 'CONVERSE',
-  'LE COQ', 'LECOQ', 'ZAPATILLAS', 'MUJER', 'HOMBRE', 'NIÑO', 'NINO', 'UNISEX',
-  'TODOS LOS PRODUCTOS', 'REGALOS',
-];
+// Etiquetas que NUNCA son código, aunque tengan números (ej. "TABLA DE TALLE
+// CONVERSE 1" ya queda afuera por tener espacios, pero por las dudas).
+const TAGS_IGNORADOS = ['TABLA DE TALLE', 'HOT SALE', 'AVADA'];
 
 export function extraerCodigo(tags: string): string | null {
   const lista = String(tags || '').split(',').map(t => t.trim()).filter(Boolean);
+
+  // 1) Preferimos el que además está en el maestro de curvas (Converse seguro).
   for (const raw of lista) {
-    const t = raw.toUpperCase();
-    if (TAGS_IGNORADOS.some(ig => t.includes(ig))) continue;
-    const limpio = t.replace(/\s+/g, '');
-    if (PATRON_CODIGO.test(limpio)) return limpio;
-  }
-  // Si ninguno matchea el patrón, probamos con el maestro de curvas (Converse).
-  for (const raw of lista) {
-    const limpio = raw.trim().toUpperCase().replace(/\s+/g, '');
+    const limpio = raw.trim().toUpperCase();
     if (curvaDe(limpio)) return limpio;
+  }
+
+  // 2) Si no, el primero que mezcle letras y números sin espacios.
+  for (const raw of lista) {
+    const t = raw.trim().toUpperCase();
+    if (TAGS_IGNORADOS.some(ig => t.includes(ig))) continue;
+    if (/\s/.test(t)) continue;          // con espacios no es un código
+    if (!/\d/.test(t)) continue;          // sin números tampoco (INDUMENTARIA)
+    if (PATRON_CODIGO.test(t)) return t;
   }
   return null;
 }
@@ -220,6 +221,9 @@ export async function analizarReposicion(
         const sku = String(v.sku || '').toUpperCase();
         const vendidos = ventas[sku] || 0;
         const devueltos = devol[sku] || 0;
+
+        // Si iD no lo tiene, no se puede reponer: no va a la lista.
+        if (stockId <= 0) continue;
 
         // Qué mostramos: lo que tuvo venta, o lo que está en 0 en Martínez.
         if (vendidos === 0 && stockMartinez > 0) continue;

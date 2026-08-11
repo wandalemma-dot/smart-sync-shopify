@@ -17,9 +17,6 @@ export default function Reposicion() {
   const [res, setRes] = useState<ResultadoReposicion | null>(null);
   // Cantidades que Wanda ajusta a mano: clave "codigo|talleAr"
   const [cant, setCant] = useState<Record<string, number>>({});
-  // Por defecto ocultamos lo que iD no tiene (no se puede pedir) para no llenar
-  // la lista de filas inútiles. Se puede mostrar con el tilde.
-  const [verSinStockId, setVerSinStockId] = useState(false);
 
   const keyDe = (f: FilaReposicion) => `${f.codigo || f.handle}|${f.talleAr}`;
 
@@ -102,12 +99,7 @@ export default function Reposicion() {
             <span>🧩 Para pedir: <strong>{res.filas.length}</strong></span>
             <span style={{ color: '#dc2626' }}>🔴 En 0 en Martínez: <strong>{res.filas.filter(f => f.stockMartinez === 0).length}</strong></span>
             <span style={{ color: '#f59e0b' }}>🟡 Bajo (1-2): <strong>{res.filas.filter(f => f.stockMartinez > 0 && f.stockMartinez <= 2).length}</strong></span>
-            <span style={{ opacity: 0.7 }}>⬜ Sin stock en iD: <strong>{res.filas.filter(f => !f.disponibleEnId).length}</strong></span>
             <span>🔎 Productos: {res.productosEscaneados}</span>
-            <label style={{ display: 'flex', gap: 6, alignItems: 'center', opacity: 0.85 }}>
-              <input type="checkbox" checked={verSinStockId} onChange={e => setVerSinStockId(e.target.checked)} />
-              Mostrar también los que iD no tiene
-            </label>
           </div>
 
           <div style={{ maxHeight: '520px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px' }}>
@@ -126,15 +118,13 @@ export default function Reposicion() {
                 </tr>
               </thead>
               <tbody>
-                {res.filas.filter(f => verSinStockId || f.disponibleEnId).map((f, i) => {
-                  const gris = !f.disponibleEnId;
+                {res.filas.map((f, i) => {
                   return (
-                    <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', opacity: gris ? 0.45 : 1 }}>
+                    <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                       <td style={{ ...td, fontFamily: 'monospace' }}>{f.codigo}</td>
                       <td style={td}>
                         {f.titulo}
                         <span style={{ fontSize: '0.7rem', marginLeft: 6, opacity: 0.6 }}>{f.marca === 'lecoq' ? 'LE COQ' : 'CONVERSE'}</span>
-                        {gris && <span style={{ fontSize: '0.7rem', marginLeft: 6, color: '#9ca3af' }}>· sin stock en iD</span>}
                       </td>
                       <td style={{ ...td, textAlign: 'center' }}>{f.talleAr}</td>
                       <td style={{ ...td, textAlign: 'center', fontWeight: 'bold', color: '#60a5fa' }}>
@@ -147,7 +137,7 @@ export default function Reposicion() {
                       <td style={{ ...td, textAlign: 'center', color: f.devueltos ? '#f59e0b' : undefined }}>{f.devueltos || ''}</td>
                       <td style={{ ...td, textAlign: 'center' }}>
                         <input
-                          type="number" min={0} disabled={gris}
+                          type="number" min={0}
                           value={cant[keyDe(f)] ?? ''}
                           onChange={e => setCant({ ...cant, [keyDe(f)]: parseInt(e.target.value) || 0 })}
                           style={{ width: 60, padding: '4px', borderRadius: '4px', background: 'var(--bg-color)', color: 'white', border: '1px solid var(--glass-border)', textAlign: 'center' }}
@@ -156,7 +146,7 @@ export default function Reposicion() {
                     </tr>
                   );
                 })}
-                {res.filas.filter(f => verSinStockId || f.disponibleEnId).length === 0 && (
+                {res.filas.length === 0 && (
                   <tr><td colSpan={9} style={{ ...td, textAlign: 'center', opacity: 0.7 }}>Nada para reponer en este período.</td></tr>
                 )}
               </tbody>
