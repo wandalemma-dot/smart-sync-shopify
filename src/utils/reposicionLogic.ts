@@ -275,9 +275,16 @@ export async function analizarReposicion(
         // Qué mostramos: lo que tuvo venta, o lo que está en 0 en Martínez.
         if (vendidos === 0 && stockMartinez > 0) continue;
 
-        const conv: Conversion = codigo
-          ? convertir(marca, codigo, talleAr)
-          : { ok: false, talleAr, motivo: 'No encontré el código del proveedor en las etiquetas' };
+        // Solo el CALZADO necesita conversión (talles numéricos: 38, 40.5...).
+        // La indumentaria y los accesorios (S, M, L, XL, TU) se piden con el
+        // talle tal cual viene: no hay tabla ni curva que aplicar.
+        const esCalzado = /^\d/.test(talleAr);
+
+        const conv: Conversion = !esCalzado
+          ? { ok: true, talleAr, tallePedido: talleAr, escala: '—' }
+          : codigo
+            ? convertir(marca, codigo, talleAr)
+            : { ok: false, talleAr, motivo: 'No encontré el código del proveedor en las etiquetas' };
 
         const base: FilaReposicion = {
           codigo: codigo ? normCodigo(codigo) : null,

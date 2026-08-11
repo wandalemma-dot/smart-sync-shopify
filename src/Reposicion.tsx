@@ -130,7 +130,9 @@ export default function Reposicion() {
                       <td style={{ ...td, textAlign: 'center' }}>{f.talleAr}</td>
                       <td style={{ ...td, textAlign: 'center', fontWeight: 'bold', color: '#60a5fa' }}>
                         {f.tallePedido}
-                        <span style={{ fontSize: '0.65rem', opacity: 0.6, marginLeft: 4 }}>{f.escala === 'EU' ? 'EU' : 'US'}</span>
+                        {f.escala && f.escala !== '—' && (
+                          <span style={{ fontSize: '0.65rem', opacity: 0.6, marginLeft: 4 }}>{f.escala === 'EU' ? 'EU' : 'US'}</span>
+                        )}
                       </td>
                       <td style={{ ...td, textAlign: 'center', fontWeight: 'bold', color: semaforo(f.stockMartinez) }}>{f.stockMartinez}</td>
                       <td style={{ ...td, textAlign: 'center' }}>{f.stockId}</td>
