@@ -436,26 +436,54 @@ export async function processFiles(
     // Lee CUALQUIER marca (PADPRO, SKAWI, etc.), no solo las que empiezan con SK.
     const text = await readPdfText(providerFile);
     const titleCaseB = (s: string) => s.toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+    const num = (s: string) => parseFloat(String(s).replace(/,/g, '')) || 0;
+
     for (const line of text.split('\n')) {
       const parts = line.trim().split(/\s+/);
       if (parts.length < 6) continue;
       const skuRaw = parts[0];
       // El SKU son letras seguidas de números (PADPRO002) o un código numérico largo.
       if (!/^[A-Za-z]{2,}\d/.test(skuRaw) && !/^\d{4,}$/.test(skuRaw)) continue;
-      // Números al final: CANTIDAD, PRECIO, [%DES], MONTO.
-      const nums: string[] = [];
+
+      // Los números del final pueden ser: [TALLE] CANTIDAD PRECIO [%DES] MONTO.
+      // ⚠ El TALLE también puede ser numérico (tablas de skate: 8.25, 8.125),
+      // así que NO alcanza con contar posiciones: identificamos las columnas
+      // verificando la cuenta cantidad × precio (× descuento) = monto.
+      const idx: number[] = [];
       let j = parts.length;
-      while (j > 0 && /^[\d.,]+$/.test(parts[j - 1])) { nums.unshift(parts[j - 1]); j--; }
-      if (nums.length < 2 || j < 3) continue;
-      const talle = parts[j - 1];
-      const color = parts[j - 2];
-      const name = parts.slice(1, j - 2).join(' ');
-      const cantidad = parseFloat(nums[0].replace(/,/g, '')) || 0;
-      const precio = parseFloat(nums[1].replace(/,/g, '')) || 0;
+      while (j > 0 && /^[\d.,]+$/.test(parts[j - 1])) { idx.unshift(j - 1); j--; }
+      if (idx.length < 3) continue;
+
+      const val = (k: number) => num(parts[idx[k]]);
+      const monto = val(idx.length - 1);
+      let iCant = -1, cantidad = 0, precio = 0;
+
+      // Caso con descuento: CANT PRECIO %DES MONTO
+      if (idx.length >= 4) {
+        const c = val(idx.length - 4), p = val(idx.length - 3), d = val(idx.length - 2);
+        if (c > 0 && p > 0 && Math.abs(c * p * (1 - d / 100) - monto) < 1) {
+          iCant = idx[idx.length - 4]; cantidad = c; precio = p;
+        }
+      }
+      // Caso simple: CANT PRECIO MONTO
+      if (iCant < 0 && idx.length >= 3) {
+        const c = val(idx.length - 3), p = val(idx.length - 2);
+        if (c > 0 && p > 0 && Math.abs(c * p - monto) < 1) {
+          iCant = idx[idx.length - 3]; cantidad = c; precio = p;
+        }
+      }
+      if (iCant < 2) continue; // no pudimos identificar las columnas con certeza
+
+      const talle = parts[iCant - 1];
+      const color = parts[iCant - 2];
+      const name = parts.slice(1, iCant - 2).join(' ');
       const sku = skuRaw.toLowerCase();
       const catWordB = bloqueCategoryWord(name);
       const title = [catWordB, titleCaseB(colorsToEs(name || color))].filter(Boolean).join(' ').trim();
-      if (!excelMap[sku]) excelMap[sku] = { wholesale: precio, sizes: {}, foundInShopify: false, title, vendor: 'Bloque' };
+      // El COSTO real es lo que efectivamente se paga por unidad: el MONTO de la
+      // línea dividido la cantidad (ya viene con el descuento aplicado si lo hay).
+      const costoUnitario = cantidad > 0 ? Math.round(monto / cantidad) : precio;
+      if (!excelMap[sku]) excelMap[sku] = { wholesale: precio, costFinal: costoUnitario, sizes: {}, foundInShopify: false, title, vendor: 'Bloque' };
       excelMap[sku].sizes[talle] = (excelMap[sku].sizes[talle] || 0) + cantidad;
     }
   } else if (config.brand === 'orchard') {
