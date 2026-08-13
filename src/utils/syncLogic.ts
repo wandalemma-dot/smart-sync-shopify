@@ -30,6 +30,9 @@ export interface UpdateAction {
   sku: string;
   oldPrice?: number;
   newPrice?: number;
+  newCost?: number;      // Cost per item (costo del proveedor con su descuento)
+  optionName?: string;   // para identificar la variante en el import
+  optionValue?: string;
   oldStock?: number;
   newStock?: number;
 }
@@ -773,25 +776,36 @@ export async function processFiles(
         provData.shopifyHandle = prod.handle;
         provData.shopifyVariants = prod.variants.edges.map((e: any) => e.node);
         
-        // Precio de venta según la marca (Orchard usa el precio público directo).
+        // Precio de venta y COSTO según la marca (Orchard usa el precio público directo).
         const calculatedPrice = calcSellPrice(config.brand, provData.wholesale, provData.publicPrice || 0);
+        const calculatedCost = provData.costFinal ?? calcCost(config.brand, provData.wholesale);
+
+        // Evita filas repetidas cuando varias variantes comparten el mismo SKU.
+        const vistos = new Set<string>();
 
         for (const vEdge of prod.variants.edges) {
            const variant = vEdge.node;
            const variantPrice = parseFloat(variant.price);
-           
+
            // ACTUALIZACIÓN DE PRECIO
            // Ojo: Si el precio de venta sugerido cambia, preparamos acción.
            // variantPrice > 0 evita falsos positivos cuando el CSV no trae precio
            // (ej. el export de inventario), que dejaría el precio en 0.
            if (calculatedPrice !== variantPrice && variantPrice > 0 && provData.wholesale > 0) {
+              const sku = variant.sku || cod;
+              const clave = `${prod.handle}|${sku}|${variant.title}`;
+              if (vistos.has(clave)) continue;
+              vistos.add(clave);
               updatesToApply.push({
                 type: 'PRICE',
                 variantId: variant.id,
                 handle: prod.handle,
-                sku: variant.sku || cod,
+                sku,
                 oldPrice: variantPrice,
-                newPrice: calculatedPrice
+                newPrice: calculatedPrice,
+                newCost: calculatedCost,
+                optionName: 'Talle',
+                optionValue: String(variant.title || ''),
               });
            }
         }
@@ -869,19 +883,29 @@ export function downloadUpdateCSV(result: SyncResult, config: SyncConfig) {
     return;
   }
 
-  // Columnas necesarias para actualizar precio: Handle, Variant SKU, Variant Price
-  const headers = ['Handle', 'Variant SKU', 'Variant Price'];
+  // Formato del template nuevo de Shopify: además del precio va el COSTO
+  // (Cost per item), que es lo que se estaba perdiendo antes.
+  const headers = [
+    'URL handle', 'SKU', 'Option1 name', 'Option1 value',
+    'Price', 'Cost per item',
+  ];
   let csvContent = headers.join(',') + '\n';
 
+  const vistos = new Set<string>();
   result.updatesToApply.forEach(u => {
-    if (u.type === 'PRICE') {
-      const row = [
-        u.handle,
-        `"${u.sku}"`,
-        u.newPrice
-      ];
-      csvContent += row.join(',') + '\n';
-    }
+    if (u.type !== 'PRICE') return;
+    const clave = `${u.handle}|${u.sku}|${u.optionValue || ''}`;
+    if (vistos.has(clave)) return; // no repetir la misma variante
+    vistos.add(clave);
+    const row = [
+      u.handle,
+      u.sku,
+      u.optionName || 'Talle',
+      u.optionValue || '',
+      u.newPrice ?? '',
+      u.newCost ?? '',
+    ];
+    csvContent += row.map(escapeCSV).join(',') + '\n';
   });
 
   triggerDownload(csvContent, `Actualizacion_Precios_${config.brand}_${todayStamp()}.csv`);
