@@ -4,7 +4,7 @@ import type { SyncConfig, SyncResult } from './utils/syncLogic';
 import { planStockWrite, executeStockWrite } from './utils/writeStock';
 import type { StockPlan } from './utils/writeStock';
 import { createProducts } from './utils/createProducts';
-import { aplicarPrecios, actualizacionesAplicables } from './utils/updatePrices';
+import { aplicarPrecios, actualizacionesAplicables, sinCambios } from './utils/updatePrices';
 import Reposicion from './Reposicion';
 
 export default function App() {
@@ -385,12 +385,15 @@ export default function App() {
           )}
 
           {/* ====== ACTUALIZAR PRECIOS Y COSTOS DIRECTO EN SHOPIFY ====== */}
-          {result && actualizacionesAplicables(result).length > 0 && (
+          {result && (actualizacionesAplicables(result).length > 0 || sinCambios(result).length > 0) && (
             <div style={{ marginTop: '2rem', padding: '1rem', border: '1px solid #3b82f6', borderRadius: '8px', background: 'rgba(59,130,246,0.06)' }}>
               <h3 style={{ color: '#60a5fa', marginTop: 0 }}>💲 Actualizar precios y costos en Shopify</h3>
               <p style={{ fontSize: '0.85rem', opacity: 0.85, marginTop: 0 }}>
                 Cambia <strong>solo precio y costo</strong> de {actualizacionesAplicables(result).length} variantes.
                 No toca fotos, descripciones ni canales de venta (a diferencia de importar un CSV).
+                {sinCambios(result).length > 0 && (
+                  <> Las <strong style={{ color: '#6ee7b7' }}>{sinCambios(result).length} en verde</strong> ya están bien: no se tocan.</>
+                )}
               </p>
               <div style={{ maxHeight: '280px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', marginBottom: '0.8rem' }}>
                 <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse' }}>
@@ -403,8 +406,8 @@ export default function App() {
                     </tr>
                   </thead>
                   <tbody>
-                    {actualizacionesAplicables(result).slice(0, 200).map((u, i) => (
-                      <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    {actualizacionesAplicables(result).slice(0, 300).map((u, i) => (
+                      <tr key={`c${i}`} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
                         <td style={{ padding: '6px 10px' }}>{u.title}</td>
                         <td style={{ padding: '6px', textAlign: 'center' }}>{u.optionValue}</td>
                         <td style={{ padding: '6px', textAlign: 'center' }}>
@@ -413,6 +416,15 @@ export default function App() {
                         <td style={{ padding: '6px', textAlign: 'center' }}>
                           <span style={{ opacity: 0.6 }}>{u.oldCost ?? '—'}</span> → <strong style={{ color: '#34d399' }}>{u.newCost}</strong>
                         </td>
+                      </tr>
+                    ))}
+                    {/* Al final, en verde: las que ya están bien y NO se tocan */}
+                    {sinCambios(result).slice(0, 300).map((u, i) => (
+                      <tr key={`s${i}`} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: 'rgba(16,185,129,0.10)', color: '#6ee7b7' }}>
+                        <td style={{ padding: '6px 10px' }}>✅ {u.title}</td>
+                        <td style={{ padding: '6px', textAlign: 'center' }}>{u.optionValue}</td>
+                        <td style={{ padding: '6px', textAlign: 'center' }}>{u.oldPrice}</td>
+                        <td style={{ padding: '6px', textAlign: 'center' }}>{u.oldCost ?? '—'}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -426,7 +438,7 @@ export default function App() {
                 className="btn-primary"
                 style={{ background: precioConfirm ? '#3b82f6' : '#6b7280', marginTop: '0.6rem' }}
                 onClick={handleAplicarPrecios}
-                disabled={!precioConfirm || precioLoading}
+                disabled={!precioConfirm || precioLoading || actualizacionesAplicables(result).length === 0}
               >
                 {precioLoading ? <span className="loader"></span> : `💲 Aplicar en ${actualizacionesAplicables(result).length} variantes`}
               </button>

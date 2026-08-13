@@ -34,6 +34,7 @@ export interface UpdateAction {
   oldCost?: number;      // costo que hoy tiene en Shopify
   productId?: string;    // id del producto (para actualizar por API)
   inventoryItemId?: string;
+  sinCambios?: boolean;  // ya coincide precio y costo: se muestra en verde, no se aplica
   title?: string;        // Shopify exige el Title al importar
   optionName?: string;   // para identificar la variante en el import
   optionValue?: string;
@@ -64,12 +65,14 @@ export const convTable5: Record<string, string> = { '4': '20', '6': '21', '7': '
 // - markup: multiplicador sobre el precio mayorista para calcular el precio de venta.
 // - providerDiscount: descuento que se aplica al costo (para el "Cost per item").
 // - usePublicPrice: si es true, se usa el precio PÚBLICO que envía el proveedor tal cual (sin markup).
-export const BRAND_PRICING: Record<SyncConfig['brand'], { markup: number; providerDiscount: number; usePublicPrice: boolean }> = {
-  converse: { markup: 2.01, providerDiscount: 0,    usePublicPrice: false },
-  lecoq:    { markup: 2.01, providerDiscount: 0,    usePublicPrice: false },
-  orchard:  { markup: 0,    providerDiscount: 0.20, usePublicPrice: true  },
-  bloque:   { markup: 2.0,  providerDiscount: 0.15, usePublicPrice: false },
-  luxo:     { markup: 0,    providerDiscount: 0,    usePublicPrice: true  },
+// redondear9900: si es true, el precio termina en ...9900 (Converse / Le Coq).
+// Bloque NO redondea: el precio es exactamente el costo de lista x 2.
+export const BRAND_PRICING: Record<SyncConfig['brand'], { markup: number; providerDiscount: number; usePublicPrice: boolean; redondear9900: boolean }> = {
+  converse: { markup: 2.01, providerDiscount: 0,    usePublicPrice: false, redondear9900: true  },
+  lecoq:    { markup: 2.01, providerDiscount: 0,    usePublicPrice: false, redondear9900: true  },
+  orchard:  { markup: 0,    providerDiscount: 0.20, usePublicPrice: true,  redondear9900: false },
+  bloque:   { markup: 2.0,  providerDiscount: 0.15, usePublicPrice: false, redondear9900: false },
+  luxo:     { markup: 0,    providerDiscount: 0,    usePublicPrice: true,  redondear9900: false },
 };
 
 // Precio de venta final según la marca.
@@ -78,6 +81,8 @@ export function calcSellPrice(brand: SyncConfig['brand'], wholesale: number, pub
   // Orchard: el proveedor ya manda el precio final, se usa tal cual.
   if (cfg.usePublicPrice) return publicPrice;
   const minP = wholesale * cfg.markup;
+  // Bloque: precio exacto (costo x 2), sin terminación 9900.
+  if (!cfg.redondear9900) return Math.round(minP);
   let price = Math.floor(minP / 10000) * 10000 + 9900;
   if (price < minP) price += 10000;
   return price;
@@ -846,12 +851,13 @@ export async function processFiles(
            const cambiaPrecio = calculatedPrice !== variantPrice && variantPrice > 0;
            const cambiaCosto = calculatedCost > 0 && costoActual !== undefined && Math.round(costoActual) !== Math.round(calculatedCost);
 
-           if ((cambiaPrecio || cambiaCosto) && provData.wholesale > 0) {
+           if (provData.wholesale > 0 && variantPrice > 0) {
               const sku = variant.sku || cod;
               const clave = `${prod.handle}|${sku}|${variant.title}`;
               if (vistos.has(clave)) continue;
               vistos.add(clave);
               updatesToApply.push({
+                sinCambios: !cambiaPrecio && !cambiaCosto,
                 type: 'PRICE',
                 variantId: variant.id,
                 productId: (variant as any).productId,
@@ -966,7 +972,7 @@ export function downloadUpdateCSV(result: SyncResult, config: SyncConfig) {
 
   const vistos = new Set<string>();
   result.updatesToApply.forEach(u => {
-    if (u.type !== 'PRICE') return;
+    if (u.type !== 'PRICE' || u.sinCambios) return; // las iguales no van al CSV
     const clave = `${u.handle}|${u.sku}|${u.optionValue || ''}`;
     if (vistos.has(clave)) return; // no repetir la misma variante
     vistos.add(clave);

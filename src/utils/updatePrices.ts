@@ -28,8 +28,14 @@ export interface PriceWriteResult {
 // Solo las actualizaciones de precio que tienen los identificadores necesarios.
 export function actualizacionesAplicables(result: SyncResult): UpdateAction[] {
   return result.updatesToApply.filter(
-    (u) => u.type === 'PRICE' && !!u.productId && !!u.variantId,
+    (u) => u.type === 'PRICE' && !u.sinCambios && !!u.productId && !!u.variantId,
   );
+}
+
+// Las que ya están iguales (precio y costo coinciden): se muestran en verde
+// para que se vea que no se les va a tocar nada.
+export function sinCambios(result: SyncResult): UpdateAction[] {
+  return result.updatesToApply.filter((u) => u.type === 'PRICE' && u.sinCambios);
 }
 
 export async function aplicarPrecios(
