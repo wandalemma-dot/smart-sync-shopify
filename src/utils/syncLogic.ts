@@ -31,6 +31,7 @@ export interface UpdateAction {
   oldPrice?: number;
   newPrice?: number;
   newCost?: number;      // Cost per item (costo del proveedor con su descuento)
+  title?: string;        // Shopify exige el Title al importar
   optionName?: string;   // para identificar la variante en el import
   optionValue?: string;
   oldStock?: number;
@@ -804,6 +805,7 @@ export async function processFiles(
                 oldPrice: variantPrice,
                 newPrice: calculatedPrice,
                 newCost: calculatedCost,
+                title: String(prod.title || ''),
                 optionName: 'Talle',
                 optionValue: String(variant.title || ''),
               });
@@ -883,11 +885,11 @@ export function downloadUpdateCSV(result: SyncResult, config: SyncConfig) {
     return;
   }
 
-  // Formato del template nuevo de Shopify: además del precio va el COSTO
-  // (Cost per item), que es lo que se estaba perdiendo antes.
+  // Mismo formato que el "products_export" de Shopify (el que usa Wanda para
+  // importar). Shopify EXIGE el Title, y el costo va en "Cost per item".
   const headers = [
-    'URL handle', 'SKU', 'Option1 name', 'Option1 value',
-    'Price', 'Cost per item',
+    'Handle', 'Title', 'Option1 Name', 'Option1 Value',
+    'Variant SKU', 'Variant Price', 'Cost per item',
   ];
   let csvContent = headers.join(',') + '\n';
 
@@ -899,9 +901,10 @@ export function downloadUpdateCSV(result: SyncResult, config: SyncConfig) {
     vistos.add(clave);
     const row = [
       u.handle,
-      u.sku,
+      u.title || '',
       u.optionName || 'Talle',
       u.optionValue || '',
+      u.sku,
       u.newPrice ?? '',
       u.newCost ?? '',
     ];
