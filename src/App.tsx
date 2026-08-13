@@ -4,6 +4,7 @@ import type { SyncConfig, SyncResult } from './utils/syncLogic';
 import { planStockWrite, executeStockWrite } from './utils/writeStock';
 import type { StockPlan } from './utils/writeStock';
 import { createProducts } from './utils/createProducts';
+import { aplicarPrecios, actualizacionesAplicables } from './utils/updatePrices';
 import Reposicion from './Reposicion';
 
 export default function App() {
@@ -32,6 +33,25 @@ export default function App() {
   const [stockWriting, setStockWriting] = useState(false);
   const [writeConfirm, setWriteConfirm] = useState(false);
   const [writeDone, setWriteDone] = useState<string | null>(null);
+
+  // ---- ACTUALIZAR PRECIOS Y COSTOS DIRECTO EN SHOPIFY ----
+  const [precioConfirm, setPrecioConfirm] = useState(false);
+  const [precioLoading, setPrecioLoading] = useState(false);
+  const [precioDone, setPrecioDone] = useState<string | null>(null);
+
+  const handleAplicarPrecios = async () => {
+    if (!result) return;
+    setPrecioLoading(true); setPrecioDone(null);
+    try {
+      const res = await aplicarPrecios(result);
+      setPrecioDone(`Actualizadas ${res.actualizadas} variantes · fallidas ${res.fallidas}` + (res.errores.length ? ` · ${res.errores.slice(0, 2).join(' | ')}` : ''));
+      setPrecioConfirm(false);
+    } catch (e: any) {
+      alert('Error actualizando precios: ' + e.message);
+    } finally {
+      setPrecioLoading(false);
+    }
+  };
 
   // ---- CREAR PRODUCTOS NUEVOS EN SHOPIFY (borrador) ----
   const [creating, setCreating] = useState(false);
@@ -361,6 +381,56 @@ export default function App() {
                   );
                 })}
               </div>
+            </div>
+          )}
+
+          {/* ====== ACTUALIZAR PRECIOS Y COSTOS DIRECTO EN SHOPIFY ====== */}
+          {result && actualizacionesAplicables(result).length > 0 && (
+            <div style={{ marginTop: '2rem', padding: '1rem', border: '1px solid #3b82f6', borderRadius: '8px', background: 'rgba(59,130,246,0.06)' }}>
+              <h3 style={{ color: '#60a5fa', marginTop: 0 }}>💲 Actualizar precios y costos en Shopify</h3>
+              <p style={{ fontSize: '0.85rem', opacity: 0.85, marginTop: 0 }}>
+                Cambia <strong>solo precio y costo</strong> de {actualizacionesAplicables(result).length} variantes.
+                No toca fotos, descripciones ni canales de venta (a diferencia de importar un CSV).
+              </p>
+              <div style={{ maxHeight: '280px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', marginBottom: '0.8rem' }}>
+                <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr style={{ position: 'sticky', top: 0, background: '#1f2937' }}>
+                      <th style={{ textAlign: 'left', padding: '6px 10px' }}>Producto</th>
+                      <th style={{ padding: '6px' }}>Talle</th>
+                      <th style={{ padding: '6px' }}>Precio</th>
+                      <th style={{ padding: '6px' }}>Costo</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {actualizacionesAplicables(result).slice(0, 200).map((u, i) => (
+                      <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                        <td style={{ padding: '6px 10px' }}>{u.title}</td>
+                        <td style={{ padding: '6px', textAlign: 'center' }}>{u.optionValue}</td>
+                        <td style={{ padding: '6px', textAlign: 'center' }}>
+                          <span style={{ opacity: 0.6 }}>{u.oldPrice}</span> → <strong style={{ color: '#60a5fa' }}>{u.newPrice}</strong>
+                        </td>
+                        <td style={{ padding: '6px', textAlign: 'center' }}>
+                          <span style={{ opacity: 0.6 }}>{u.oldCost ?? '—'}</span> → <strong style={{ color: '#34d399' }}>{u.newCost}</strong>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <label style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '0.9rem' }}>
+                <input type="checkbox" checked={precioConfirm} onChange={e => setPrecioConfirm(e.target.checked)} />
+                Revisé la lista y quiero <strong>&nbsp;aplicar estos precios y costos&nbsp;</strong> en Shopify.
+              </label>
+              <button
+                className="btn-primary"
+                style={{ background: precioConfirm ? '#3b82f6' : '#6b7280', marginTop: '0.6rem' }}
+                onClick={handleAplicarPrecios}
+                disabled={!precioConfirm || precioLoading}
+              >
+                {precioLoading ? <span className="loader"></span> : `💲 Aplicar en ${actualizacionesAplicables(result).length} variantes`}
+              </button>
+              {precioDone && <p style={{ marginTop: '0.8rem', color: '#60a5fa', fontWeight: 'bold' }}>✅ {precioDone}</p>}
             </div>
           )}
 

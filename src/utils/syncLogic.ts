@@ -31,6 +31,9 @@ export interface UpdateAction {
   oldPrice?: number;
   newPrice?: number;
   newCost?: number;      // Cost per item (costo del proveedor con su descuento)
+  oldCost?: number;      // costo que hoy tiene en Shopify
+  productId?: string;    // id del producto (para actualizar por API)
+  inventoryItemId?: string;
   title?: string;        // Shopify exige el Title al importar
   optionName?: string;   // para identificar la variante en el import
   optionValue?: string;
@@ -255,17 +258,20 @@ const LIVE_PRODUCTS_QUERY = `
       pageInfo { hasNextPage endCursor }
       edges {
         node {
+          id
           handle
           title
           tags
           variants(first: 100) {
             edges {
               node {
+                id
                 title
                 sku
                 price
                 inventoryItem {
                   id
+                  unitCost { amount }
                   inventoryLevel(locationId: $loc) {
                     quantities(names: ["available"]) { name quantity }
                   }
@@ -714,7 +720,11 @@ export async function processFiles(
             const qEntry = (lvl?.quantities || []).find((x: any) => x.name === 'available');
             return {
               node: {
-                id: String(node.inventoryItem?.id || ''),
+                // id = identificador de la VARIANTE (necesario para actualizar precio)
+                id: String(node.id || ''),
+                inventoryItemId: String(node.inventoryItem?.id || ''),
+                productId: String(n.id || ''),
+                cost: node.inventoryItem?.unitCost?.amount != null ? String(node.inventoryItem.unitCost.amount) : '',
                 title: String(node.title || ''),
                 sku: String(node.sku || ''),
                 price: String(node.price || '0'),
@@ -792,7 +802,11 @@ export async function processFiles(
            // Ojo: Si el precio de venta sugerido cambia, preparamos acción.
            // variantPrice > 0 evita falsos positivos cuando el CSV no trae precio
            // (ej. el export de inventario), que dejaría el precio en 0.
-           if (calculatedPrice !== variantPrice && variantPrice > 0 && provData.wholesale > 0) {
+           const costoActual = (variant as any).cost ? parseFloat((variant as any).cost) : undefined;
+           const cambiaPrecio = calculatedPrice !== variantPrice && variantPrice > 0;
+           const cambiaCosto = calculatedCost > 0 && costoActual !== undefined && Math.round(costoActual) !== Math.round(calculatedCost);
+
+           if ((cambiaPrecio || cambiaCosto) && provData.wholesale > 0) {
               const sku = variant.sku || cod;
               const clave = `${prod.handle}|${sku}|${variant.title}`;
               if (vistos.has(clave)) continue;
@@ -800,10 +814,13 @@ export async function processFiles(
               updatesToApply.push({
                 type: 'PRICE',
                 variantId: variant.id,
+                productId: (variant as any).productId,
+                inventoryItemId: (variant as any).inventoryItemId,
                 handle: prod.handle,
                 sku,
                 oldPrice: variantPrice,
                 newPrice: calculatedPrice,
+                oldCost: costoActual,
                 newCost: calculatedCost,
                 title: String(prod.title || ''),
                 optionName: 'Talle',
@@ -884,6 +901,16 @@ export function downloadUpdateCSV(result: SyncResult, config: SyncConfig) {
     alert("No hay actualizaciones para descargar.");
     return;
   }
+  // Aviso: importar este CSV con "Sobrescribir" borra lo que no venga en el
+  // archivo (fotos, descripción, canales). Para cambiar solo precio y costo
+  // conviene el botón "Actualizar precios y costos en Shopify".
+  const seguir = confirm(
+    'OJO: si importás este CSV con "Sobrescribir productos", Shopify puede BORRAR ' +
+    'las fotos, la descripción y los canales de venta de esos productos.\n\n' +
+    'Para cambiar solo precio y costo sin riesgo, usá el botón azul ' +
+    '"Actualizar precios y costos en Shopify".\n\n¿Descargar igual?'
+  );
+  if (!seguir) return;
 
   // ⚠ FORMATO FIJO — NO CAMBIAR.
   // Estas columnas son las del "products_export" de Shopify, que es el único

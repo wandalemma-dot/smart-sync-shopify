@@ -10,8 +10,9 @@
 
 const ALLOWED_MUTATIONS = [
   'inventorySetQuantities', // escribir stock (cantidades)
-  'productSet',             // crear productos nuevos
-  'publishablePublish',     // publicar productos en un canal (Point of Sale)
+  'productSet',                // crear productos nuevos
+  'publishablePublish',        // publicar productos en un canal (Point of Sale)
+  'productVariantsBulkUpdate', // actualizar SOLO precio y costo de variantes
 ];
 
 const SHOP = 'indy-com-ar.myshopify.com';
