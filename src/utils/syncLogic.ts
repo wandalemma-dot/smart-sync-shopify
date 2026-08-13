@@ -457,12 +457,13 @@ export async function processFiles(
       const val = (k: number) => num(parts[idx[k]]);
       const monto = val(idx.length - 1);
       let iCant = -1, cantidad = 0, precio = 0;
+      let traeDescuento = false;
 
       // Caso con descuento: CANT PRECIO %DES MONTO
       if (idx.length >= 4) {
         const c = val(idx.length - 4), p = val(idx.length - 3), d = val(idx.length - 2);
         if (c > 0 && p > 0 && Math.abs(c * p * (1 - d / 100) - monto) < 1) {
-          iCant = idx[idx.length - 4]; cantidad = c; precio = p;
+          iCant = idx[idx.length - 4]; cantidad = c; precio = p; traeDescuento = d > 0;
         }
       }
       // Caso simple: CANT PRECIO MONTO
@@ -480,9 +481,14 @@ export async function processFiles(
       const sku = skuRaw.toLowerCase();
       const catWordB = bloqueCategoryWord(name);
       const title = [catWordB, titleCaseB(colorsToEs(name || color))].filter(Boolean).join(' ').trim();
-      // El COSTO real es lo que efectivamente se paga por unidad: el MONTO de la
-      // línea dividido la cantidad (ya viene con el descuento aplicado si lo hay).
-      const costoUnitario = cantidad > 0 ? Math.round(monto / cantidad) : precio;
+      // COSTO:
+      //  - Si la línea del PDF trae un % de descuento explícito, el costo real
+      //    es el MONTO / cantidad (ya viene descontado).
+      //  - Si NO lo trae, el precio es de lista y hay que aplicarle el descuento
+      //    habitual de Bloque (15%), que es lo que hace calcCost().
+      const costoUnitario = traeDescuento && cantidad > 0
+        ? Math.round(monto / cantidad)
+        : undefined;
       if (!excelMap[sku]) excelMap[sku] = { wholesale: precio, costFinal: costoUnitario, sizes: {}, foundInShopify: false, title, vendor: 'Bloque' };
       excelMap[sku].sizes[talle] = (excelMap[sku].sizes[talle] || 0) + cantidad;
     }
