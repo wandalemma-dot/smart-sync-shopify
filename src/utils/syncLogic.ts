@@ -885,8 +885,12 @@ export function downloadUpdateCSV(result: SyncResult, config: SyncConfig) {
     return;
   }
 
-  // Mismo formato que el "products_export" de Shopify (el que usa Wanda para
-  // importar). Shopify EXIGE el Title, y el costo va en "Cost per item".
+  // ⚠ FORMATO FIJO — NO CAMBIAR.
+  // Estas columnas son las del "products_export" de Shopify, que es el único
+  // formato con el que Wanda importa. Vale para TODAS las marcas (Converse,
+  // Le Coq, Orchard, Luxo, Bloque): el CSV de precios es siempre este.
+  // Shopify EXIGE el Title (sin él rechaza el archivo) y el costo va en
+  // "Cost per item". Solo se modifica si Shopify cambia su propio formato.
   const headers = [
     'Handle', 'Title', 'Option1 Name', 'Option1 Value',
     'Variant SKU', 'Variant Price', 'Cost per item',
