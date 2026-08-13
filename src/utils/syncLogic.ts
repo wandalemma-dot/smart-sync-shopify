@@ -292,16 +292,18 @@ const LIVE_VARIANTS_BY_SKU_QUERY = `
     productVariants(first: 100, query: $q) {
       edges {
         node {
+          id
           title
           sku
           price
           inventoryItem {
             id
+            unitCost { amount }
             inventoryLevel(locationId: $loc) {
               quantities(names: ["available"]) { name quantity }
             }
           }
-          product { handle title tags }
+          product { id handle title tags }
         }
       }
     }
@@ -687,7 +689,11 @@ export async function processFiles(
           const qEntry = (lvl?.quantities || []).find((x: any) => x.name === 'available');
           prodMap[handle].variants.edges.push({
             node: {
-              id: String(node.inventoryItem?.id || ''),
+              // id = identificador de la VARIANTE (para actualizar precio/costo)
+              id: String(node.id || ''),
+              inventoryItemId: String(node.inventoryItem?.id || ''),
+              productId: String(p.id || ''),
+              cost: node.inventoryItem?.unitCost?.amount != null ? String(node.inventoryItem.unitCost.amount) : '',
               title: String(node.title || ''),
               sku: String(node.sku || ''),
               price: String(node.price || '0'),
