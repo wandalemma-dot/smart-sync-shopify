@@ -2,6 +2,8 @@ import * as XLSX from 'xlsx';
 import { escapeCSV, triggerDownload, todayStamp } from './csv';
 import { shopifyGraphQL } from './shopify';
 import { CONVERSE_CODE_TABLE } from './converseCurvas';
+import { esPrecioSugerido } from './conversePreciosFijos';
+import type { ListaPrecios } from './listaPrecios';
 
 export type SyncMode = 'all' | 'stock_only' | 'cost_only' | 'price_only';
 
@@ -20,6 +22,7 @@ export interface MissingProduct {
   descCod?: string;
   artType?: string;
   costFinal?: number;
+  usaListaPrecios?: boolean; // precio ya calculado desde la sábana
 }
 
 export interface UpdateAction {
@@ -86,6 +89,32 @@ export function calcSellPrice(brand: SyncConfig['brand'], wholesale: number, pub
   let price = Math.floor(minP / 10000) * 10000 + 9900;
   if (price < minP) price += 10000;
   return price;
+}
+
+// ---- PRECIOS DE iD (Converse y Le Coq) ----
+// Reglas confirmadas con Wanda (agosto 2026):
+//   COSTO  = precio de lista (WHSL) menos 7% de descuento general del proveedor.
+//   PRECIO = lista x 2.27, redondeado a terminación ...900 (da ~50% de margen).
+//   EXCEPCIÓN: los modelos BÁSICOS de Converse van SIEMPRE al precio sugerido
+//   del proveedor (RETAIL de la sábana). Nunca llevan markup.
+export const ID_DESCUENTO_GENERAL = 0.07;
+export const ID_MARKUP = 2.27;
+
+export function redondear900(x: number): number {
+  let r = Math.floor(x / 1000) * 1000 + 900;
+  if (r < x) r += 1000;
+  return r;
+}
+
+export function costoId(precioLista: number): number {
+  return Math.round(precioLista * (1 - ID_DESCUENTO_GENERAL));
+}
+
+// Precio final para Converse / Le Coq.
+export function precioId(codigo: string, precioLista: number, sugerido: number): number {
+  if (esPrecioSugerido(codigo) && sugerido > 0) return sugerido; // básico: sin markup
+  if (precioLista > 0) return redondear900(precioLista * ID_MARKUP);
+  return sugerido || 0;
 }
 
 // Costo (Cost per item) según la marca, aplicando el descuento de proveedor.
@@ -414,10 +443,11 @@ export async function processFiles(
   providerFile: File,
   _remitoFile: File | null,
   shopifyExportFile: File | null,
-  config: SyncConfig
+  config: SyncConfig,
+  listaPrecios?: ListaPrecios | null,
 ): Promise<SyncResult> {
   const alerts: AlertMessage[] = [];
-  const excelMap: Record<string, { wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number }> = {};
+  const excelMap: Record<string, { wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number, usaListaPrecios?: boolean }> = {};
 
   if (config.brand === 'bloque' && /\.xlsx?$/i.test(providerFile.name)) {
     // Bloque en Excel (ej. la preventa de Protec).
@@ -679,6 +709,19 @@ export async function processFiles(
     }
   }
 
+  // 2.b) PRECIOS de Converse / Le Coq: el Excel de stock no los trae, así que
+  // los completamos cruzando por código contra la sábana del proveedor.
+  if (listaPrecios && (config.brand === 'converse' || config.brand === 'lecoq')) {
+    for (const [cod, data] of Object.entries(excelMap)) {
+      const p = listaPrecios.items[cod.toUpperCase()];
+      if (!p) continue;
+      data.wholesale = p.whsl;                       // precio de LISTA
+      data.costFinal = costoId(p.whsl);              // lista - 7%
+      data.publicPrice = precioId(cod, p.whsl, p.retail); // sugerido o lista x2.27
+      data.usaListaPrecios = true;
+    }
+  }
+
   // 3. Leer datos de Shopify desde el CSV exportado que el usuario subió
   interface ShopifyProductNode {
     handle: string;
@@ -877,7 +920,10 @@ export async function processFiles(
         provData.shopifyVariants = prod.variants.edges.map((e: any) => e.node);
         
         // Precio de venta y COSTO según la marca (Orchard usa el precio público directo).
-        const calculatedPrice = calcSellPrice(config.brand, provData.wholesale, provData.publicPrice || 0);
+        // Converse/Le Coq con sábana: el precio ya viene calculado (sugerido o x2.27).
+        const calculatedPrice = (provData.usaListaPrecios && provData.publicPrice)
+          ? provData.publicPrice
+          : calcSellPrice(config.brand, provData.wholesale, provData.publicPrice || 0);
         const calculatedCost = provData.costFinal ?? calcCost(config.brand, provData.wholesale);
 
         // Evita filas repetidas cuando varias variantes comparten el mismo SKU.
@@ -973,7 +1019,8 @@ export async function processFiles(
         vendor: data.vendor,
         descCod: data.descCod,
         artType: data.artType,
-        costFinal: data.costFinal
+        costFinal: data.costFinal,
+        usaListaPrecios: data.usaListaPrecios,
       });
     }
   }
@@ -1081,7 +1128,11 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
     // crea en 0 y la usuaria le pone el precio a mano. Las demás marcas calculan normal.
     const sinPrecio = (config.brand === 'converse' || config.brand === 'lecoq')
       && !(prod.wholesale > 0 || (prod.publicPrice || 0) > 0);
-    const price = sinPrecio ? 0 : calcSellPrice(config.brand, prod.wholesale, prod.publicPrice || 0);
+    const price = sinPrecio
+      ? 0
+      : (prod.usaListaPrecios && prod.publicPrice)
+        ? prod.publicPrice   // Converse/Le Coq con sábana: ya viene calculado
+        : calcSellPrice(config.brand, prod.wholesale, prod.publicPrice || 0);
     const cost = prod.costFinal ?? calcCost(config.brand, prod.wholesale);
     let displayTitle = prod.title;
     let tagValue = prod.coditm;
