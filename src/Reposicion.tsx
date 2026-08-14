@@ -1,6 +1,8 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { analizarReposicion, LOC_MARTINEZ, LOC_ID } from './utils/reposicionLogic';
 import type { ResultadoReposicion, FilaReposicion } from './utils/reposicionLogic';
+import { leerPedidoPendiente } from './utils/pedidoPendiente';
+import type { PedidoPendiente } from './utils/pedidoPendiente';
 import { escapeCSV, triggerDownload, todayStamp } from './utils/csv';
 
 // Fecha de ayer en formato YYYY-MM-DD (valor por defecto del "desde").
@@ -17,13 +19,25 @@ export default function Reposicion() {
   const [res, setRes] = useState<ResultadoReposicion | null>(null);
   // Cantidades que Wanda ajusta a mano: clave "codigo|talleAr"
   const [cant, setCant] = useState<Record<string, number>>({});
+  // Pedido ya hecho al proveedor: lo que viene en camino y no hay que volver a pedir.
+  const [pedido, setPedido] = useState<PedidoPendiente | null>(null);
+  const pedidoInputRef = useRef<HTMLInputElement>(null);
+
+  const cargarPedido = async (file: File) => {
+    try {
+      const p = await leerPedidoPendiente(file);
+      setPedido(p);
+    } catch (e: any) {
+      alert('No pude leer el Excel del pedido: ' + e.message);
+    }
+  };
 
   const keyDe = (f: FilaReposicion) => `${f.codigo || f.handle}|${f.talleAr}`;
 
   const analizar = async () => {
     setLoading(true); setRes(null); setEscaneados(0); setCant({});
     try {
-      const r = await analizarReposicion(desde, setEscaneados);
+      const r = await analizarReposicion(desde, setEscaneados, pedido?.items);
       setRes(r);
     } catch (e: any) {
       alert('Error armando la reposición: ' + e.message);
@@ -34,11 +48,11 @@ export default function Reposicion() {
 
   const exportar = () => {
     if (!res) return;
-    const headers = ['Código', 'Producto', 'Marca', 'Talle AR', 'Talle a pedir', 'Escala', 'Cantidad', 'Stock Martinez', 'Stock iD', 'Vendidos Martinez', 'Vendidos iD', 'Devueltos'];
+    const headers = ['Código', 'Producto', 'Marca', 'Talle AR', 'Talle a pedir', 'Escala', 'Cantidad', 'Stock Martinez', 'Stock iD', 'Vendidos Martinez', 'Vendidos iD', 'Devueltos', 'En camino'];
     let csv = headers.join(',') + '\n';
     for (const f of res.filas) {
       const c = cant[keyDe(f)] ?? '';
-      csv += [f.codigo || '', f.titulo, f.marca === 'lecoq' ? 'Le Coq' : 'Converse', f.talleAr, f.tallePedido || '', f.escala || '', c, f.stockMartinez, f.stockId, f.vendMartinez, f.vendId, f.devueltos]
+      csv += [f.codigo || '', f.titulo, f.marca === 'lecoq' ? 'Le Coq' : 'Converse', f.talleAr, f.tallePedido || '', f.escala || '', c, f.stockMartinez, f.stockId, f.vendMartinez, f.vendId, f.devueltos, f.enCamino]
         .map(escapeCSV).join(',') + '\n';
     }
     if (res.revisar.length) {
@@ -74,6 +88,21 @@ export default function Reposicion() {
               style={{ padding: '8px', borderRadius: '6px', background: 'var(--bg-color)', color: 'white', border: '1px solid var(--glass-border)' }}
             />
           </label>
+          <input
+            ref={pedidoInputRef}
+            type="file"
+            accept=".xlsx,.xls"
+            style={{ display: 'none' }}
+            onChange={e => { const f = e.target.files?.[0]; if (f) cargarPedido(f); e.target.value = ''; }}
+          />
+          <button
+            className="btn-primary"
+            style={{ background: pedido ? '#8b5cf6' : '#4b5563', padding: '10px 18px' }}
+            onClick={() => pedidoInputRef.current?.click()}
+          >
+            {pedido ? '🚚 Pedido cargado — cambiar' : '🚚 Subir pedido ya hecho (opcional)'}
+          </button>
+
           <button className="btn-primary" style={{ background: '#10b981', padding: '10px 18px' }} onClick={analizar} disabled={loading}>
             {loading ? <span className="loader"></span> : '🔍 Armar reposición'}
           </button>
@@ -83,6 +112,12 @@ export default function Reposicion() {
             </button>
           )}
         </div>
+        {pedido && (
+          <p style={{ marginTop: 10, fontSize: '0.85rem', color: '#c4b5fd' }}>
+            🚚 {pedido.numero || 'Pedido'} {pedido.fecha && `· ${pedido.fecha}`} · <strong>{pedido.unidades}</strong> unidades en camino
+            ({pedido.lineas} líneas). Se van a descontar de lo que falta pedir.
+          </p>
+        )}
         {loading && <p style={{ marginTop: 10, color: '#10b981' }}>Consultando Shopify… {escaneados > 0 && `(${escaneados} productos)`}</p>}
       </div>
 
@@ -100,6 +135,9 @@ export default function Reposicion() {
             <span style={{ color: '#dc2626' }}>🔴 En 0 en Martínez: <strong>{res.filas.filter(f => f.stockMartinez === 0).length}</strong></span>
             <span style={{ color: '#f59e0b' }}>🟡 Bajo (1-2): <strong>{res.filas.filter(f => f.stockMartinez > 0 && f.stockMartinez <= 2).length}</strong></span>
             <span>🔎 Productos: {res.productosEscaneados}</span>
+            {pedido && (
+              <span style={{ color: '#c4b5fd' }}>🚚 Ya vienen en camino: <strong>{res.filas.filter(f => f.enCamino > 0).length}</strong> (fila violeta)</span>
+            )}
           </div>
 
           <div style={{ maxHeight: '520px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.12)', borderRadius: '8px' }}>
@@ -115,13 +153,15 @@ export default function Reposicion() {
                   <th style={{ ...th, textAlign: 'center', color: '#34d399' }}>Vend. Mart.</th>
                   <th style={{ ...th, textAlign: 'center', color: '#c4b5fd' }}>Vend. iD</th>
                   <th style={{ ...th, textAlign: 'center' }}>Dev.</th>
+                  {pedido && <th style={{ ...th, textAlign: 'center', color: '#c4b5fd' }}>🚚 En camino</th>}
                   <th style={{ ...th, textAlign: 'center' }}>Cantidad</th>
                 </tr>
               </thead>
               <tbody>
                 {res.filas.map((f, i) => {
+                  const yaViene = f.enCamino > 0;
                   return (
-                    <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                    <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: yaViene ? 'rgba(139,92,246,0.10)' : undefined }}>
                       <td style={{ ...td, fontFamily: 'monospace' }}>{f.codigo}</td>
                       <td style={td}>
                         {f.titulo}
@@ -139,6 +179,11 @@ export default function Reposicion() {
                       <td style={{ ...td, textAlign: 'center', fontWeight: f.vendMartinez ? 'bold' : undefined, color: f.vendMartinez ? '#34d399' : undefined }}>{f.vendMartinez || ''}</td>
                       <td style={{ ...td, textAlign: 'center', fontWeight: f.vendId ? 'bold' : undefined, color: f.vendId ? '#c4b5fd' : undefined }}>{f.vendId || ''}</td>
                       <td style={{ ...td, textAlign: 'center', color: f.devueltos ? '#f59e0b' : undefined }}>{f.devueltos || ''}</td>
+                      {pedido && (
+                        <td style={{ ...td, textAlign: 'center', fontWeight: f.enCamino ? 'bold' : undefined, color: f.enCamino ? '#c4b5fd' : undefined }}>
+                          {f.enCamino || ''}
+                        </td>
+                      )}
                       <td style={{ ...td, textAlign: 'center' }}>
                         <input
                           type="number" min={0}

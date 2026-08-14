@@ -14,6 +14,8 @@
 import { shopifyGraphQL } from './shopify';
 import { convertir, normCodigo, curvaDe } from './conversorTalles';
 import type { Conversion } from './conversorTalles';
+import { claveEnCamino } from './pedidoPendiente';
+import type { EnCamino } from './pedidoPendiente';
 
 export const LOC_MARTINEZ = 'DEPOSITO MARTINEZ';
 export const LOC_ID = 'ID (Converse - Le Coq Sportif)';
@@ -63,6 +65,7 @@ export interface FilaReposicion {
   vendId: number;        // vendido despachado desde iD
   vendidos: number;      // total (Martínez + iD + sin asignar)
   devueltos: number;
+  enCamino: number;            // ya pedido al proveedor, todavía no llegó
   disponibleEnId: boolean;     // si iD no tiene, se muestra en gris
   motivoRevisar?: string;      // si no se pudo convertir
 }
@@ -228,6 +231,7 @@ async function traerVentas(desde: string): Promise<Ventas> {
 export async function analizarReposicion(
   desde: string,
   onProgress?: (escaneados: number) => void,
+  enCaminoMap?: EnCamino,
 ): Promise<ResultadoReposicion> {
   const locs = await getLocationIds();
   if (!locs.martinez) throw new Error(`No encontré la sucursal "${LOC_MARTINEZ}" en Shopify.`);
@@ -306,6 +310,10 @@ export async function analizarReposicion(
           vendId,
           vendidos,
           devueltos,
+          // Lo que ya pediste al proveedor: se busca por código + talle a pedir.
+          enCamino: (enCaminoMap && codigo && conv.ok)
+            ? (enCaminoMap[claveEnCamino(codigo, conv.tallePedido)] || 0)
+            : 0,
           disponibleEnId: stockId > 0,
         };
 
