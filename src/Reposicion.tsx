@@ -134,7 +134,8 @@ export default function Reposicion() {
           )}
 
           <div style={{ display: 'flex', gap: '18px', flexWrap: 'wrap', marginBottom: '0.8rem', fontSize: '0.9rem' }}>
-            <span>🧩 Para pedir: <strong>{res.filas.length}</strong></span>
+            <span>🧩 A reponer: <strong>{res.filas.length}</strong></span>
+            {res.posiblesEntregas.length > 0 && <span style={{ opacity: 0.75 }}>📥 Posibles entregas: <strong>{res.posiblesEntregas.length}</strong></span>}
             <span style={{ color: '#dc2626' }}>🔴 En 0 en Martínez: <strong>{res.filas.filter(f => f.stockMartinez === 0).length}</strong></span>
             <span style={{ color: '#f59e0b' }}>🟡 Bajo (1-2): <strong>{res.filas.filter(f => f.stockMartinez > 0 && f.stockMartinez <= 2).length}</strong></span>
             <span>🔎 Productos: {res.productosEscaneados}</span>
@@ -153,8 +154,9 @@ export default function Reposicion() {
                   <th style={{ ...th, textAlign: 'center' }}>A pedir</th>
                   <th style={{ ...th, textAlign: 'center' }}>Stock Mart.</th>
                   <th style={{ ...th, textAlign: 'center' }}>Stock iD</th>
-                  <th style={{ ...th, textAlign: 'center', color: '#34d399' }}>Vend. Mart.</th>
-                  <th style={{ ...th, textAlign: 'center', color: '#c4b5fd' }}>Vend. iD</th>
+                  <th style={{ ...th, textAlign: 'center', color: '#fbbf24' }}>Vendidos</th>
+                  <th style={{ ...th, textAlign: 'center', color: '#34d399' }}>Mart.</th>
+                  <th style={{ ...th, textAlign: 'center', color: '#c4b5fd' }}>iD</th>
                   <th style={{ ...th, textAlign: 'center' }}>Dev.</th>
                   {pedido && <th style={{ ...th, textAlign: 'center', color: '#c4b5fd' }}>🚚 En camino</th>}
                   <th style={{ ...th, textAlign: 'center' }}>Cantidad</th>
@@ -179,8 +181,9 @@ export default function Reposicion() {
                       </td>
                       <td style={{ ...td, textAlign: 'center', fontWeight: 'bold', color: semaforo(f.stockMartinez) }}>{f.stockMartinez}</td>
                       <td style={{ ...td, textAlign: 'center' }}>{f.stockId}</td>
-                      <td style={{ ...td, textAlign: 'center', fontWeight: f.vendMartinez ? 'bold' : undefined, color: f.vendMartinez ? '#34d399' : undefined }}>{f.vendMartinez || ''}</td>
-                      <td style={{ ...td, textAlign: 'center', fontWeight: f.vendId ? 'bold' : undefined, color: f.vendId ? '#c4b5fd' : undefined }}>{f.vendId || ''}</td>
+                      <td style={{ ...td, textAlign: 'center', fontWeight: 'bold', color: f.vendidos ? '#fbbf24' : undefined }}>{f.vendidos || ''}</td>
+                      <td style={{ ...td, textAlign: 'center', color: f.vendMartinez ? '#34d399' : undefined }}>{f.vendMartinez || ''}</td>
+                      <td style={{ ...td, textAlign: 'center', color: f.vendId ? '#c4b5fd' : undefined }}>{f.vendId || ''}</td>
                       <td style={{ ...td, textAlign: 'center', color: f.devueltos ? '#f59e0b' : undefined }}>{f.devueltos || ''}</td>
                       {pedido && (
                         <td style={{ ...td, textAlign: 'center', fontWeight: f.enCamino ? 'bold' : undefined, color: f.enCamino ? '#c4b5fd' : undefined }}>
@@ -204,6 +207,45 @@ export default function Reposicion() {
               </tbody>
             </table>
           </div>
+
+          {res.posiblesEntregas.length > 0 && (
+            <div style={{ marginTop: '1.5rem', padding: '1rem', border: '1px solid #6b7280', background: 'rgba(107,114,128,0.08)', borderRadius: '8px' }}>
+              <h3 style={{ marginTop: 0, color: '#9ca3af' }}>📥 Posibles entregas ({res.posiblesEntregas.length})</h3>
+              <p style={{ fontSize: '0.82rem', opacity: 0.8, marginTop: 0 }}>
+                Productos que <strong>no tenés en Martínez</strong> (todas sus variantes en 0). No los reponés,
+                pero se venden desde iD: acá los ves por si querés empezar a trabajarlos.
+              </p>
+              <div style={{ maxHeight: '320px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px' }}>
+                <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+                  <thead>
+                    <tr>
+                      <th style={th}>Código</th>
+                      <th style={th}>Producto</th>
+                      <th style={{ ...th, textAlign: 'center' }}>Talle AR</th>
+                      <th style={{ ...th, textAlign: 'center' }}>A pedir</th>
+                      <th style={{ ...th, textAlign: 'center' }}>Stock iD</th>
+                      <th style={{ ...th, textAlign: 'center', color: '#fbbf24' }}>Vendidos</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {res.posiblesEntregas.map((f, i) => (
+                      <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                        <td style={{ ...td, fontFamily: 'monospace' }}>{f.codigo}</td>
+                        <td style={td}>{f.titulo}</td>
+                        <td style={{ ...td, textAlign: 'center' }}>{f.talleAr}</td>
+                        <td style={{ ...td, textAlign: 'center', color: '#60a5fa' }}>
+                          {f.tallePedido}
+                          {f.escala && f.escala !== '—' && <span style={{ fontSize: '0.65rem', opacity: 0.6, marginLeft: 4 }}>{f.escala === 'EU' ? 'EU' : 'US'}</span>}
+                        </td>
+                        <td style={{ ...td, textAlign: 'center' }}>{f.stockId}</td>
+                        <td style={{ ...td, textAlign: 'center', fontWeight: 'bold', color: f.vendidos ? '#fbbf24' : undefined }}>{f.vendidos || ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
 
           {res.revisar.length > 0 && (
             <div style={{ marginTop: '1.5rem', padding: '1rem', border: '1px solid #f59e0b', background: 'rgba(245,158,11,0.08)', borderRadius: '8px' }}>

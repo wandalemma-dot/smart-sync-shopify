@@ -67,6 +67,7 @@ export interface FilaReposicion {
   devueltos: number;
   enCamino: number;            // ya pedido al proveedor, todavía no llegó
   disponibleEnId: boolean;     // si iD no tiene, se muestra en gris
+  loTengoEnMartinez: boolean;  // el producto ya se trabaja en Martínez
   motivoRevisar?: string;      // si no se pudo convertir
 }
 
@@ -75,8 +76,9 @@ export interface ResultadoReposicion {
   generadoEn: string;
   puedeLeerOrdenes: boolean;
   avisoOrdenes?: string;
-  filas: FilaReposicion[];       // listas para pedir
-  revisar: FilaReposicion[];     // no se pudo convertir: se muestran, no se descartan
+  filas: FilaReposicion[];            // productos que ya trabaja en Martínez
+  posiblesEntregas: FilaReposicion[]; // productos que NO tiene en Martínez (no los repone)
+  revisar: FilaReposicion[];          // no se pudo convertir: se muestran, no se descartan
   productosEscaneados: number;
 }
 
@@ -161,14 +163,16 @@ function qty(level: any): number {
 // Trae ventas por SKU desde una fecha, SEPARADAS por sucursal de despacho
 // (de dónde salió la mercadería), más las devoluciones.
 interface Ventas {
-  mar: Record<string, number>;   // despachado desde DEPOSITO MARTINEZ
-  id: Record<string, number>;    // despachado desde iD
-  otras: Record<string, number>; // otra sucursal o todavía sin despachar
+  total: Record<string, number>; // TOTAL vendido (siempre confiable)
+  mar: Record<string, number>;   // asignado a DEPOSITO MARTINEZ
+  id: Record<string, number>;    // asignado a iD
+  otras: Record<string, number>; // otra sucursal o sin asignar
   devol: Record<string, number>;
   error?: string;
 }
 
 async function traerVentas(desde: string): Promise<Ventas> {
+  const total: Record<string, number> = {};
   const mar: Record<string, number> = {};
   const idl: Record<string, number> = {};
   const otras: Record<string, number> = {};
@@ -207,12 +211,14 @@ async function traerVentas(desde: string): Promise<Ventas> {
           }
         }
 
-        // Lo que se vendió pero todavía no se despachó -> "otras" (sin asignar).
+        // TOTAL vendido: sale de las líneas del pedido. Es el dato confiable,
+        // independiente de cómo Shopify asigne o despache la sucursal.
         for (const li of (orden.lineItems?.edges || [])) {
           const n = li.node;
           const sku = String(n.variant?.sku || n.sku || '').toUpperCase();
           if (!sku) continue;
           const cant = Number(n.quantity) || 0;
+          sum(total, sku, cant);
           const yaDespachado = despachado[sku] || 0;
           const pendiente = Math.max(0, cant - yaDespachado);
           if (pendiente > 0) sum(otras, sku, pendiente);
@@ -227,9 +233,9 @@ async function traerVentas(desde: string): Promise<Ventas> {
       hasNext = !!conn?.pageInfo?.hasNextPage;
       cursor = conn?.pageInfo?.endCursor || null;
     }
-    return { mar, id: idl, otras, devol };
+    return { total, mar, id: idl, otras, devol };
   } catch (e: any) {
-    return { mar, id: idl, otras, devol, error: e?.message || 'No se pudieron leer las órdenes' };
+    return { total, mar, id: idl, otras, devol, error: e?.message || 'No se pudieron leer las órdenes' };
   }
 }
 
@@ -247,6 +253,7 @@ export async function analizarReposicion(
   const errOrdenes = ventas.error;
 
   const filas: FilaReposicion[] = [];
+  const posiblesEntregas: FilaReposicion[] = [];
   const revisar: FilaReposicion[] = [];
   let escaneados = 0;
 
@@ -273,6 +280,12 @@ export async function analizarReposicion(
       const tagsStr = Array.isArray(p.tags) ? p.tags.join(', ') : String(p.tags || '');
       const codigo = extraerCodigo(tagsStr);
 
+      // ¿Es un producto que Wanda YA TRABAJA en Martínez? Lo es si alguna de sus
+      // variantes tiene stock ahí. Si TODAS están en 0, es un producto que no
+      // tiene: no lo repone, va aparte como "posible entrega".
+      const loTengoEnMartinez = (p.variants?.edges || [])
+        .some((ve: any) => qty(ve.node?.inventoryItem?.mar) > 0);
+
       for (const ve of (p.variants?.edges || [])) {
         const v = ve.node;
         const talleAr = String(v.title || '').trim();
@@ -281,7 +294,7 @@ export async function analizarReposicion(
         const sku = String(v.sku || '').toUpperCase();
         const vendMartinez = ventas.mar[sku] || 0;
         const vendId = ventas.id[sku] || 0;
-        const vendidos = vendMartinez + vendId + (ventas.otras[sku] || 0);
+        const vendidos = ventas.total[sku] || 0;
         const devueltos = ventas.devol[sku] || 0;
 
         // Si iD no lo tiene, no se puede reponer: no va a la lista.
@@ -320,10 +333,12 @@ export async function analizarReposicion(
             ? (enCaminoMap[claveEnCamino(codigo, conv.tallePedido)] || 0)
             : 0,
           disponibleEnId: stockId > 0,
+          loTengoEnMartinez,
         };
 
-        if (conv.ok) filas.push(base);
-        else revisar.push({ ...base, motivoRevisar: conv.motivo });
+        if (!conv.ok) revisar.push({ ...base, motivoRevisar: conv.motivo });
+        else if (loTengoEnMartinez) filas.push(base);
+        else posiblesEntregas.push(base);
       }
     }
     hasNext = !!conn?.pageInfo?.hasNextPage;
@@ -336,6 +351,7 @@ export async function analizarReposicion(
   const orden = (a: FilaReposicion, b: FilaReposicion) =>
     (b.vendidos - a.vendidos) || (a.stockMartinez - b.stockMartinez) || a.titulo.localeCompare(b.titulo);
   filas.sort(orden);
+  posiblesEntregas.sort(orden);
   revisar.sort(orden);
 
   return {
@@ -344,6 +360,7 @@ export async function analizarReposicion(
     puedeLeerOrdenes: !errOrdenes,
     avisoOrdenes: errOrdenes,
     filas,
+    posiblesEntregas,
     revisar,
     productosEscaneados: escaneados,
   };
