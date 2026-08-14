@@ -135,6 +135,9 @@ export default function Reposicion() {
 
           <div style={{ display: 'flex', gap: '18px', flexWrap: 'wrap', marginBottom: '0.8rem', fontSize: '0.9rem' }}>
             <span>🧩 A reponer: <strong>{res.filas.length}</strong></span>
+            {res.filas.some(f => f.pendienteEntrega > 0) && (
+              <span style={{ color: '#f87171' }}>⚠ Sin preparar (hay que entregar): <strong>{res.filas.filter(f => f.pendienteEntrega > 0).length}</strong></span>
+            )}
             {res.posiblesEntregas.length > 0 && <span style={{ opacity: 0.75 }}>📥 Posibles entregas: <strong>{res.posiblesEntregas.length}</strong></span>}
             <span style={{ color: '#dc2626' }}>🔴 En 0 en Martínez: <strong>{res.filas.filter(f => f.stockMartinez === 0).length}</strong></span>
             <span style={{ color: '#f59e0b' }}>🟡 Bajo (1-2): <strong>{res.filas.filter(f => f.stockMartinez > 0 && f.stockMartinez <= 2).length}</strong></span>
@@ -155,6 +158,7 @@ export default function Reposicion() {
                   <th style={{ ...th, textAlign: 'center' }}>Stock Mart.</th>
                   <th style={{ ...th, textAlign: 'center' }}>Stock iD</th>
                   <th style={{ ...th, textAlign: 'center', color: '#fbbf24' }}>Vendidos</th>
+                  <th style={{ ...th, textAlign: 'center', color: '#f87171' }}>⚠ Sin<br />preparar</th>
                   <th style={{ ...th, textAlign: 'center', color: '#34d399' }}>Mart.</th>
                   <th style={{ ...th, textAlign: 'center', color: '#c4b5fd' }}>iD</th>
                   <th style={{ ...th, textAlign: 'center' }}>Dev.</th>
@@ -165,12 +169,24 @@ export default function Reposicion() {
               <tbody>
                 {res.filas.map((f, i) => {
                   const yaViene = f.enCamino > 0;
+                  // Línea gruesa cuando empieza otro producto: así cada modelo
+                  // se ve como un bloque completo con todos sus talles.
+                  const nuevoProducto = i === 0 || res.filas[i - 1].handle !== f.handle;
                   return (
-                    <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: yaViene ? 'rgba(139,92,246,0.10)' : undefined }}>
-                      <td style={{ ...td, fontFamily: 'monospace' }}>{f.codigo}</td>
-                      <td style={td}>
-                        {f.titulo}
-                        <span style={{ fontSize: '0.7rem', marginLeft: 6, opacity: 0.6 }}>{f.marca === 'lecoq' ? 'LE COQ' : 'CONVERSE'}</span>
+                    <tr key={i} style={{
+                      borderTop: nuevoProducto ? '3px solid #60a5fa' : '1px solid rgba(255,255,255,0.06)',
+                      background: yaViene ? 'rgba(139,92,246,0.10)' : undefined,
+                    }}>
+                      <td style={{ ...td, fontFamily: 'monospace', fontWeight: nuevoProducto ? 'bold' : undefined, opacity: nuevoProducto ? 1 : 0.35 }}>
+                        {nuevoProducto ? f.codigo : '↳'}
+                      </td>
+                      <td style={{ ...td, fontWeight: nuevoProducto ? 'bold' : undefined }}>
+                        {nuevoProducto ? (
+                          <>
+                            {f.titulo}
+                            <span style={{ fontSize: '0.7rem', marginLeft: 6, opacity: 0.6 }}>{f.marca === 'lecoq' ? 'LE COQ' : 'CONVERSE'}</span>
+                          </>
+                        ) : <span style={{ opacity: 0.3 }}>·</span>}
                       </td>
                       <td style={{ ...td, textAlign: 'center' }}>{f.talleAr}</td>
                       <td style={{ ...td, textAlign: 'center', fontWeight: 'bold', color: '#60a5fa' }}>
@@ -182,6 +198,7 @@ export default function Reposicion() {
                       <td style={{ ...td, textAlign: 'center', fontWeight: 'bold', color: semaforo(f.stockMartinez) }}>{f.stockMartinez}</td>
                       <td style={{ ...td, textAlign: 'center' }}>{f.stockId}</td>
                       <td style={{ ...td, textAlign: 'center', fontWeight: 'bold', color: f.vendidos ? '#fbbf24' : undefined }}>{f.vendidos || ''}</td>
+                      <td style={{ ...td, textAlign: 'center', fontWeight: 'bold', color: f.pendienteEntrega ? '#f87171' : undefined }}>{f.pendienteEntrega || ''}</td>
                       <td style={{ ...td, textAlign: 'center', color: f.vendMartinez ? '#34d399' : undefined }}>{f.vendMartinez || ''}</td>
                       <td style={{ ...td, textAlign: 'center', color: f.vendId ? '#c4b5fd' : undefined }}>{f.vendId || ''}</td>
                       <td style={{ ...td, textAlign: 'center', color: f.devueltos ? '#f59e0b' : undefined }}>{f.devueltos || ''}</td>
@@ -228,10 +245,12 @@ export default function Reposicion() {
                     </tr>
                   </thead>
                   <tbody>
-                    {res.posiblesEntregas.map((f, i) => (
-                      <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                        <td style={{ ...td, fontFamily: 'monospace' }}>{f.codigo}</td>
-                        <td style={td}>{f.titulo}</td>
+                    {res.posiblesEntregas.map((f, i) => {
+                      const nuevo = i === 0 || res.posiblesEntregas[i - 1].handle !== f.handle;
+                      return (
+                      <tr key={i} style={{ borderTop: nuevo ? '3px solid #6b7280' : '1px solid rgba(255,255,255,0.06)' }}>
+                        <td style={{ ...td, fontFamily: 'monospace', fontWeight: nuevo ? 'bold' : undefined, opacity: nuevo ? 1 : 0.35 }}>{nuevo ? f.codigo : '↳'}</td>
+                        <td style={{ ...td, fontWeight: nuevo ? 'bold' : undefined }}>{nuevo ? f.titulo : <span style={{ opacity: 0.3 }}>·</span>}</td>
                         <td style={{ ...td, textAlign: 'center' }}>{f.talleAr}</td>
                         <td style={{ ...td, textAlign: 'center', color: '#60a5fa' }}>
                           {f.tallePedido}
@@ -240,7 +259,8 @@ export default function Reposicion() {
                         <td style={{ ...td, textAlign: 'center' }}>{f.stockId}</td>
                         <td style={{ ...td, textAlign: 'center', fontWeight: 'bold', color: f.vendidos ? '#fbbf24' : undefined }}>{f.vendidos || ''}</td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

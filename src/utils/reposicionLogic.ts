@@ -66,6 +66,7 @@ export interface FilaReposicion {
   vendidos: number;      // total (Martínez + iD + sin asignar)
   devueltos: number;
   enCamino: number;            // ya pedido al proveedor, todavía no llegó
+  pendienteEntrega: number;    // vendido y NO preparado: hay que conseguirlo sí o sí
   disponibleEnId: boolean;     // si iD no tiene, se muestra en gris
   loTengoEnMartinez: boolean;  // el producto ya se trabaja en Martínez
   motivoRevisar?: string;      // si no se pudo convertir
@@ -129,6 +130,7 @@ const ORDERS_QUERY = `
           fulfillmentOrders(first: 3) {
             edges {
               node {
+                status
                 assignedLocation { name }
                 lineItems(first: 25) {
                   edges { node { totalQuantity lineItem { sku variant { sku } } } }
@@ -163,10 +165,11 @@ function qty(level: any): number {
 // Trae ventas por SKU desde una fecha, SEPARADAS por sucursal de despacho
 // (de dónde salió la mercadería), más las devoluciones.
 interface Ventas {
-  total: Record<string, number>; // TOTAL vendido (siempre confiable)
-  mar: Record<string, number>;   // asignado a DEPOSITO MARTINEZ
-  id: Record<string, number>;    // asignado a iD
-  otras: Record<string, number>; // otra sucursal o sin asignar
+  total: Record<string, number>;     // TOTAL vendido (siempre confiable)
+  mar: Record<string, number>;       // asignado a DEPOSITO MARTINEZ
+  id: Record<string, number>;        // asignado a iD
+  otras: Record<string, number>;     // otra sucursal o sin asignar
+  pendientes: Record<string, number>; // VENDIDO Y NO PREPARADO: hay que pedirlo sí o sí
   devol: Record<string, number>;
   error?: string;
 }
@@ -176,6 +179,7 @@ async function traerVentas(desde: string): Promise<Ventas> {
   const mar: Record<string, number> = {};
   const idl: Record<string, number> = {};
   const otras: Record<string, number> = {};
+  const pendientes: Record<string, number> = {};
   const devol: Record<string, number> = {};
   const sum = (obj: Record<string, number>, sku: string, n: number) => { obj[sku] = (obj[sku] || 0) + n; };
 
@@ -198,6 +202,10 @@ async function traerVentas(desde: string): Promise<Ventas> {
         const despachado: Record<string, number> = {};
         for (const fo of (orden.fulfillmentOrders?.edges || [])) {
           const locName = String(fo?.node?.assignedLocation?.name || '').trim().toUpperCase();
+          const estado = String(fo?.node?.status || '').toUpperCase();
+          // "No preparado": el pedido todavía no se despachó. Esa mercadería hay
+          // que conseguirla sí o sí para poder entregar.
+          const noPreparado = estado === 'OPEN' || estado === 'IN_PROGRESS' || estado === 'SCHEDULED' || estado === 'ON_HOLD';
           const destino = locName === LOC_MARTINEZ.toUpperCase() ? mar
             : locName === LOC_ID.toUpperCase() ? idl
             : otras;
@@ -208,6 +216,7 @@ async function traerVentas(desde: string): Promise<Ventas> {
             const cant = Number(n.totalQuantity) || 0;
             sum(destino, sku, cant);
             sum(despachado, sku, cant);
+            if (noPreparado) sum(pendientes, sku, cant);
           }
         }
 
@@ -233,9 +242,9 @@ async function traerVentas(desde: string): Promise<Ventas> {
       hasNext = !!conn?.pageInfo?.hasNextPage;
       cursor = conn?.pageInfo?.endCursor || null;
     }
-    return { total, mar, id: idl, otras, devol };
+    return { total, mar, id: idl, otras, pendientes, devol };
   } catch (e: any) {
-    return { total, mar, id: idl, otras, devol, error: e?.message || 'No se pudieron leer las órdenes' };
+    return { total, mar, id: idl, otras, pendientes, devol, error: e?.message || 'No se pudieron leer las órdenes' };
   }
 }
 
@@ -296,9 +305,11 @@ export async function analizarReposicion(
         const vendId = ventas.id[sku] || 0;
         const vendidos = ventas.total[sku] || 0;
         const devueltos = ventas.devol[sku] || 0;
+        const pendienteEntrega = ventas.pendientes[sku] || 0;
 
         // Si iD no lo tiene, no se puede reponer: no va a la lista.
-        if (stockId <= 0) continue;
+        // (Salvo que haya una venta pendiente de entregar: eso hay que verlo igual.)
+        if (stockId <= 0 && pendienteEntrega === 0) continue;
 
         // Qué mostramos: lo que tuvo venta, o lo que está en 0 en Martínez.
         if (vendidos === 0 && stockMartinez > 0) continue;
@@ -332,12 +343,15 @@ export async function analizarReposicion(
           enCamino: (enCaminoMap && codigo && conv.ok)
             ? (enCaminoMap[claveEnCamino(codigo, conv.tallePedido)] || 0)
             : 0,
+          pendienteEntrega,
           disponibleEnId: stockId > 0,
           loTengoEnMartinez,
         };
 
+        // Si hay una venta SIN PREPARAR, va sí o sí a la lista principal aunque
+        // sea un producto que no trabaja en Martínez: la tiene que entregar.
         if (!conv.ok) revisar.push({ ...base, motivoRevisar: conv.motivo });
-        else if (loTengoEnMartinez) filas.push(base);
+        else if (loTengoEnMartinez || pendienteEntrega > 0) filas.push(base);
         else posiblesEntregas.push(base);
       }
     }
@@ -346,13 +360,46 @@ export async function analizarReposicion(
     onProgress?.(escaneados);
   }
 
-  // Orden: primero lo MÁS VENDIDO (es lo que más importa para pedir), y dentro
-  // de eso, lo más urgente por stock bajo en Martínez.
-  const orden = (a: FilaReposicion, b: FilaReposicion) =>
-    (b.vendidos - a.vendidos) || (a.stockMartinez - b.stockMartinez) || a.titulo.localeCompare(b.titulo);
-  filas.sort(orden);
-  posiblesEntregas.sort(orden);
-  revisar.sort(orden);
+  // ORDEN: los talles de un mismo producto SIEMPRE van juntos (así se pide el
+  // producto entero de una sola mirada). Los productos se ordenan por lo más
+  // vendido; dentro de cada producto, por talle de menor a mayor.
+  const clavePorTalle = (t: string): [number, number, string] => {
+    const s = String(t || '').trim().toUpperCase();
+    if (/^[0-9]+([.,][0-9]+)?$/.test(s)) return [0, parseFloat(s.replace(',', '.')), s];
+    const letras = ['XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', 'TU', 'UNICO'];
+    const i = letras.indexOf(s);
+    return i >= 0 ? [1, i, s] : [2, 0, s];
+  };
+
+  const ordenarAgrupado = (lista: FilaReposicion[]) => {
+    // Puntaje del producto = total vendido de todos sus talles.
+    const puntaje = new Map<string, number>();
+    const urgencia = new Map<string, number>();
+    const pendiente = new Map<string, number>();
+    for (const f of lista) {
+      puntaje.set(f.handle, (puntaje.get(f.handle) || 0) + f.vendidos);
+      pendiente.set(f.handle, (pendiente.get(f.handle) || 0) + f.pendienteEntrega);
+      urgencia.set(f.handle, Math.min(urgencia.get(f.handle) ?? 99999, f.stockMartinez));
+    }
+    lista.sort((a, b) => {
+      if (a.handle !== b.handle) {
+        // Primero lo que tiene ventas SIN PREPARAR (hay que entregarlo).
+        const na = pendiente.get(a.handle) || 0, nb = pendiente.get(b.handle) || 0;
+        if ((nb > 0 ? 1 : 0) !== (na > 0 ? 1 : 0)) return (nb > 0 ? 1 : 0) - (na > 0 ? 1 : 0);
+        const pa = puntaje.get(a.handle) || 0, pb = puntaje.get(b.handle) || 0;
+        if (pb !== pa) return pb - pa;
+        const ua = urgencia.get(a.handle) ?? 0, ub = urgencia.get(b.handle) ?? 0;
+        if (ua !== ub) return ua - ub;
+        return a.titulo.localeCompare(b.titulo) || a.handle.localeCompare(b.handle);
+      }
+      const ka = clavePorTalle(a.talleAr), kb = clavePorTalle(b.talleAr);
+      return (ka[0] - kb[0]) || (ka[1] - kb[1]) || ka[2].localeCompare(kb[2]);
+    });
+  };
+
+  ordenarAgrupado(filas);
+  ordenarAgrupado(posiblesEntregas);
+  ordenarAgrupado(revisar);
 
   return {
     desde,
