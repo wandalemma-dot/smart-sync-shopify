@@ -113,25 +113,28 @@ const PRODUCTS_QUERY = `
 
 // Ventas + devoluciones desde una fecha. Si el token no tiene read_orders,
 // esto falla y lo avisamos en pantalla (sin romper el resto).
+// ⚠ Shopify limita el "costo" de cada consulta a 1000. El costo se multiplica
+// por cada nivel anidado, así que estos números tienen que quedar chicos.
+// Con 5 x 3 x 25 el costo queda holgado por debajo del límite.
 const ORDERS_QUERY = `
   query($cursor: String, $q: String!) {
-    orders(first: 50, after: $cursor, query: $q) {
+    orders(first: 5, after: $cursor, query: $q) {
       pageInfo { hasNextPage endCursor }
       edges {
         node {
           name
           createdAt
-          fulfillmentOrders(first: 20) {
+          fulfillmentOrders(first: 3) {
             edges {
               node {
                 assignedLocation { name }
-                lineItems(first: 100) {
+                lineItems(first: 25) {
                   edges { node { totalQuantity lineItem { sku variant { sku } } } }
                 }
               }
             }
           }
-          lineItems(first: 100) {
+          lineItems(first: 25) {
             edges { node { quantity sku refundableQuantity variant { sku } } }
           }
         }
@@ -176,7 +179,9 @@ async function traerVentas(desde: string): Promise<Ventas> {
     let cursor: string | null = null;
     let hasNext = true;
     let guard = 0;
-    while (hasNext && guard < 100) {
+    // Trae de a 5 órdenes por vuelta (límite de costo de Shopify), así que
+    // permitimos muchas más vueltas para no cortar el período.
+    while (hasNext && guard < 600) {
       guard++;
       const data: any = await shopifyGraphQL<any>(ORDERS_QUERY, { cursor, q: `created_at:>=${desde}` });
       const conn = data?.orders;

@@ -125,7 +125,10 @@ export default function Reposicion() {
         <>
           {!res.puedeLeerOrdenes && (
             <div style={{ padding: '0.9rem', marginBottom: '1rem', border: '1px solid #f59e0b', background: 'rgba(245,158,11,0.12)', borderRadius: '8px', fontSize: '0.9rem' }}>
-              ⚠️ No pude leer las ventas (la columna "Vendidos" va a estar en 0). Suele ser porque el permiso <strong>read_orders</strong> es nuevo y hay que <strong>reautorizar la app</strong> en Shopify. El resto (stock de Martínez y de iD) sí es correcto.
+              ⚠️ No pude leer las ventas (las columnas "Vend." van a estar en 0). El resto (stock de Martínez y de iD) sí es correcto.
+              {/^.*ACCESS_DENIED.*$/.test(res.avisoOrdenes || '')
+                ? <> Falta el permiso <strong>read_orders</strong>: hay que <strong>reautorizar la app</strong> en Shopify.</>
+                : <> Detalle del error abajo.</>}
               <div style={{ opacity: 0.7, marginTop: 6, fontSize: '0.8rem' }}>{res.avisoOrdenes}</div>
             </div>
           )}
