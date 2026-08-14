@@ -118,10 +118,14 @@ const ORDERS_QUERY = `
         node {
           name
           createdAt
-          fulfillments(first: 10) {
-            location { name }
-            fulfillmentLineItems(first: 100) {
-              edges { node { quantity lineItem { sku variant { sku } } } }
+          fulfillmentOrders(first: 20) {
+            edges {
+              node {
+                assignedLocation { name }
+                lineItems(first: 100) {
+                  edges { node { totalQuantity lineItem { sku variant { sku } } } }
+                }
+              }
             }
           }
           lineItems(first: 100) {
@@ -176,18 +180,20 @@ async function traerVentas(desde: string): Promise<Ventas> {
       for (const edge of (conn?.edges || [])) {
         const orden = edge.node;
 
-        // Ventas por sucursal: miramos de dónde se despachó cada ítem.
+        // Ventas por sucursal: usamos la sucursal a la que Shopify ASIGNÓ el
+        // pedido (la que tenía el stock), no de dónde se despachó físicamente.
+        // Si no, todo cae en Martínez porque desde ahí se envía siempre.
         const despachado: Record<string, number> = {};
-        for (const f of (orden.fulfillments || [])) {
-          const locName = String(f?.location?.name || '').trim().toUpperCase();
+        for (const fo of (orden.fulfillmentOrders?.edges || [])) {
+          const locName = String(fo?.node?.assignedLocation?.name || '').trim().toUpperCase();
           const destino = locName === LOC_MARTINEZ.toUpperCase() ? mar
             : locName === LOC_ID.toUpperCase() ? idl
             : otras;
-          for (const fli of (f?.fulfillmentLineItems?.edges || [])) {
+          for (const fli of (fo?.node?.lineItems?.edges || [])) {
             const n = fli.node;
             const sku = String(n.lineItem?.variant?.sku || n.lineItem?.sku || '').toUpperCase();
             if (!sku) continue;
-            const cant = Number(n.quantity) || 0;
+            const cant = Number(n.totalQuantity) || 0;
             sum(destino, sku, cant);
             sum(despachado, sku, cant);
           }
