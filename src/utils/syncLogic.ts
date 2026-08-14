@@ -1017,12 +1017,16 @@ export async function processFiles(
     }
   }
 
-  // PRODUCTOS EN PELIGRO: están publicados y todavía tienen stock del proveedor,
-  // pero NO figuran en la lista de stock que acaba de mandar. Si el proveedor ya
-  // no los lista, no los tiene más: hay que darlos de baja de Shopify.
-  // Solo tiene sentido cuando leímos el catálogo completo de la marca en vivo.
+  // PRODUCTOS QUE EL PROVEEDOR YA NO LISTA: están publicados y todavía tienen
+  // stock de la sucursal del proveedor, pero NO figuran en el Excel que mandó.
+  // A esos se les pone el stock en 0 (no se borran).
+  //
+  // ⚠ SOLO para CONVERSE y LE COQ (depósito iD), porque ahí el Excel es el
+  // catálogo COMPLETO de lo que tiene el proveedor. Otras marcas mandan listas
+  // parciales ("cargá esto"), y poner en 0 lo que no aparece sería un error grave.
   const enPeligro: ProductoEnPeligro[] = [];
-  if (!shopifyExportFile && Object.keys(excelMap).length > 0) {
+  const marcaConCatalogoCompleto = config.brand === 'converse' || config.brand === 'lecoq';
+  if (marcaConCatalogoCompleto && !shopifyExportFile && Object.keys(excelMap).length > 0) {
     for (const prod of shopifyProducts) {
       if (handlesMatcheados.has(prod.handle)) continue;
       const variantes = prod.variants.edges.map((e: any) => e.node);
