@@ -10,7 +10,7 @@
 // ============================================================================
 
 import { shopifyGraphQL } from './shopify';
-import { talleMatches, STOCK_LOCATION, converseTableFromTags } from './syncLogic';
+import { talleMatches, STOCK_LOCATION, converseTableFromTags, talleShopifyLeCoq } from './syncLogic';
 import type { SyncResult, SyncConfig } from './syncLogic';
 
 export interface StockChange {
@@ -132,9 +132,19 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     const convTable = config.brand === 'converse' ? converseTableFromTags(tagsByHandle[handle] || '') : null;
     for (const [size, qtyRaw] of Object.entries(d.sizes || {})) {
       const desired = Number(qtyRaw);
-      const argSize = convTable ? (convTable[String(size)] || String(size)) : String(size);
-      // Matchea por el talle convertido (ARG) o, por las dudas, por el talle tal cual.
-      const v = live.find((n: any) => talleMatches(argSize, n.title) || talleMatches(size, n.title));
+      // Converse: US -> ARG por tabla. Le Coq calzado: el talle de Shopify es
+      // UNO MENOS que el del Excel (Excel 40 = Shopify 39).
+      const argSize = convTable
+        ? (convTable[String(size)] || String(size))
+        : config.brand === 'lecoq'
+          ? talleShopifyLeCoq(size, d.title)
+          : String(size);
+      // Si la marca tiene conversión de talle (Converse / Le Coq calzado) usamos
+      // SOLO el talle convertido: si aceptáramos también el original podríamos
+      // cargarle el stock al talle equivocado.
+      const hayConversion = !!convTable || (config.brand === 'lecoq' && argSize !== String(size));
+      const v = live.find((n: any) =>
+        hayConversion ? talleMatches(argSize, n.title) : talleMatches(size, n.title));
       if (!v || !v.inventoryItem?.id) {
         notFound.push(`${shopTitle} · ${size}`);
         continue;

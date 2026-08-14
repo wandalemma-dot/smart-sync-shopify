@@ -202,6 +202,50 @@ export function niceTitle(text: string): string {
     .trim();
 }
 
+// Categoría en español para LE COQ, detectada por el nombre del proveedor
+// (que viene en inglés/francés). Ej: "SOCKS" -> Medias, "MAILLOT" -> Camiseta.
+// El orden importa: lo más específico va primero.
+const LECOQ_CATEGORIAS: [RegExp, string][] = [
+  [/\bSOCKS?\b/i, 'Medias'],
+  [/\bNECK\b/i, 'Cuello'],
+  [/\bPOLO\b/i, 'Chomba'],
+  [/\bMAILLOT\b|\bJERSEY\b/i, 'Camiseta'],
+  [/\bDÉBARDEUR\b|\bDEBARDEUR\b|\bTANK\b/i, 'Musculosa'],
+  [/\bTEE\b|\bT-?SHIRT\b/i, 'Remera'],
+  [/\bSHORT\b/i, 'Short'],
+  [/\bRAIN PANT\b|\bPANT\b|\bPANTALON\b|\bCHINO\b/i, 'Pantalón'],
+  [/\bPARKA\b/i, 'Parka'],
+  [/\bDOUDOUNE\b|\bJACKET\b|\bVESTE\b/i, 'Campera'],
+  [/\bSWEAT\b|\bHOODIE\b|\bCREW\b/i, 'Buzo'],
+  [/\bDRESS\b/i, 'Vestido'],
+  [/\bBACKPACK\b/i, 'Mochila'],
+  [/\bBAG\b/i, 'Bolso'],
+  [/\bCAP\b|\bHAT\b/i, 'Gorra'],
+  [/\bRUNNING\b|\bSNEAKER\b|\bSTAR\b|\bCOURT\b/i, 'Zapatillas'],
+];
+
+export function lecoqCategoryWord(name: string, talle?: string): string {
+  const t = String(name || '');
+  for (const [re, palabra] of LECOQ_CATEGORIAS) if (re.test(t)) return palabra;
+  // Si no reconocimos el nombre pero el talle es numérico de calzado, es zapatilla.
+  if (talle && /^\d/.test(String(talle))) return 'Zapatillas';
+  return '';
+}
+
+// LE COQ CALZADO: el talle de Shopify es UNO MENOS que el del Excel del
+// proveedor (Excel 40 = Shopify 39). Solo aplica al calzado (talles numéricos).
+// ⚠ SOLO se le resta 1 al CALZADO. Ojo que hay otros talles numéricos que NO
+// son calzado y no se tocan: pantalones (38), medias (1, 2), vestidos.
+// Por eso hace falta el nombre del producto: decide si es zapatilla o no.
+export function talleShopifyLeCoq(talleExcel: string | number, nombreProducto?: string): string {
+  const s = String(talleExcel ?? '').trim();
+  if (!/^\d+([.,]\d+)?$/.test(s)) return s;        // 3XL, L, TU -> tal cual
+  if (nombreProducto !== undefined && lecoqCategoryWord(nombreProducto) !== 'Zapatillas') return s;
+  const n = parseFloat(s.replace(',', '.'));
+  if (isNaN(n) || n < 30) return s;                 // medias 1/2, etc.
+  return String(n - 1);
+}
+
 // Palabra de categoría en español detectada por el texto del producto (Bloque/Protec).
 export function bloqueCategoryWord(text: string): string {
   const t = String(text || '').toUpperCase();
@@ -1083,7 +1127,9 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
         }
       }
     } else {
-      for (const [size, qty] of sortSizeEntries(Object.entries(prod.sizes))) {
+      for (const [sizeRaw, qty] of sortSizeEntries(Object.entries(prod.sizes))) {
+        // Le Coq calzado: en Shopify el talle va UNO MENOS que en el Excel.
+        const size = config.brand === 'lecoq' ? talleShopifyLeCoq(sizeRaw, prod.title) : sizeRaw;
         const isUnico = ['unico', 'único', 'tu', ''].includes(String(size).toLowerCase());
         let variantSku = prod.coditm;
         if (config.brand === 'lecoq') variantSku = `${prod.coditm}-${size}`;
@@ -1105,6 +1151,12 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
     // Converse lleva el prefijo del estilo de tu tienda ("Zapatillas Converse …").
     if (config.brand === 'converse') {
       displayTitle = (converseKind && converseKind >= 1 ? 'Zapatillas Converse ' : 'Converse ') + niceTitle(prod.title);
+    } else if (config.brand === 'lecoq') {
+      // Formato de la tienda: "{Categoría} Le Coq Sportif {Nombre}".
+      const talleEj = Object.keys(prod.sizes)[0] || '';
+      const cat = lecoqCategoryWord(prod.title, talleEj);
+      displayTitle = `${cat} Le Coq Sportif ${niceTitle(prod.title)}`.replace(/\s+/g, ' ').trim();
+      productType = cat;
     } else {
       displayTitle = niceTitle(displayTitle);
     }
