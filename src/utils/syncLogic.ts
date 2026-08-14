@@ -946,15 +946,17 @@ export async function processFiles(
            const variant = vEdge.node;
            const variantPrice = parseFloat(variant.price);
 
-           // ACTUALIZACIÓN DE PRECIO
-           // Ojo: Si el precio de venta sugerido cambia, preparamos acción.
-           // variantPrice > 0 evita falsos positivos cuando el CSV no trae precio
-           // (ej. el export de inventario), que dejaría el precio en 0.
-           const costoActual = (variant as any).cost ? parseFloat((variant as any).cost) : undefined;
-           const cambiaPrecio = calculatedPrice !== variantPrice && variantPrice > 0;
-           const cambiaCosto = calculatedCost > 0 && costoActual !== undefined && Math.round(costoActual) !== Math.round(calculatedCost);
+           // ACTUALIZACIÓN DE PRECIO Y COSTO.
+           // ⚠ NO exigir que el precio/costo actual sea > 0: los productos recién
+           // creados quedan en $0 y son JUSTAMENTE los que hay que corregir.
+           // (Antes se excluían y por eso "solo actualizaba zapatillas": la ropa
+           // nueva estaba en 0 y quedaba afuera.)
+           const costoActual = (variant as any).cost !== undefined && (variant as any).cost !== ''
+             ? parseFloat((variant as any).cost) : 0;
+           const cambiaPrecio = calculatedPrice > 0 && calculatedPrice !== variantPrice;
+           const cambiaCosto = calculatedCost > 0 && Math.round(costoActual) !== Math.round(calculatedCost);
 
-           if (provData.wholesale > 0 && variantPrice > 0) {
+           if (provData.wholesale > 0) {
               const sku = variant.sku || cod;
               const clave = `${prod.handle}|${sku}|${variant.title}`;
               if (vistos.has(clave)) continue;
