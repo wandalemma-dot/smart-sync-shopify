@@ -463,6 +463,9 @@ export default function App() {
                 <div style={{ fontSize: '0.9rem', marginBottom: '0.6rem' }}>
                   📍 Sucursal: <strong>{stockPlan.locationName}</strong> · Cambios: <strong style={{ color: '#f59e0b' }}>{stockPlan.changes.length}</strong> · Sin cambios: {stockPlan.unchanged}
                   {stockPlan.notFound.length > 0 && <> · No ubicados: {stockPlan.notFound.length}</>}
+                  {stockPlan.changes.some(c => c.motivo) && (
+                    <> · <span style={{ color: '#f87171' }}>🗑️ A poner en 0 (el proveedor ya no los lista): <strong>{stockPlan.changes.filter(c => c.motivo).length}</strong></span></>
+                  )}
                 </div>
                 {stockPlan.changes.length === 0 ? (
                   (stockPlan.unchanged === 0 && stockPlan.notFound.length === 0) ? (
@@ -487,8 +490,11 @@ export default function App() {
                         </thead>
                         <tbody>
                           {stockPlan.changes.map((c, i) => (
-                            <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                              <td style={{ padding: '6px 10px' }}>{c.title}</td>
+                            <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: c.motivo ? 'rgba(220,38,38,0.10)' : undefined }}>
+                              <td style={{ padding: '6px 10px' }}>
+                                {c.title}
+                                {c.motivo && <div style={{ fontSize: '0.7rem', color: '#f87171' }}>🗑️ {c.motivo}</div>}
+                              </td>
                               <td style={{ padding: '6px', fontFamily: 'monospace', opacity: 0.85 }}>{c.code}</td>
                               <td style={{ padding: '6px', textAlign: 'center' }}>{c.talle}</td>
                               <td style={{ padding: '6px', textAlign: 'center', opacity: 0.7 }}>{c.current}</td>

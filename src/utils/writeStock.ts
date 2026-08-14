@@ -22,6 +22,8 @@ export interface StockChange {
   inventoryItemId: string;
   current: number;
   desired: number;
+  // Si viene, explica por qué se pone en 0 (el proveedor ya no lo lista).
+  motivo?: string;
 }
 
 export interface StockPlan {
@@ -98,7 +100,16 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     .filter(([, d]: [string, any]) => d.foundInShopify && d.shopifyHandle)
     .map(([cod, d]) => ({ cod, d }));
 
-  const handles = [...new Set(entries.map((e) => e.d.shopifyHandle as string))];
+  // También traemos los productos que el proveedor YA NO LISTA: a esos les vamos
+  // a poner el stock en 0 (no los borramos).
+  const handlesPeligro = (result.enPeligro || []).map((p) => p.handle);
+  const tituloPeligro = new Map((result.enPeligro || []).map((p) => [p.handle, p.titulo]));
+  const codigoPeligro = new Map((result.enPeligro || []).map((p) => [p.handle, p.codigo || '']));
+
+  const handles = [...new Set([
+    ...entries.map((e) => e.d.shopifyHandle as string),
+    ...handlesPeligro,
+  ])];
 
   // Traemos las variantes en vivo (con inventoryItem id y stock actual) por lotes de handles.
   const liveByHandle: Record<string, any[]> = {};
@@ -162,6 +173,30 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
         inventoryItemId: v.inventoryItem.id,
         current,
         desired,
+      });
+    }
+  }
+
+  // El proveedor ya no lista estos productos -> les ponemos el stock en 0.
+  // No se borran: solo dejan de estar disponibles para la venta.
+  for (const handle of handlesPeligro) {
+    const live = liveByHandle[handle] || [];
+    const shopTitle = titleByHandle[handle] || tituloPeligro.get(handle) || handle;
+    for (const v of live) {
+      if (!v?.inventoryItem?.id) continue;
+      const qEntry = (v.inventoryItem.inventoryLevel?.quantities || []).find((x: any) => x.name === 'available');
+      const current = qEntry ? Number(qEntry.quantity) : 0;
+      if (current <= 0) continue; // ya está en 0
+      changes.push({
+        handle,
+        title: shopTitle,
+        talle: String(v.title || ''),
+        sku: String(v.sku || ''),
+        code: codigoPeligro.get(handle) || '',
+        inventoryItemId: v.inventoryItem.id,
+        current,
+        desired: 0,
+        motivo: 'El proveedor ya no lo lista',
       });
     }
   }

@@ -45,9 +45,20 @@ export interface UpdateAction {
   newStock?: number;
 }
 
+// Producto que está publicado con stock del proveedor pero YA NO figura en la
+// lista de stock que mandó: el proveedor no lo tiene más -> hay que darlo de baja.
+export interface ProductoEnPeligro {
+  handle: string;
+  titulo: string;
+  codigo: string | null;
+  stockProveedor: number;   // lo que todavía figura en la sucursal del proveedor
+  talles: string[];
+}
+
 export interface SyncResult {
   updatesToApply: UpdateAction[];
   missingProducts: MissingProduct[];
+  enPeligro: ProductoEnPeligro[];
   alerts: AlertMessage[];
   excelMap: Record<string, any>;
 }
@@ -878,6 +889,7 @@ export async function processFiles(
   }
 
   const updatesToApply: UpdateAction[] = [];
+  const handlesMatcheados = new Set<string>(); // para detectar los que ya no manda el proveedor
 
   // Mapear Shopify contra el ExcelMap
   for (const prod of shopifyProducts) {
@@ -915,6 +927,7 @@ export async function processFiles(
       }
 
       if (match) {
+        handlesMatcheados.add(prod.handle);
         provData.foundInShopify = true;
         provData.shopifyHandle = prod.handle;
         provData.shopifyVariants = prod.variants.edges.map((e: any) => e.node);
@@ -1004,6 +1017,31 @@ export async function processFiles(
     }
   }
 
+  // PRODUCTOS EN PELIGRO: están publicados y todavía tienen stock del proveedor,
+  // pero NO figuran en la lista de stock que acaba de mandar. Si el proveedor ya
+  // no los lista, no los tiene más: hay que darlos de baja de Shopify.
+  // Solo tiene sentido cuando leímos el catálogo completo de la marca en vivo.
+  const enPeligro: ProductoEnPeligro[] = [];
+  if (!shopifyExportFile && Object.keys(excelMap).length > 0) {
+    for (const prod of shopifyProducts) {
+      if (handlesMatcheados.has(prod.handle)) continue;
+      const variantes = prod.variants.edges.map((e: any) => e.node);
+      const stock = variantes.reduce((a: number, v: any) => a + (Number(v.inventoryQuantity) || 0), 0);
+      if (stock <= 0) continue; // sin stock del proveedor: no urge
+      const tagsStr = String(prod.tags || '');
+      const cod = tagsStr.split(',').map(s => s.trim().toUpperCase())
+        .find(t => t && !t.includes(' ') && /\d/.test(t) && /^[A-Z0-9]{4,}$/.test(t)) || null;
+      enPeligro.push({
+        handle: prod.handle,
+        titulo: prod.title,
+        codigo: cod,
+        stockProveedor: stock,
+        talles: variantes.filter((v: any) => Number(v.inventoryQuantity) > 0).map((v: any) => String(v.title)),
+      });
+    }
+    enPeligro.sort((a, b) => b.stockProveedor - a.stockProveedor);
+  }
+
   // Identificar faltantes: cualquier producto del proveedor que NO exista en
   // Shopify. Antes se exigía precio > 0, pero los archivos de solo stock (Converse
   // formato nuevo) vienen sin precio, y esos faltantes hay que crearlos igual.
@@ -1028,6 +1066,7 @@ export async function processFiles(
   return {
     updatesToApply,
     missingProducts,
+    enPeligro,
     alerts,
     excelMap
   };
