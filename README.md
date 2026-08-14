@@ -1,73 +1,61 @@
-# React + TypeScript + Vite
+# Sincronización de Stock e Inventario — INDY
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+App de la tienda **INDY** (Shopify) para sincronizar stock, precios y productos
+con los archivos que mandan los proveedores, y para armar el pedido diario de
+reposición.
 
-Currently, two official plugins are available:
+🔗 **En vivo:** https://smart-sync-shopify.vercel.app
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+---
 
-## React Compiler
+## 📖 ¿Vas a modificar el código? Leé primero [CLAUDE.md](./CLAUDE.md)
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+Ahí está **todo lo que hay que saber**: cómo funciona el negocio, las reglas de
+precios y talles de cada marca, las trampas conocidas y lo que no hay que romper.
 
-## Expanding the ESLint configuration
+No es documentación opcional: varias reglas no se deducen del código y ya se
+rompieron una vez por no conocerlas.
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+---
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
+## Qué hace
 
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
+**Pestaña Sincronización** — subís el archivo del proveedor y la app compara
+contra Shopify (que lee en vivo):
 
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+- Actualiza **stock** (simular → confirmar → escribir)
+- Actualiza **precios y costos** por API (sin riesgo de borrar fotos ni descripciones)
+- Crea los **productos nuevos** que faltan
+- Avisa de diferencias y de lo que no pudo interpretar
+
+**Pestaña Reposición** — arma el pedido diario al proveedor (traer de iD a
+Martínez), con ventas, stock de las dos sucursales, conversión de talles y lo que
+ya viene en camino. **Solo lectura.**
+
+## Marcas soportadas
+
+Converse · Le Coq Sportif · Orchard · Luxo · Bloque (Protec, Skate World, Zoo York…)
+
+Cada una tiene sus propias reglas de precio, talle y formato de archivo:
+ver [CLAUDE.md](./CLAUDE.md).
+
+## Desarrollo
+
+```bash
+npm install
+npm run dev           # local
+npx tsc --noEmit      # chequeo de tipos
+npx vite build        # build de producción
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+El deploy es automático: cada push a `main` publica en Vercel.
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+## Configuración
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
-```
+Variables de entorno en Vercel (nunca en el código):
+
+| Variable | Para qué |
+|---|---|
+| `SHOPIFY_CLIENT_ID` | Credenciales de la app de Shopify (token automático, 24 h) |
+| `SHOPIFY_CLIENT_SECRET` | ídem |
+| `SHOPIFY_ADMIN_TOKEN` | Fallback si no están las dos de arriba |
