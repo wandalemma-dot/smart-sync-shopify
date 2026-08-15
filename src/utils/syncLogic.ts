@@ -38,6 +38,9 @@ export interface UpdateAction {
   productId?: string;    // id del producto (para actualizar por API)
   inventoryItemId?: string;
   sinCambios?: boolean;  // ya coincide precio y costo: se muestra en verde, no se aplica
+  // Stock en DEPOSITO MARTINEZ. Si es > 0, el producto YA lo compró al costo
+  // viejo -> no se le cambia el precio (viene destildado por defecto).
+  stockMartinez?: number;
   title?: string;        // Shopify exige el Title al importar
   optionName?: string;   // para identificar la variante en el import
   optionValue?: string;
@@ -341,8 +344,10 @@ const VENDOR_QUERY: Partial<Record<SyncConfig['brand'], string>> = {
 
 const LIVE_LOCATIONS_QUERY = `query { locations(first: 50) { edges { node { id name } } } }`;
 
+export const LOC_MARTINEZ_NOMBRE = 'DEPOSITO MARTINEZ';
+
 const LIVE_PRODUCTS_QUERY = `
-  query($cursor: String, $q: String!, $loc: ID!) {
+  query($cursor: String, $q: String!, $loc: ID!, $mar: ID!) {
     products(first: 50, after: $cursor, query: $q) {
       pageInfo { hasNextPage endCursor }
       edges {
@@ -362,6 +367,9 @@ const LIVE_PRODUCTS_QUERY = `
                   id
                   unitCost { amount }
                   inventoryLevel(locationId: $loc) {
+                    quantities(names: ["available"]) { name quantity }
+                  }
+                  mar: inventoryLevel(locationId: $mar) {
                     quantities(names: ["available"]) { name quantity }
                   }
                 }
@@ -848,12 +856,15 @@ export async function processFiles(
       const locName = STOCK_LOCATION[config.brand];
       const locId = await fetchLocationIdByName(locName);
       if (!locId) throw new Error(`No encontré la sucursal "${locName}" en Shopify.`);
+      // También miramos Martínez: si un producto ya está ahí, Wanda NO le cambia
+      // el precio (ya lo compró al costo viejo).
+      const marId = await fetchLocationIdByName(LOC_MARTINEZ_NOMBRE) || locId;
       let cursor: string | null = null;
       let hasNext = true;
       let guard = 0;
       while (hasNext && guard < 200) {
         guard++;
-        const data: any = await shopifyGraphQL<any>(LIVE_PRODUCTS_QUERY, { cursor, q: vendorQuery, loc: locId });
+        const data: any = await shopifyGraphQL<any>(LIVE_PRODUCTS_QUERY, { cursor, q: vendorQuery, loc: locId, mar: marId });
         const conn = data?.products;
         for (const edge of (conn?.edges || [])) {
           const n = edge.node;
@@ -861,12 +872,14 @@ export async function processFiles(
             const node = ve.node;
             const lvl = node.inventoryItem?.inventoryLevel;
             const qEntry = (lvl?.quantities || []).find((x: any) => x.name === 'available');
+            const qMar = (node.inventoryItem?.mar?.quantities || []).find((x: any) => x.name === 'available');
             return {
               node: {
                 // id = identificador de la VARIANTE (necesario para actualizar precio)
                 id: String(node.id || ''),
                 inventoryItemId: String(node.inventoryItem?.id || ''),
                 productId: String(n.id || ''),
+                stockMartinez: qMar ? Number(qMar.quantity) : 0,
                 cost: node.inventoryItem?.unitCost?.amount != null ? String(node.inventoryItem.unitCost.amount) : '',
                 title: String(node.title || ''),
                 sku: String(node.sku || ''),
@@ -973,6 +986,7 @@ export async function processFiles(
                 newPrice: calculatedPrice,
                 oldCost: costoActual,
                 newCost: calculatedCost,
+                stockMartinez: Number((variant as any).stockMartinez) || 0,
                 title: String(prod.title || ''),
                 optionName: 'Talle',
                 optionValue: String(variant.title || ''),

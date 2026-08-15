@@ -6,7 +6,7 @@ import type { StockPlan } from './utils/writeStock';
 import { createProducts } from './utils/createProducts';
 import { leerListaPrecios } from './utils/listaPrecios';
 import type { ListaPrecios } from './utils/listaPrecios';
-import { aplicarPrecios, actualizacionesAplicables, sinCambios } from './utils/updatePrices';
+import { aplicarPrecios, actualizacionesAplicables, sinCambios, margenPct } from './utils/updatePrices';
 import Reposicion from './Reposicion';
 
 export default function App() {
@@ -40,12 +40,24 @@ export default function App() {
   const [precioConfirm, setPrecioConfirm] = useState(false);
   const [precioLoading, setPrecioLoading] = useState(false);
   const [precioDone, setPrecioDone] = useState<string | null>(null);
+  // Qué se toca y de qué variantes (por defecto: todo).
+  const [tocarPrecio, setTocarPrecio] = useState(true);
+  const [tocarCosto, setTocarCosto] = useState(true);
+  const [excluidas, setExcluidas] = useState<Record<string, boolean>>({});
+
+  // Los que YA están en Martínez vienen destildados: ese stock ya se compró al
+  // costo viejo, así que no se les cambia el precio (se puede tildar a mano).
+  const vieneDestildada = (u: { variantId: string; stockMartinez?: number }) =>
+    excluidas[u.variantId] ?? ((u.stockMartinez || 0) > 0);
+
+  const seleccionadas = (r: SyncResult) =>
+    actualizacionesAplicables(r).filter(u => !vieneDestildada(u));
 
   const handleAplicarPrecios = async () => {
     if (!result) return;
     setPrecioLoading(true); setPrecioDone(null);
     try {
-      const res = await aplicarPrecios(result);
+      const res = await aplicarPrecios(seleccionadas(result), { precio: tocarPrecio, costo: tocarCosto });
       setPrecioDone(`Actualizadas ${res.actualizadas} variantes · fallidas ${res.fallidas}` + (res.errores.length ? ` · ${res.errores.slice(0, 2).join(' | ')}` : ''));
       setPrecioConfirm(false);
     } catch (e: any) {
@@ -369,29 +381,83 @@ export default function App() {
                   <> Las <strong style={{ color: '#6ee7b7' }}>{sinCambios(result).length} en verde</strong> ya están bien: no se tocan.</>
                 )}
               </p>
+              {/* Qué se toca */}
+              <div style={{ display: 'flex', gap: '18px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '0.7rem', fontSize: '0.9rem' }}>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <input type="checkbox" checked={tocarPrecio} onChange={e => setTocarPrecio(e.target.checked)} />
+                  Cambiar <strong style={{ color: '#60a5fa' }}>&nbsp;precio</strong>
+                </label>
+                <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <input type="checkbox" checked={tocarCosto} onChange={e => setTocarCosto(e.target.checked)} />
+                  Cambiar <strong style={{ color: '#34d399' }}>&nbsp;costo</strong>
+                </label>
+                <span style={{ opacity: 0.6 }}>|</span>
+                <button onClick={() => setExcluidas({})}
+                  style={{ padding: '4px 10px', borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.06)', color: 'white', fontSize: '0.8rem' }}>
+                  Marcar todos
+                </button>
+                <button onClick={() => setExcluidas(Object.fromEntries(actualizacionesAplicables(result).map(u => [u.variantId, true])))}
+                  style={{ padding: '4px 10px', borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.06)', color: 'white', fontSize: '0.8rem' }}>
+                  Desmarcar todos
+                </button>
+                <span style={{ marginLeft: 'auto', opacity: 0.85 }}>
+                  Seleccionadas: <strong>{seleccionadas(result).length}</strong> de {actualizacionesAplicables(result).length}
+                </span>
+              </div>
+              {actualizacionesAplicables(result).some(u => (u.stockMartinez || 0) > 0) && (
+                <p style={{ fontSize: '0.8rem', color: '#fbbf24', marginTop: 0 }}>
+                  📦 Los que ya tienen stock en <strong>Martínez</strong> vienen <strong>destildados</strong>: ese stock
+                  ya lo compraste al costo viejo. Si igual querés cambiarles el precio, tildalos a mano.
+                </p>
+              )}
+
               <div style={{ maxHeight: '280px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', marginBottom: '0.8rem' }}>
                 <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse' }}>
                   <thead>
                     <tr style={{ position: 'sticky', top: 0, background: '#1f2937' }}>
+                      <th style={{ padding: '6px' }}></th>
                       <th style={{ textAlign: 'left', padding: '6px 10px' }}>Producto</th>
                       <th style={{ padding: '6px' }}>Talle</th>
                       <th style={{ padding: '6px' }}>Precio</th>
                       <th style={{ padding: '6px' }}>Costo</th>
+                      <th style={{ padding: '6px' }}>Margen</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {actualizacionesAplicables(result).slice(0, 300).map((u, i) => (
-                      <tr key={`c${i}`} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                        <td style={{ padding: '6px 10px' }}>{u.title}</td>
-                        <td style={{ padding: '6px', textAlign: 'center' }}>{u.optionValue}</td>
+                    {actualizacionesAplicables(result).slice(0, 300).map((u, i) => {
+                      const off = vieneDestildada(u);
+                      const enMartinez = (u.stockMartinez || 0) > 0;
+                      // Margen que va a quedar según lo que se aplique.
+                      const pFinal = tocarPrecio ? (u.newPrice ?? 0) : (u.oldPrice ?? 0);
+                      const cFinal = tocarCosto ? (u.newCost ?? 0) : (u.oldCost ?? 0);
+                      const m = margenPct(pFinal, cFinal);
+                      return (
+                      <tr key={`c${i}`} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', opacity: off ? 0.35 : 1 }}>
                         <td style={{ padding: '6px', textAlign: 'center' }}>
-                          <span style={{ opacity: 0.6 }}>{u.oldPrice}</span> → <strong style={{ color: '#60a5fa' }}>{u.newPrice}</strong>
+                          <input type="checkbox" checked={!off}
+                            onChange={e => setExcluidas({ ...excluidas, [u.variantId]: !e.target.checked })} />
                         </td>
-                        <td style={{ padding: '6px', textAlign: 'center' }}>
-                          <span style={{ opacity: 0.6 }}>{u.oldCost ?? '—'}</span> → <strong style={{ color: '#34d399' }}>{u.newCost}</strong>
+                        <td style={{ padding: '6px 10px' }}>
+                          {u.title}
+                          {enMartinez && (
+                            <div style={{ fontSize: '0.7rem', color: '#fbbf24' }}>
+                              📦 Ya está en Martínez ({u.stockMartinez}) — no se le cambia el precio
+                            </div>
+                          )}
+                        </td>
+                        <td style={{ padding: '6px', textAlign: 'center' }}>{u.optionValue}</td>
+                        <td style={{ padding: '6px', textAlign: 'center', opacity: tocarPrecio ? 1 : 0.35 }}>
+                          <span style={{ opacity: 0.6 }}>{u.oldPrice}</span> → <strong style={{ color: '#60a5fa' }}>{tocarPrecio ? u.newPrice : '(sin tocar)'}</strong>
+                        </td>
+                        <td style={{ padding: '6px', textAlign: 'center', opacity: tocarCosto ? 1 : 0.35 }}>
+                          <span style={{ opacity: 0.6 }}>{u.oldCost ?? '—'}</span> → <strong style={{ color: '#34d399' }}>{tocarCosto ? u.newCost : '(sin tocar)'}</strong>
+                        </td>
+                        <td style={{ padding: '6px', textAlign: 'center', fontWeight: 'bold', color: m === null ? undefined : m >= 50 ? '#34d399' : m >= 40 ? '#f59e0b' : '#f87171' }}>
+                          {m === null ? '—' : `${m.toFixed(1)}%`}
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                     {/* Al final, en verde: las que ya están bien y NO se tocan */}
                     {sinCambios(result).slice(0, 300).map((u, i) => (
                       <tr key={`s${i}`} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: 'rgba(16,185,129,0.10)', color: '#6ee7b7' }}>

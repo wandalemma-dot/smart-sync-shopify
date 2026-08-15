@@ -38,12 +38,25 @@ export function sinCambios(result: SyncResult): UpdateAction[] {
   return result.updatesToApply.filter((u) => u.type === 'PRICE' && u.sinCambios);
 }
 
+// IVA para calcular el margen (el precio de venta lo incluye).
+export const IVA = 1.21;
+
+// Margen que queda con ese precio y costo. Es lo que Wanda mira para decidir.
+export function margenPct(precio: number, costo: number): number | null {
+  if (!precio || precio <= 0 || !costo || costo <= 0) return null;
+  return (1 - costo / (precio / IVA)) * 100;
+}
+
+export interface OpcionesPrecio {
+  precio: boolean; // actualizar el precio de venta
+  costo: boolean;  // actualizar el costo (Cost per item)
+}
+
 export async function aplicarPrecios(
-  result: SyncResult,
+  updates: UpdateAction[],
+  opciones: OpcionesPrecio = { precio: true, costo: true },
   onProgress?: (hechas: number, total: number) => void,
 ): Promise<PriceWriteResult> {
-  const updates = actualizacionesAplicables(result);
-
   // productVariantsBulkUpdate trabaja por producto: agrupamos.
   const porProducto = new Map<string, UpdateAction[]>();
   for (const u of updates) {
@@ -60,13 +73,16 @@ export async function aplicarPrecios(
   for (const [productId, lista] of porProducto) {
     const variants = lista.map((u) => {
       const v: any = { id: u.variantId };
-      if (u.newPrice !== undefined) v.price = String(u.newPrice);
+      // Solo se toca lo que la usuaria eligió: puede querer cambiar el costo
+      // sin tocar el precio de venta (o al revés).
+      if (opciones.precio && u.newPrice !== undefined) v.price = String(u.newPrice);
       // El costo va dentro de inventoryItem (no pisa nada más del ítem).
-      if (u.newCost !== undefined && u.newCost > 0) {
+      if (opciones.costo && u.newCost !== undefined && u.newCost > 0) {
         v.inventoryItem = { cost: String(Math.round(u.newCost)) };
       }
       return v;
-    });
+    }).filter((v) => v.price !== undefined || v.inventoryItem !== undefined);
+    if (variants.length === 0) continue;
 
     try {
       const data = await shopifyGraphQL<any>(BULK_UPDATE, { productId, variants });
