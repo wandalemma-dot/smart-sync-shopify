@@ -1,5 +1,5 @@
 import { convTable1, convTable2, convTable3, convTable4, convTable5, sortSizeEntries } from './syncLogic';
-import { shopifyGraphQL } from './shopify';
+import { shopifyGraphQL, mismaSucursal } from './shopify';
 import { escapeCSV, triggerDownload, todayStamp } from './csv';
 
 // ============================================================================
@@ -92,7 +92,7 @@ export async function analyzeRestock(
   // 1) Ubicación fija de iD.
   const locData = await shopifyGraphQL<any>(LOCATIONS_QUERY);
   const locEdges: Array<{ node: { id: string; name: string } }> = locData?.locations?.edges || [];
-  const loc = locEdges.find(e => String(e.node.name).trim() === ID_LOCATION_NAME);
+  const loc = locEdges.find(e => mismaSucursal(e.node.name, ID_LOCATION_NAME));
   if (!loc) {
     return {
       locationName: ID_LOCATION_NAME,

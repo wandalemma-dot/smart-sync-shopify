@@ -6,7 +6,7 @@
 // publiquen solos: vos los revisás y publicás en Shopify.
 // ============================================================================
 
-import { shopifyGraphQL } from './shopify';
+import { shopifyGraphQL, mismaSucursal } from './shopify';
 import { STOCK_LOCATION, buildMatrixProducts } from './syncLogic';
 import type { SyncResult, SyncConfig, MatrixProduct } from './syncLogic';
 
@@ -51,7 +51,7 @@ export interface CreateResult {
 async function getLocationId(name: string): Promise<string | null> {
   const data = await shopifyGraphQL<any>(LOCATIONS_QUERY);
   const edges: any[] = data?.locations?.edges || [];
-  const loc = edges.find((e) => String(e.node.name).trim() === name);
+  const loc = edges.find((e) => mismaSucursal(e.node.name, name));
   return loc ? loc.node.id : null;
 }
 

@@ -11,7 +11,7 @@
 // Esta pantalla SOLO LEE. No escribe nada en Shopify ni carga la web externa.
 // ============================================================================
 
-import { shopifyGraphQL } from './shopify';
+import { shopifyGraphQL, mismaSucursal } from './shopify';
 import { convertir, normCodigo, curvaDe } from './conversorTalles';
 import type { Conversion } from './conversorTalles';
 import { claveEnCamino } from './pedidoPendiente';
@@ -151,7 +151,7 @@ async function getLocationIds(): Promise<{ martinez: string | null; id: string |
   const data = await shopifyGraphQL<any>(LOCATIONS_QUERY);
   const edges: any[] = data?.locations?.edges || [];
   const find = (name: string) => {
-    const e = edges.find(x => String(x.node.name).trim().toUpperCase() === name.toUpperCase());
+    const e = edges.find(x => mismaSucursal(x.node.name, name));
     return e ? e.node.id : null;
   };
   return { martinez: find(LOC_MARTINEZ), id: find(LOC_ID) };

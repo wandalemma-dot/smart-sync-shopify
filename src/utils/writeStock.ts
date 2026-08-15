@@ -9,7 +9,7 @@
 // Nunca crea, borra ni cambia precios.
 // ============================================================================
 
-import { shopifyGraphQL } from './shopify';
+import { shopifyGraphQL, mismaSucursal } from './shopify';
 import { talleMatches, STOCK_LOCATION, converseTableFromTags, talleShopifyLeCoq } from './syncLogic';
 import type { SyncResult, SyncConfig } from './syncLogic';
 
@@ -82,7 +82,7 @@ const SET_MUTATION = `
 async function getLocationId(name: string): Promise<string | null> {
   const data = await shopifyGraphQL<any>(LOCATIONS_QUERY);
   const edges: any[] = data?.locations?.edges || [];
-  const loc = edges.find((e) => String(e.node.name).trim() === name);
+  const loc = edges.find((e) => mismaSucursal(e.node.name, name));
   return loc ? loc.node.id : null;
 }
 

@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx';
 import { escapeCSV, triggerDownload, todayStamp } from './csv';
-import { shopifyGraphQL } from './shopify';
+import { shopifyGraphQL, mismaSucursal } from './shopify';
 import { CONVERSE_CODE_TABLE } from './converseCurvas';
 import { esPrecioSugerido } from './conversePreciosFijos';
 import type { ListaPrecios } from './listaPrecios';
@@ -410,7 +410,7 @@ const LIVE_VARIANTS_BY_SKU_QUERY = `
 async function fetchLocationIdByName(name: string): Promise<string | null> {
   const data = await shopifyGraphQL<any>(LIVE_LOCATIONS_QUERY);
   const edges: any[] = data?.locations?.edges || [];
-  const loc = edges.find((e) => String(e.node.name).trim() === name);
+  const loc = edges.find((e) => mismaSucursal(e.node.name, name));
   return loc ? loc.node.id : null;
 }
 
