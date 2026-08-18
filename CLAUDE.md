@@ -83,7 +83,22 @@ El proveedor manda talles **US**; en Shopify están en **ARG**.
 - Los productos en Shopify llevan **dos etiquetas**: el **código** (`A15621C`) y la
   **tabla de talle** (`TABLA DE TALLE CONVERSE 1`). Al crear productos nuevos hay
   que ponerle **las dos**.
-- La tabla de cada código sale del maestro `src/utils/converseCurvas.ts`.
+
+> 🔴 **CÓMO SE ELIGE LA TABLA — leer sí o sí.** Orden de prioridad (`converseTablaDe()`):
+> **1)** el **maestro de curvas por código** (`converseCurvas.ts`) — dato oficial del
+> proveedor; **2)** si el código no está, **solo** la etiqueta que empieza con
+> `TABLA DE TALLE`; **3)** si tampoco, Tabla 1.
+>
+> **NUNCA buscar palabras sueltas ("mujer", "niño") en todas las etiquetas.**
+> Error real de agosto 2026: los productos tienen etiquetas de marketing
+> (`converse mujer`, `zapatillas para niña`, `zapatillas urbanas mujer`) que pisaban
+> la etiqueta real. El código `157197C` tenía `TABLA DE TALLE CONVERSE 2` pero se le
+> aplicaba la de MUJER: **142 pares de US 6 iban al talle 36.5 en vez del 39**, y así
+> con todo el producto. No hay validación posterior que lo detecte.
+>
+> Además, el maestro **corrige** casos donde Shopify está mal cargado: hay productos
+> sin etiqueta de tabla, y otros con **dos etiquetas contradictorias** (BEBE y NIÑO
+> a la vez). Por eso el maestro tiene que ir primero.
 
 ### 3.3 Le Coq — TALLES
 
