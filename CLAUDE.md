@@ -65,6 +65,14 @@ la sábana, los productos nuevos se crean en $0.
   del proveedor), **nunca** con markup. Lista en `src/utils/conversePreciosFijos.ts`.
   Son las Chuck Taylor clásicas (Core/Hi/Ox/Leather/Platform), Chuck 70 y niño/bebé.
   **No se negocia**: son precios impuestos.
+  - ⚠️ **Al básico SÍ se le actualiza el COSTO** (confirmado por Wanda, 18-ago-2026).
+    Lo único que queda clavado es el **precio de venta**. Por eso, cuando el
+    proveedor aumenta, el margen del básico baja: es esperado, no es un bug.
+  - En el archivo real de agosto, los básicos son solo **295 de 1131 filas (26%)**.
+    Si parece que "la app solo toca los básicos", casi seguro es un problema de
+    orden en la lista, no de cálculo: cada Chuck Taylor trae 10-12 talles seguidos.
+    Por eso `actualizacionesAplicables()` ordena **primero las que cambian el
+    precio de venta** y después las de solo costo.
 
 ### 3.2 Converse — TALLES (lo más delicado del sistema)
 
