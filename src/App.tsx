@@ -413,6 +413,23 @@ export default function App() {
                   ya lo compraste al costo viejo. Si igual querés cambiarles el precio, tildalos a mano.
                 </p>
               )}
+              {(() => {
+                // Cuántas cambian el precio de venta y cuántas solo el costo.
+                // Las de "solo costo" son casi siempre los básicos de Converse,
+                // que van fijos al precio sugerido del proveedor.
+                const todas = actualizacionesAplicables(result);
+                const conPrecio = todas.filter(u => u.newPrice !== undefined && u.oldPrice !== undefined && Number(u.newPrice) !== Number(u.oldPrice)).length;
+                const soloCosto = todas.length - conPrecio;
+                if (!todas.length) return null;
+                return (
+                  <p style={{ fontSize: '0.8rem', opacity: 0.85, marginTop: 0 }}>
+                    🔢 <strong>{conPrecio}</strong> cambian el <strong>precio de venta</strong> · <strong>{soloCosto}</strong> cambian
+                    {' '}<strong>solo el costo</strong> (los básicos de Converse van siempre al precio sugerido).
+                    {' '}Primero te muestro las que cambian de precio.
+                    {todas.length > 300 && <> Se listan las primeras <strong>300</strong> de {todas.length}; se aplican todas las tildadas.</>}
+                  </p>
+                );
+              })()}
 
               <div style={{ maxHeight: '280px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', marginBottom: '0.8rem' }}>
                 <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse' }}>

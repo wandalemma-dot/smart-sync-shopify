@@ -26,10 +26,22 @@ export interface PriceWriteResult {
 }
 
 // Solo las actualizaciones de precio que tienen los identificadores necesarios.
+//
+// ORDEN (pedido por Wanda): primero las que REALMENTE cambian el precio de
+// venta, y recién después las que solo cambian el costo (los "básicos" de
+// Converse van siempre al precio sugerido, así que su precio no se mueve).
+// Si no, al scrollear caías 12 talles seguidos del mismo Chuck Taylor con
+// "109900 -> 109900" y parecía que la app no hacía nada.
+// El orden NO afecta lo que se escribe: aplicarPrecios() agrupa por producto.
 export function actualizacionesAplicables(result: SyncResult): UpdateAction[] {
-  return result.updatesToApply.filter(
+  const lista = result.updatesToApply.filter(
     (u) => u.type === 'PRICE' && !u.sinCambios && !!u.productId && !!u.variantId,
   );
+  const cambiaPrecio = (u: UpdateAction) =>
+    u.newPrice !== undefined && u.oldPrice !== undefined && Number(u.newPrice) !== Number(u.oldPrice);
+  // sort() de JS es estable: dentro de cada grupo se respeta el orden original
+  // (o sea, los talles de un mismo modelo siguen juntos y en su orden).
+  return lista.slice().sort((a, b) => Number(cambiaPrecio(b)) - Number(cambiaPrecio(a)));
 }
 
 // Las que ya están iguales (precio y costo coinciden): se muestran en verde
