@@ -312,15 +312,53 @@ export function talleMatches(provSize: string, shopTalle: string): boolean {
   return norm(provSize) === norm(shopTalle);
 }
 
-// A partir de las ETIQUETAS del producto en Shopify (ej. "TABLA DE TALLE CONVERSE 1",
-// "TABLA DE TALLE CONVERSE NIÑO", etc.) devuelve la tabla US->ARG que le corresponde.
+// ============================================================================
+// ⚠⚠ QUÉ TABLA DE TALLE USAR — LO MÁS DELICADO DE TODO EL SISTEMA
+// ----------------------------------------------------------------------------
+// Elegir mal la tabla carga el stock en el TALLE EQUIVOCADO, en silencio.
+// El mismo US 6 es AR 37.5 / 39 / 36.5 / 36 según la tabla.
+//
+// ERROR QUE YA COMETIMOS (agosto 2026): se buscaban palabras como "MUJER" o
+// "NIÑO" en TODAS las etiquetas del producto. Como los productos tienen
+// etiquetas de marketing ("converse mujer", "zapatillas para niña",
+// "zapatillas urbanas mujer"), esas pisaban la etiqueta real de la tabla.
+// Ej: 157197C tenía "TABLA DE TALLE CONVERSE 2" pero se le aplicaba la de MUJER,
+// y 142 pares de US 6 iban al talle 36.5 en vez del 39.
+//
+// ORDEN DE PRIORIDAD (no cambiar sin pensarlo):
+//   1) El MAESTRO DE CURVAS por código -> es el dato oficial del proveedor.
+//   2) Si el código no está en el maestro: SOLO la etiqueta que empieza con
+//      "TABLA DE TALLE". Ninguna otra etiqueta se mira.
+//   3) Si tampoco hay etiqueta: Tabla 1 (la más común).
+// ============================================================================
+
+const TABLA_POR_NUMERO: Record<number, Record<string, string>> = {
+  1: convTable1, 2: convTable2, 3: convTable3, 4: convTable4, 5: convTable5,
+};
+
+// Lee ÚNICAMENTE la etiqueta "TABLA DE TALLE ...". Devuelve null si no está.
+export function tablaDesdeEtiquetaTalle(tags: string): Record<string, string> | null {
+  const etiquetas = String(tags || '').split(',').map((s) => s.trim().toUpperCase());
+  const etq = etiquetas.find((e) => e.startsWith('TABLA DE TALLE'));
+  if (!etq) return null;
+  if (etq.includes('NIÑO') || etq.includes('NINO')) return convTable4;
+  if (etq.includes('BEBE') || etq.includes('BEBÉ')) return convTable5;
+  if (etq.includes('MUJER')) return convTable3;
+  if (/\b2\b/.test(etq)) return convTable2;
+  if (/\b1\b/.test(etq)) return convTable1;
+  return null; // etiqueta rara: mejor no adivinar
+}
+
+// Tabla definitiva para un producto. `codigo` manda; la etiqueta es respaldo.
+export function converseTablaDe(codigo: string, tags: string): Record<string, string> {
+  const nro = CONVERSE_CODE_TABLE[String(codigo || '').toUpperCase()];
+  if (nro && TABLA_POR_NUMERO[nro]) return TABLA_POR_NUMERO[nro];
+  return tablaDesdeEtiquetaTalle(tags) || convTable1;
+}
+
+// Compatibilidad: si solo se tienen las etiquetas (sin código).
 export function converseTableFromTags(tags: string): Record<string, string> {
-  const t = String(tags || '').toUpperCase();
-  if (t.includes('NIÑO') || t.includes('NINO')) return convTable4;
-  if (t.includes('BEBE') || t.includes('BEBÉ')) return convTable5;
-  if (t.includes('MUJER') || t.includes('WOMEN') || t.includes('WOS')) return convTable3;
-  if (/CONVERSE\s*2\b/.test(t) || t.includes('TABLA 2')) return convTable2;
-  return convTable1; // por defecto, la tabla 1 (hombre)
+  return tablaDesdeEtiquetaTalle(tags) || convTable1;
 }
 
 // Sucursal de Shopify donde se carga/escribe el stock, según la marca.

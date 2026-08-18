@@ -10,7 +10,7 @@
 // ============================================================================
 
 import { shopifyGraphQL, mismaSucursal } from './shopify';
-import { talleMatches, STOCK_LOCATION, converseTableFromTags, talleShopifyLeCoq } from './syncLogic';
+import { talleMatches, STOCK_LOCATION, converseTablaDe, talleShopifyLeCoq } from './syncLogic';
 import type { SyncResult, SyncConfig } from './syncLogic';
 
 export interface StockChange {
@@ -140,7 +140,11 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     const code = cod.toUpperCase(); // código del proveedor (Código Item del Excel)
     // Converse: el proveedor manda talles US; Shopify los tiene en ARG. Convertimos
     // usando la tabla que indica la etiqueta del producto (TABLA DE TALLE CONVERSE X).
-    const convTable = config.brand === 'converse' ? converseTableFromTags(tagsByHandle[handle] || '') : null;
+    // La tabla sale del CÓDIGO (maestro de curvas del proveedor). La etiqueta
+    // solo se usa de respaldo, y únicamente la que dice "TABLA DE TALLE".
+    const convTable = config.brand === 'converse'
+      ? converseTablaDe(code, tagsByHandle[handle] || '')
+      : null;
     for (const [size, qtyRaw] of Object.entries(d.sizes || {})) {
       const desired = Number(qtyRaw);
       // Converse: US -> ARG por tabla. Le Coq calzado: el talle de Shopify es
