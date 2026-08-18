@@ -35,6 +35,9 @@ export default function App() {
   const [stockWriting, setStockWriting] = useState(false);
   const [writeConfirm, setWriteConfirm] = useState(false);
   const [writeDone, setWriteDone] = useState<string | null>(null);
+  // Buscador del simulador: filtra las 3 tablas por código, producto o talle.
+  // Es SOLO visual: no cambia lo que se escribe en Shopify.
+  const [stockBuscar, setStockBuscar] = useState('');
 
   // ---- ACTUALIZAR PRECIOS Y COSTOS DIRECTO EN SHOPIFY ----
   const [precioConfirm, setPrecioConfirm] = useState(false);
@@ -533,43 +536,160 @@ export default function App() {
                     <> · <span style={{ color: '#f87171' }}>🗑️ A poner en 0 (el proveedor ya no los lista): <strong>{stockPlan.changes.filter(c => c.motivo).length}</strong></span></>
                   )}
                 </div>
+                {/* Buscador: para poder confirmar qué pasó con UN producto puntual.
+                    Filtra solo lo que se ve; NO cambia lo que se escribe. */}
+                <input
+                  type="text"
+                  value={stockBuscar}
+                  onChange={e => setStockBuscar(e.target.value)}
+                  placeholder="🔎 Buscar por código, producto o talle (ej: A10564C)"
+                  style={{
+                    width: '100%', padding: '8px 10px', marginBottom: '0.6rem',
+                    borderRadius: '6px', border: '1px solid rgba(255,255,255,0.15)',
+                    background: 'rgba(0,0,0,0.25)', color: 'inherit', fontSize: '0.85rem',
+                  }}
+                />
+                {(() => {
+                  const q = stockBuscar.trim().toLowerCase();
+                  const coincide = (r: { title: string; code: string; talle: string }) =>
+                    !q || r.code.toLowerCase().includes(q)
+                      || r.title.toLowerCase().includes(q)
+                      || String(r.talle).toLowerCase().includes(q);
+                  const fCambios = stockPlan.changes.filter(coincide);
+                  const fIguales = stockPlan.unchangedRows.filter(coincide);
+                  const fNoUbic = stockPlan.notFound.filter(coincide);
+
+                  const caja = { maxHeight: '300px', overflowY: 'auto' as const, border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px' };
+                  const th = { textAlign: 'left' as const, padding: '6px 10px' };
+                  const tabla = { width: '100%', fontSize: '0.82rem', borderCollapse: 'collapse' as const };
+                  const cab = { position: 'sticky' as const, top: 0, background: '#1f2937' };
+
+                  return (
+                    <>
+                      {q && fCambios.length + fIguales.length + fNoUbic.length === 0 && (
+                        <p style={{ padding: '0.8rem', background: 'rgba(245,158,11,0.12)', border: '1px solid #f59e0b', borderRadius: '6px' }}>
+                          ⚠️ <strong>«{stockBuscar}»</strong> no está en ninguna de las tres listas. Eso quiere decir que la app
+                          no lo encontró en Shopify: fijate más abajo en <strong>Faltantes (Nuevos)</strong>.
+                        </p>
+                      )}
+
+                      {/* --- 1) LO QUE SÍ SE VA A ESCRIBIR --- */}
+                      {fCambios.length > 0 && (
+                        <>
+                          <div style={{ fontSize: '0.85rem', margin: '0.4rem 0', color: '#f59e0b' }}>
+                            ✍️ <strong>Se van a cambiar ({fCambios.length}{q ? ` de ${stockPlan.changes.length}` : ''})</strong>
+                          </div>
+                          <div style={caja}>
+                            <table style={tabla}>
+                              <thead>
+                                <tr style={cab}>
+                                  <th style={th}>Producto</th>
+                                  <th style={{ ...th, padding: '6px' }}>Código</th>
+                                  <th style={{ padding: '6px' }}>Talle</th>
+                                  <th style={{ padding: '6px' }}>Actual</th>
+                                  <th style={{ padding: '6px' }}>Nuevo</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {fCambios.map((c, i) => (
+                                  <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: c.motivo ? 'rgba(220,38,38,0.10)' : undefined }}>
+                                    <td style={{ padding: '6px 10px' }}>
+                                      {c.title}
+                                      {c.motivo && <div style={{ fontSize: '0.7rem', color: '#f87171' }}>🗑️ {c.motivo}</div>}
+                                    </td>
+                                    <td style={{ padding: '6px', fontFamily: 'monospace', opacity: 0.85 }}>{c.code}</td>
+                                    <td style={{ padding: '6px', textAlign: 'center' }}>{c.talle}</td>
+                                    <td style={{ padding: '6px', textAlign: 'center', opacity: 0.7 }}>{c.current}</td>
+                                    <td style={{ padding: '6px', textAlign: 'center', fontWeight: 'bold', color: '#10b981' }}>{c.desired}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </>
+                      )}
+
+                      {/* --- 2) YA ESTABAN BIEN (no se tocan) --- */}
+                      {fIguales.length > 0 && (
+                        <details open={!!q} style={{ marginTop: '0.8rem' }}>
+                          <summary style={{ cursor: 'pointer', fontSize: '0.85rem', color: '#10b981' }}>
+                            ✅ <strong>Ya estaban bien ({fIguales.length}{q ? ` de ${stockPlan.unchangedRows.length}` : ''})</strong>
+                            <span style={{ opacity: 0.7 }}> — el stock de Shopify ya es igual al del proveedor. No se tocan.</span>
+                          </summary>
+                          <div style={{ ...caja, marginTop: '0.4rem' }}>
+                            <table style={tabla}>
+                              <thead>
+                                <tr style={cab}>
+                                  <th style={th}>Producto</th>
+                                  <th style={{ ...th, padding: '6px' }}>Código</th>
+                                  <th style={{ padding: '6px' }}>Talle proveedor</th>
+                                  <th style={{ padding: '6px' }}>Talle Shopify</th>
+                                  <th style={{ padding: '6px' }}>Stock</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {fIguales.map((r, i) => (
+                                  <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: 'rgba(16,185,129,0.07)' }}>
+                                    <td style={{ padding: '6px 10px' }}>{r.title}</td>
+                                    <td style={{ padding: '6px', fontFamily: 'monospace', opacity: 0.85 }}>{r.code}</td>
+                                    <td style={{ padding: '6px', textAlign: 'center', opacity: 0.7 }}>{r.talleProveedor}</td>
+                                    <td style={{ padding: '6px', textAlign: 'center' }}>{r.talle}</td>
+                                    <td style={{ padding: '6px', textAlign: 'center', fontWeight: 'bold', color: '#10b981' }}>{r.current}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </details>
+                      )}
+
+                      {/* --- 3) NO UBICADOS: el producto existe, pero ese TALLE no --- */}
+                      {fNoUbic.length > 0 && (
+                        <details open={!!q} style={{ marginTop: '0.8rem' }}>
+                          <summary style={{ cursor: 'pointer', fontSize: '0.85rem', color: '#f59e0b' }}>
+                            ❓ <strong>No ubicados ({fNoUbic.length}{q ? ` de ${stockPlan.notFound.length}` : ''})</strong>
+                            <span style={{ opacity: 0.7 }}> — el producto está en Shopify, pero ese talle no existe ahí.</span>
+                          </summary>
+                          <div style={{ ...caja, marginTop: '0.4rem' }}>
+                            <table style={tabla}>
+                              <thead>
+                                <tr style={cab}>
+                                  <th style={th}>Producto</th>
+                                  <th style={{ ...th, padding: '6px' }}>Código</th>
+                                  <th style={{ padding: '6px' }}>Talle proveedor</th>
+                                  <th style={{ padding: '6px' }}>Talle buscado</th>
+                                  <th style={{ padding: '6px' }}>Cantidad</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {fNoUbic.map((r, i) => (
+                                  <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: 'rgba(245,158,11,0.07)' }}>
+                                    <td style={{ padding: '6px 10px' }}>{r.title}</td>
+                                    <td style={{ padding: '6px', fontFamily: 'monospace', opacity: 0.85 }}>{r.code}</td>
+                                    <td style={{ padding: '6px', textAlign: 'center', opacity: 0.7 }}>{r.talleProveedor}</td>
+                                    <td style={{ padding: '6px', textAlign: 'center' }}>{r.talle}</td>
+                                    <td style={{ padding: '6px', textAlign: 'center' }}>{r.desired}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        </details>
+                      )}
+                    </>
+                  );
+                })()}
+
                 {stockPlan.changes.length === 0 ? (
                   (stockPlan.unchanged === 0 && stockPlan.notFound.length === 0) ? (
-                    <p style={{ padding: '0.8rem', background: 'rgba(245,158,11,0.12)', border: '1px solid #f59e0b', borderRadius: '6px' }}>
+                    <p style={{ marginTop: '0.8rem', padding: '0.8rem', background: 'rgba(245,158,11,0.12)', border: '1px solid #f59e0b', borderRadius: '6px' }}>
                       ⚠️ No encontré en Shopify ninguno de esos productos. Casi siempre es porque el SKU del proveedor no coincide con el de Shopify (o la sucursal). Revisá el SKU.
                     </p>
                   ) : (
-                    <p style={{ padding: '0.8rem', background: 'rgba(16,185,129,0.1)', borderRadius: '6px' }}>✅ El stock ya coincide con el proveedor. Nada para escribir.</p>
+                    <p style={{ marginTop: '0.8rem', padding: '0.8rem', background: 'rgba(16,185,129,0.1)', borderRadius: '6px' }}>✅ El stock ya coincide con el proveedor. Nada para escribir.</p>
                   )
                 ) : (
                   <>
-                    <div style={{ maxHeight: '300px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px' }}>
-                      <table style={{ width: '100%', fontSize: '0.82rem', borderCollapse: 'collapse' }}>
-                        <thead>
-                          <tr style={{ position: 'sticky', top: 0, background: '#1f2937' }}>
-                            <th style={{ textAlign: 'left', padding: '6px 10px' }}>Producto</th>
-                            <th style={{ textAlign: 'left', padding: '6px' }}>Código</th>
-                            <th style={{ padding: '6px' }}>Talle</th>
-                            <th style={{ padding: '6px' }}>Actual</th>
-                            <th style={{ padding: '6px' }}>Nuevo</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {stockPlan.changes.map((c, i) => (
-                            <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: c.motivo ? 'rgba(220,38,38,0.10)' : undefined }}>
-                              <td style={{ padding: '6px 10px' }}>
-                                {c.title}
-                                {c.motivo && <div style={{ fontSize: '0.7rem', color: '#f87171' }}>🗑️ {c.motivo}</div>}
-                              </td>
-                              <td style={{ padding: '6px', fontFamily: 'monospace', opacity: 0.85 }}>{c.code}</td>
-                              <td style={{ padding: '6px', textAlign: 'center' }}>{c.talle}</td>
-                              <td style={{ padding: '6px', textAlign: 'center', opacity: 0.7 }}>{c.current}</td>
-                              <td style={{ padding: '6px', textAlign: 'center', fontWeight: 'bold', color: '#10b981' }}>{c.desired}</td>
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
                     <label style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '0.8rem', fontSize: '0.9rem' }}>
                       <input type="checkbox" checked={writeConfirm} onChange={e => setWriteConfirm(e.target.checked)} />
                       Entiendo que esto va a <strong>&nbsp;modificar el stock real&nbsp;</strong> en Shopify.
@@ -582,6 +702,11 @@ export default function App() {
                     >
                       {stockWriting ? <span className="loader"></span> : `✍️ Escribir ${stockPlan.changes.length} cambios en Shopify`}
                     </button>
+                    {stockBuscar.trim() && (
+                      <div style={{ fontSize: '0.75rem', opacity: 0.7, marginTop: '0.3rem' }}>
+                        El buscador es solo para mirar: se escriben los {stockPlan.changes.length} cambios completos.
+                      </div>
+                    )}
                   </>
                 )}
               </div>

@@ -26,13 +26,25 @@ export interface StockChange {
   motivo?: string;
 }
 
+// Fila "informativa" (no se escribe nada): sirve para que se vea en pantalla que
+// el producto SÍ fue procesado, aunque no haya nada para cambiar.
+export interface StockRow {
+  title: string;
+  code: string;           // código del proveedor
+  talle: string;          // talle como figura en Shopify (o el buscado, si no se ubicó)
+  talleProveedor: string; // talle tal cual viene en el Excel del proveedor
+  current: number | null; // null = no se pudo ubicar la variante en Shopify
+  desired: number;
+}
+
 export interface StockPlan {
   locationName: string;
   locationId: string | null;
   locationFound: boolean;
   changes: StockChange[];
   unchanged: number;
-  notFound: string[]; // variantes del proveedor que no se pudieron ubicar en Shopify
+  unchangedRows: StockRow[]; // ya coinciden: solo para mostrar, no se escriben
+  notFound: StockRow[];      // variantes del proveedor que no se pudieron ubicar en Shopify
 }
 
 export interface WriteResult {
@@ -91,7 +103,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
   const locName = STOCK_LOCATION[config.brand];
   const locId = await getLocationId(locName);
   if (!locId) {
-    return { locationName: locName, locationId: null, locationFound: false, changes: [], unchanged: 0, notFound: [] };
+    return { locationName: locName, locationId: null, locationFound: false, changes: [], unchanged: 0, unchangedRows: [], notFound: [] };
   }
 
   // Productos que ya matchearon contra Shopify (tienen handle). Guardamos el
@@ -129,8 +141,8 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
   }
 
   const changes: StockChange[] = [];
-  let unchanged = 0;
-  const notFound: string[] = [];
+  const unchangedRows: StockRow[] = [];
+  const notFound: StockRow[] = [];
 
   for (const { cod, d } of entries as { cod: string; d: any }[]) {
     const handle = d.shopifyHandle as string;
@@ -161,13 +173,22 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
       const v = live.find((n: any) =>
         hayConversion ? talleMatches(argSize, n.title) : talleMatches(size, n.title));
       if (!v || !v.inventoryItem?.id) {
-        notFound.push(`${shopTitle} · ${size}`);
+        notFound.push({
+          title: shopTitle, code, talle: String(argSize),
+          talleProveedor: String(size), current: null, desired,
+        });
         continue;
       }
       const lvl = v.inventoryItem.inventoryLevel;
       const qEntry = (lvl?.quantities || []).find((x: any) => x.name === 'available');
       const current = qEntry ? Number(qEntry.quantity) : 0;
-      if (current === desired) { unchanged++; continue; }
+      if (current === desired) {
+        unchangedRows.push({
+          title: shopTitle, code, talle: String(v.title || argSize),
+          talleProveedor: String(size), current, desired,
+        });
+        continue;
+      }
       changes.push({
         handle,
         title: shopTitle,
@@ -205,7 +226,10 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     }
   }
 
-  return { locationName: locName, locationId: locId, locationFound: true, changes, unchanged, notFound };
+  return {
+    locationName: locName, locationId: locId, locationFound: true,
+    changes, unchanged: unchangedRows.length, unchangedRows, notFound,
+  };
 }
 
 // PASO 2 — Escribe de verdad, en lotes. Solo cantidades.
