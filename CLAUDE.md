@@ -74,6 +74,37 @@ la sábana, los productos nuevos se crean en $0.
     Por eso `actualizacionesAplicables()` ordena **primero las que cambian el
     precio de venta** y después las de solo costo.
 
+### 3.1-bis VART (marca nueva — agosto 2026, todavía sin cargar nada)
+
+Marca argentina de indumentaria y calzado. Usa la **plantilla de carga de INDY**
+(la misma que Luxo): hoja `Carga Productos`, encabezado en la fila 4.
+Código en `src/utils/vartLogic.ts`.
+
+- **Precio** = columna `Precio / Markup` **tal cual**. La app NO calcula el precio.
+- **Costo** = columna `Costo` menos el descuento comercial → `VART_DESCUENTO`.
+  🟡 **HOY VALE 0**: Wanda todavía lo está negociando con el proveedor.
+  Cuando lo cierre, se cambia **en ese único lugar**.
+- **Talles: tal cual, SIN conversión.** Es marca argentina. Ropa S…XXL,
+  pantalón 28…40 de cintura, calzado 35…46.
+- **Sucursal**: `VART_LOCATION`. 🟡 **PENDIENTE** el nombre exacto en Shopify.
+  Hasta entonces la simulación de stock avisa "no encontré la sucursal" en vez
+  de escribir en el lugar equivocado. **Eso es a propósito.**
+- **Agrupación**: el producto es el SKU **sin el sufijo** (`VA0082-524-63` →
+  `VA0082-524`). Si se agrupara por SKU completo, cada talle sería un producto
+  distinto.
+- **El SKU de cada variante sale del Excel, no se inventa.** En la ropa el
+  sufijo es un código (63=S, 64=M, 65=L, 66=XL, 67=XXL), **no** el talle. En el
+  calzado sí es el talle. Por eso guardamos `skuPorTalle`.
+
+> 🔴 **VALIDACIONES QUE NO SE SACAN.** La primera planilla de Vart vino con
+> filas desalineadas. Como en el **calzado** el SKU siempre termina en el talle,
+> se puede verificar la fila contra sí misma: si `VA0091-10-35` dice talle `44`,
+> la fila está corrida y **NO se carga**. Lo mismo con SKUs repetidos.
+> Preferimos dejar filas afuera y avisar, antes que meter stock en el talle
+> equivocado (que es exactamente lo que pasó con Converse 157197C).
+> En el archivo del 19-ago: **18 filas frenadas** (13 corridas + 5 duplicadas),
+> 1573 de 1639 unidades cargadas, 50 productos limpios de 53.
+
 ### 3.2 Converse — TALLES (lo más delicado del sistema)
 
 El proveedor manda talles **US**; en Shopify están en **ARG**.

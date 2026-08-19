@@ -299,9 +299,18 @@ export default function App() {
                 <option value="lecoq">Le Coq Sportif</option>
                 <option value="orchard">Orchard</option>
                 <option value="luxo">Luxo</option>
+                <option value="vart">Vart</option>
                 <option value="bloque">Bloque (PDFs)</option>
               </select>
             </div>
+
+            {config.brand === 'vart' && (
+              <p style={{ fontSize: '0.8rem', color: '#fbbf24', marginTop: '0.4rem' }}>
+                🆕 <strong>Vart</strong> usa la <strong>plantilla de carga de INDY</strong> (hoja «Carga Productos»).
+                El <strong>precio</strong> sale de la columna del Excel y los <strong>talles van tal cual</strong> (no hay conversión).
+                Pendientes: el <strong>descuento comercial</strong> y el nombre exacto de la <strong>sucursal</strong> en Shopify.
+              </p>
+            )}
 
             {config.brand !== 'bloque' && sheets.length > 0 && (
               <div className="form-group">

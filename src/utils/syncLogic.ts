@@ -3,13 +3,14 @@ import { escapeCSV, triggerDownload, todayStamp } from './csv';
 import { shopifyGraphQL, mismaSucursal } from './shopify';
 import { CONVERSE_CODE_TABLE } from './converseCurvas';
 import { esPrecioSugerido } from './conversePreciosFijos';
+import { parseVart, VART_LOCATION, VART_DESCUENTO } from './vartLogic';
 import type { ListaPrecios } from './listaPrecios';
 
 export type SyncMode = 'all' | 'stock_only' | 'cost_only' | 'price_only';
 
 export interface SyncConfig {
   sheetName: string;
-  brand: 'lecoq' | 'converse' | 'bloque' | 'orchard' | 'luxo';
+  brand: 'lecoq' | 'converse' | 'bloque' | 'orchard' | 'luxo' | 'vart';
 }
 
 export interface MissingProduct {
@@ -23,6 +24,8 @@ export interface MissingProduct {
   artType?: string;
   costFinal?: number;
   usaListaPrecios?: boolean; // precio ya calculado desde la sábana
+  // Vart: SKU real del proveedor por talle (ver vartLogic.ts).
+  skuPorTalle?: Record<string, string>;
 }
 
 export interface UpdateAction {
@@ -90,6 +93,10 @@ export const BRAND_PRICING: Record<SyncConfig['brand'], { markup: number; provid
   orchard:  { markup: 0,    providerDiscount: 0.20, usePublicPrice: true,  redondear9900: false },
   bloque:   { markup: 2.0,  providerDiscount: 0.15, usePublicPrice: false, redondear9900: false },
   luxo:     { markup: 0,    providerDiscount: 0,    usePublicPrice: true,  redondear9900: false },
+  // Vart: el proveedor manda el precio final en la plantilla (columna "Precio /
+  // Markup"), así que la app NO calcula precio. El descuento comercial está
+  // PENDIENTE de cerrar con el proveedor -> ver VART_DESCUENTO en vartLogic.ts.
+  vart:     { markup: 0,    providerDiscount: 0,    usePublicPrice: true,  redondear9900: false },
 };
 
 // Precio de venta final según la marca.
@@ -180,12 +187,14 @@ const TYPE_WEIGHTS: Record<string, number> = {
   short: 300, bermuda: 300, pantalon: 500, jogger: 500, jean: 500, vestido: 350,
   gorra: 150, gorro: 120, piluso: 150, medias: 100, mochila: 700, bolso: 500,
   rinonera: 300, banano: 300,
+  zapatilla: 900, zapatillas: 900, // calzado (Vart trae bastante)
 };
 export function calcWeightGrams(brand: SyncConfig['brand'], artType?: string): number {
   if (brand === 'converse' || brand === 'lecoq') return 900; // zapatillas
   if (brand === 'bloque') return 2000; // skate (tentativo)
   if (brand === 'orchard') return ORCHARD_WEIGHTS[artType || ''] ?? 250; // default remera
   if (brand === 'luxo') return TYPE_WEIGHTS[artType || ''] ?? 300; // por tipo, default 300
+  if (brand === 'vart') return TYPE_WEIGHTS[artType || ''] ?? 300; // misma tabla que Luxo
   return 0;
 }
 
@@ -368,6 +377,10 @@ export const STOCK_LOCATION: Record<SyncConfig['brand'], string> = {
   orchard: 'ORCHARD',
   bloque: 'BLOQUE DISTRIBUTION',
   luxo: 'LUXO',
+  // ⚠ PENDIENTE: confirmar con Wanda el nombre EXACTO de la sucursal de Vart en
+  // Shopify (con emoji, si lo lleva). Hasta entonces la simulación de stock va a
+  // avisar "no encontré la sucursal" en vez de escribir en el lugar equivocado.
+  vart: VART_LOCATION,
 };
 
 // ---- TRAER PRODUCTOS DE SHOPIFY EN VIVO (sin subir CSV) ----
@@ -378,6 +391,7 @@ const VENDOR_QUERY: Partial<Record<SyncConfig['brand'], string>> = {
   lecoq: 'vendor:"Le Coq Sportif"',
   orchard: 'vendor:Orchard',
   luxo: 'vendor:Luxo',
+  vart: 'vendor:Vart',
 };
 
 const LIVE_LOCATIONS_QUERY = `query { locations(first: 50) { edges { node { id name } } } }`;
@@ -504,7 +518,7 @@ export async function processFiles(
   listaPrecios?: ListaPrecios | null,
 ): Promise<SyncResult> {
   const alerts: AlertMessage[] = [];
-  const excelMap: Record<string, { wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number, usaListaPrecios?: boolean }> = {};
+  const excelMap: Record<string, { wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number, usaListaPrecios?: boolean, skuPorTalle?: Record<string, string> }> = {};
 
   if (config.brand === 'bloque' && /\.xlsx?$/i.test(providerFile.name)) {
     // Bloque en Excel (ej. la preventa de Protec).
@@ -664,6 +678,85 @@ export async function processFiles(
       if (!isNaN(qty)) {
         excelMap[cod].sizes[rawSize] = (excelMap[cod].sizes[rawSize] || 0) + qty;
       }
+    }
+  } else if (config.brand === 'vart') {
+    // VART — misma plantilla INDY que Luxo, pero con validaciones propias.
+    // La lectura y los controles viven en vartLogic.ts (ver ahí las reglas).
+    // Diferencia clave con Luxo: acá el producto se agrupa por el SKU SIN el
+    // sufijo de talle (VA0082-524-63 -> VA0082-524), así una remera queda como
+    // UN producto con 5 talles y no como 5 productos distintos.
+    const excelData = await readExcel(providerFile, config.sheetName);
+    const vart = parseVart(excelData as any[][], VART_DESCUENTO);
+
+    // Tipo de prenda (para el peso de envío). Sale de la primera palabra útil
+    // del nombre: "Remera Grow" -> remera, "Zapatilla Play Negro" -> zapatilla.
+    const vartTipos = ['zapatilla','remera','musculosa','camiseta','buzo','hoodie','canguro','campera','chaqueta','sweater','camisa','chomba','short','bermuda','pantalon','jogging','jogger','jean','vestido','gorra','gorro','medias','mochila','bolso','rompeviento'];
+    for (const [base, p] of Object.entries(vart.productos)) {
+      const norm = p.nombre.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+      const artType = vartTipos.find((t) => norm.includes(t)) || '';
+      excelMap[base] = {
+        wholesale: p.costo,
+        publicPrice: p.precio,
+        costFinal: p.costoFinal,
+        sizes: p.sizes,
+        skuPorTalle: p.skuPorTalle,
+        foundInShopify: false,
+        title: p.nombre,
+        vendor: 'Vart',
+        artType,
+      };
+    }
+
+    // Los problemas NO se cargan: se avisan. Preferimos dejar filas afuera antes
+    // que meter stock en el talle equivocado.
+    const corridos = vart.problemas.filter((x) => x.tipo === 'talle_corrido');
+    const duplicados = vart.problemas.filter((x) => x.tipo === 'sku_duplicado');
+    const conflictos = vart.problemas.filter((x) => x.tipo === 'nombre_en_conflicto');
+
+    if (corridos.length) {
+      alerts.push({
+        type: 'danger',
+        title: `⚠️ ${corridos.length} filas con el talle corrido — NO se cargaron`,
+        message:
+          'En el calzado, el SKU siempre termina en el talle (VA0005-28-39 = talle 39). ' +
+          'En estas filas no coinciden, así que la planilla está desalineada y cargarlas ' +
+          'metería el stock en el talle equivocado. Pedile a Vart que corrija: ' +
+          corridos.map((x) => `fila ${x.fila} (${x.sku})`).join(', ') + '.',
+      });
+    }
+    if (duplicados.length) {
+      alerts.push({
+        type: 'danger',
+        title: `⚠️ ${duplicados.length} SKUs repetidos — NO se cargaron`,
+        message:
+          'El mismo SKU aparece en dos productos distintos, así que no se puede saber a cuál ' +
+          'corresponde el stock. Filas: ' + duplicados.map((x) => `${x.fila} (${x.sku})`).join(', ') + '.',
+      });
+    }
+    if (conflictos.length) {
+      alerts.push({
+        type: 'warning',
+        title: `${conflictos.length} códigos con dos nombres distintos`,
+        message: conflictos.map((x) => `fila ${x.fila}: ${x.detalle}`).join(' | '),
+      });
+    }
+    if (vart.sinPrecio.length) {
+      alerts.push({
+        type: 'info',
+        title: `${vart.sinPrecio.length} productos todavía sin precio`,
+        message:
+          'Vart no mandó costo ni precio de estos códigos: ' + vart.sinPrecio.join(', ') +
+          '. El stock se puede cargar igual; los precios se completan cuando los mande.',
+      });
+    }
+    if (VART_DESCUENTO === 0) {
+      alerts.push({
+        type: 'info',
+        title: 'Descuento comercial de Vart: sin definir',
+        message:
+          'Por ahora el costo que se manda a Shopify es el de la columna "Costo" tal cual. ' +
+          'Cuando cierres el descuento con el proveedor se cambia en un solo lugar (VART_DESCUENTO).',
+      });
     }
   } else if (config.brand === 'luxo') {
     // Luxo: plantilla INDY (productos nuevos). Encabezado con "Código SKU"; una fila por talle.
@@ -1117,6 +1210,7 @@ export async function processFiles(
         artType: data.artType,
         costFinal: data.costFinal,
         usaListaPrecios: data.usaListaPrecios,
+        skuPorTalle: data.skuPorTalle,
       });
     }
   }
@@ -1283,6 +1377,9 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
         if (config.brand === 'lecoq') variantSku = `${prod.coditm}-${size}`;
         else if (config.brand === 'orchard') variantSku = `ORC-${(prod.descCod || '').toUpperCase()}-${String(size).toUpperCase()}`;
         else if (config.brand === 'luxo') variantSku = isUnico ? prod.coditm : `${prod.coditm}-${String(size).toUpperCase()}`;
+        // Vart manda su propio SKU por talle y NO se puede deducir del talle
+        // (en ropa el sufijo es un código: 63=S, 64=M...). Usamos el del Excel.
+        else if (config.brand === 'vart') variantSku = prod.skuPorTalle?.[String(size).toUpperCase()] || `${prod.coditm}-${String(size).toUpperCase()}`;
         const useTitleOption = config.brand === 'luxo' && isUnico;
         if (!useTitleOption) hasSizes = true;
         variants.push({
