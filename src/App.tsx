@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, downloadInventoryCSV, autoConverseTable } from './utils/syncLogic';
 import type { SyncConfig, SyncResult } from './utils/syncLogic';
-import { planStockWrite, executeStockWrite } from './utils/writeStock';
+import { planStockWrite, executeStockWrite, activarEnSucursal } from './utils/writeStock';
 import type { StockPlan } from './utils/writeStock';
 import { createProducts } from './utils/createProducts';
 import { aplicarPrecios, actualizacionesAplicables, sinCambios, margenPct } from './utils/updatePrices';
@@ -36,6 +36,24 @@ export default function App() {
   // Buscador del simulador: filtra las 3 tablas por código, producto o talle.
   // Es SOLO visual: no cambia lo que se escribe en Shopify.
   const [stockBuscar, setStockBuscar] = useState('');
+  // Alta en sucursal: paso APARTE, con su propia confirmación.
+  const [altaConfirm, setAltaConfirm] = useState(false);
+  const [altaLoading, setAltaLoading] = useState(false);
+  const [altaDone, setAltaDone] = useState<string | null>(null);
+
+  const handleActivar = async () => {
+    if (!stockPlan || stockPlan.sinActivar.length === 0) return;
+    setAltaLoading(true); setAltaDone(null);
+    try {
+      const res = await activarEnSucursal(stockPlan);
+      setAltaDone(`Dadas de alta ${res.written} · fallidas ${res.failed}` + (res.errors.length ? ` · ${res.errors.slice(0, 2).join(' | ')}` : ''));
+      setAltaConfirm(false);
+    } catch (e: any) {
+      alert('Error dando de alta: ' + e.message);
+    } finally {
+      setAltaLoading(false);
+    }
+  };
 
   // ---- ACTUALIZAR PRECIOS Y COSTOS DIRECTO EN SHOPIFY ----
   const [precioConfirm, setPrecioConfirm] = useState(false);
@@ -521,6 +539,7 @@ export default function App() {
                 <div style={{ fontSize: '0.9rem', marginBottom: '0.6rem' }}>
                   📍 Sucursal: <strong>{stockPlan.locationName}</strong> · Cambios: <strong style={{ color: '#f59e0b' }}>{stockPlan.changes.length}</strong> · Sin cambios: {stockPlan.unchanged}
                   {stockPlan.notFound.length > 0 && <> · No ubicados: {stockPlan.notFound.length}</>}
+                  {stockPlan.sinActivar.length > 0 && <> · <span style={{ color: '#c084fc' }}>Sin alta en la sucursal: <strong>{stockPlan.sinActivar.length}</strong></span></>}
                   {stockPlan.changes.some(c => c.motivo) && (
                     <> · <span style={{ color: '#f87171' }}>🗑️ A poner en 0 (el proveedor ya no los lista): <strong>{stockPlan.changes.filter(c => c.motivo).length}</strong></span></>
                   )}
@@ -547,6 +566,7 @@ export default function App() {
                   const fCambios = stockPlan.changes.filter(coincide);
                   const fIguales = stockPlan.unchangedRows.filter(coincide);
                   const fNoUbic = stockPlan.notFound.filter(coincide);
+                  const fSinAlta = stockPlan.sinActivar.filter(coincide);
 
                   const caja = { maxHeight: '300px', overflowY: 'auto' as const, border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px' };
                   const th = { textAlign: 'left' as const, padding: '6px 10px' };
@@ -555,7 +575,7 @@ export default function App() {
 
                   return (
                     <>
-                      {q && fCambios.length + fIguales.length + fNoUbic.length === 0 && (
+                      {q && fCambios.length + fIguales.length + fNoUbic.length + fSinAlta.length === 0 && (
                         <p style={{ padding: '0.8rem', background: 'rgba(245,158,11,0.12)', border: '1px solid #f59e0b', borderRadius: '6px' }}>
                           ⚠️ <strong>«{stockBuscar}»</strong> no está en ninguna de las tres listas. Eso quiere decir que la app
                           no lo encontró en Shopify: fijate más abajo en <strong>Faltantes (Nuevos)</strong>.
@@ -665,6 +685,57 @@ export default function App() {
                           </div>
                         </details>
                       )}
+                      {/* --- 4) SIN ALTA EN LA SUCURSAL: hay que activarlas --- */}
+                      {fSinAlta.length > 0 && (
+                        <details open={!!q} style={{ marginTop: '0.8rem' }}>
+                          <summary style={{ cursor: 'pointer', fontSize: '0.85rem', color: '#c084fc' }}>
+                            🏷️ <strong>Sin alta en la sucursal ({fSinAlta.length}{q ? ` de ${stockPlan.sinActivar.length}` : ''})</strong>
+                            <span style={{ opacity: 0.7 }}> — existen en la tienda pero no están dadas de alta en {stockPlan.locationName}.</span>
+                          </summary>
+                          <p style={{ fontSize: '0.78rem', opacity: 0.85, margin: '0.4rem 0' }}>
+                            Shopify no deja ponerles stock hasta darlas de alta. No es que tengan cero:
+                            en esa sucursal directamente no existen. <strong>No se tocan con el botón rojo de arriba.</strong>
+                          </p>
+                          <div style={{ ...caja, marginTop: '0.4rem' }}>
+                            <table style={tabla}>
+                              <thead>
+                                <tr style={cab}>
+                                  <th style={th}>Producto</th>
+                                  <th style={{ ...th, padding: '6px' }}>Código</th>
+                                  <th style={{ padding: '6px' }}>Talle proveedor</th>
+                                  <th style={{ padding: '6px' }}>Talle Shopify</th>
+                                  <th style={{ padding: '6px' }}>Stock a cargar</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {fSinAlta.map((r, i) => (
+                                  <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: 'rgba(192,132,252,0.10)' }}>
+                                    <td style={{ padding: '6px 10px' }}>{r.title}</td>
+                                    <td style={{ padding: '6px', fontFamily: 'monospace', opacity: 0.85 }}>{r.code}</td>
+                                    <td style={{ padding: '6px', textAlign: 'center', opacity: 0.7 }}>{r.talleProveedor}</td>
+                                    <td style={{ padding: '6px', textAlign: 'center' }}>{r.talle}</td>
+                                    <td style={{ padding: '6px', textAlign: 'center', fontWeight: 'bold', color: '#c084fc' }}>{r.desired}</td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <label style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '0.6rem', fontSize: '0.85rem' }}>
+                            <input type="checkbox" checked={altaConfirm} onChange={e => setAltaConfirm(e.target.checked)} />
+                            Entiendo que esto va a <strong>&nbsp;dar de alta estas variantes en {stockPlan.locationName}&nbsp;</strong> y cargarles ese stock.
+                          </label>
+                          <button
+                            className="btn-primary"
+                            style={{ background: altaConfirm ? '#9333ea' : '#6b7280', marginTop: '0.5rem' }}
+                            onClick={handleActivar}
+                            disabled={!altaConfirm || altaLoading}
+                          >
+                            {altaLoading ? <span className="loader"></span> : `🏷️ Dar de alta ${stockPlan.sinActivar.length} variantes y cargarles el stock`}
+                          </button>
+                          {altaDone && <p style={{ marginTop: '0.5rem', color: '#c084fc', fontWeight: 'bold' }}>✅ {altaDone}</p>}
+                        </details>
+                      )}
+
                     </>
                   );
                 })()}

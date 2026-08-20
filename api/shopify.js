@@ -13,6 +13,11 @@ const ALLOWED_MUTATIONS = [
   'productSet',                // crear productos nuevos
   'publishablePublish',        // publicar productos en un canal (Point of Sale)
   'productVariantsBulkUpdate', // actualizar SOLO precio y costo de variantes
+  // Da de alta una variante en una sucursal (y le pone la cantidad). Sin esto,
+  // Shopify rechaza escribirle stock: "The specified inventory item is not
+  // stocked at the location". Se usa SOLO desde el botón aparte que Wanda
+  // confirma a mano; nunca dentro de la escritura normal de stock.
+  'inventoryActivate',
 ];
 
 const SHOP = 'indy-com-ar.myshopify.com';

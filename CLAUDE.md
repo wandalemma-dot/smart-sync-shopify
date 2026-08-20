@@ -78,6 +78,32 @@ Su columna `Precio` es el **precio de lista (WHSL)**.
     Por eso `actualizacionesAplicables()` ordena **primero las que cambian el
     precio de venta** y después las de solo costo.
 
+### 3.1-quater Variantes SIN ALTA en la sucursal (error clásico)
+
+Shopify **no deja escribir stock** en una sucursal si la variante no está dada de
+alta ahí. Devuelve:
+`The specified inventory item is not stocked at the location.`
+
+> 🔴 **DOS COSAS QUE HAY QUE SABER.**
+> **1)** Al pedir `inventoryLevel(locationId:)` de una variante que no está dada
+> de alta, Shopify devuelve **null**. Eso **NO significa "tiene cero"**: significa
+> que ahí no existe. Si se interpreta como cero, se la manda a escribir y falla.
+> **2)** `inventorySetQuantities` es **todo o nada**: si UNA variante del lote
+> falla, Shopify rechaza **el lote entero**. Con lotes de 100, una sola variante
+> mala tiraba abajo 99 escrituras buenas (a Wanda le dio «Escritos 490 · fallidos
+> 400» = 4 lotes perdidos por un puñado de variantes).
+
+Cómo quedó resuelto en `writeStock.ts`:
+
+- `planStockWrite()` aparta esas variantes en **`sinActivar`** antes de escribir.
+  Nunca entran al lote.
+- `executeStockWrite()`: si igual un lote falla, **reintenta de a una**, así se
+  pierde solo la que realmente tiene el problema y los contadores son reales.
+- `activarEnSucursal()` las da de alta con `inventoryActivate` y les carga la
+  cantidad. Es **un botón aparte con su propia confirmación** (decisión de Wanda,
+  20-ago-2026): el botón rojo de stock **nunca** las toca.
+  `inventoryActivate` está en la allowlist de `api/shopify.js`.
+
 ### 3.1-ter iD — «PlantillaPedido.xlsx» (formato vigente desde agosto 2026)
 
 Es como Wanda baja hoy los archivos de iD: **uno por marca** (uno de Converse,
