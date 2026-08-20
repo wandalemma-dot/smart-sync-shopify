@@ -132,9 +132,28 @@ export function costoId(precioLista: number): number {
   return Math.round(precioLista * (1 - ID_DESCUENTO_GENERAL));
 }
 
+// ---- PRECIO SUGERIDO DEL PROVEEDOR (los básicos van a este precio) ----
+// Regla que dio Wanda (20-ago-2026): el sugerido es el precio de lista x 1,87,
+// redondeado a la centena.
+//
+// ✅ VERIFICADO contra la sábana del 04-08-26, las 14.744 filas que tienen
+//    WHSL y RETAIL: la fórmula da el RETAIL exacto en el 100% de los casos.
+//    Le Coq 3.843/3.843 · Converse 10.901/10.901 · los 45 básicos 45/45.
+//    Por eso la sábana ya no hace falta: el sugerido sale del mismo archivo.
+export const MARKUP_SUGERIDO = 1.87;
+
+export function sugeridoId(precioLista: number): number {
+  if (!precioLista || precioLista <= 0) return 0;
+  return Math.round((precioLista * MARKUP_SUGERIDO) / 100) * 100;
+}
+
 // Precio final para Converse / Le Coq.
-export function precioId(codigo: string, precioLista: number, sugerido: number): number {
-  if (esPrecioSugerido(codigo) && sugerido > 0) return sugerido; // básico: sin markup
+export function precioId(codigo: string, precioLista: number, sugerido = 0): number {
+  if (esPrecioSugerido(codigo)) {
+    // Básico: SIEMPRE al sugerido del proveedor, nunca con el markup 2,27.
+    // Si vino de una sábana lo respetamos; si no, lo calculamos (x1,87).
+    return sugerido > 0 ? sugerido : sugeridoId(precioLista);
+  }
   if (precioLista > 0) return redondear900(precioLista * ID_MARKUP);
   return sugerido || 0;
 }
@@ -806,20 +825,15 @@ export async function processFiles(
       // Ver src/utils/plantillaPedido.ts. Trae stock Y precio de lista, uno por
       // marca. Los talles se leen por NOMBRE de columna (vienen desordenados).
       const ped = parsePlantillaPedido(excelData as any[][], config.brand as 'converse' | 'lecoq');
-      const basicosSinSabana: string[] = [];
       for (const f of Object.values(ped.items)) {
         const cod = f.codigo.toLowerCase();
-        // ⚠ El precio de venta de los BÁSICOS de Converse es el sugerido del
-        // proveedor (RETAIL), y ESO este archivo no lo trae. Si le pusiéramos el
-        // markup 2,27 les estaríamos cambiando el precio, que es justo lo que no
-        // hay que hacer. Así que a los básicos los dejamos SIN precio salvo que
-        // esté cargada la sábana (que los completa más abajo).
-        const esBasico = config.brand === 'converse' && esPrecioSugerido(f.codigo);
-        if (esBasico && !listaPrecios) basicosSinSabana.push(f.codigo);
+        // precioId() ya resuelve las dos reglas: los BÁSICOS van al sugerido
+        // del proveedor (lista x 1,87 a la centena) y el resto lleva el markup
+        // 2,27 con terminación ...900.
         excelMap[cod] = {
           wholesale: f.precioLista,
           costFinal: costoId(f.precioLista),
-          publicPrice: esBasico ? undefined : redondear900(f.precioLista * ID_MARKUP),
+          publicPrice: precioId(f.codigo, f.precioLista),
           sizes: f.sizes,
           foundInShopify: false,
           title: tituloPedido(f),
@@ -831,20 +845,10 @@ export async function processFiles(
         type: 'info',
         title: `Archivo de pedido de iD: ${ped.productos} productos, ${ped.unidades} unidades`,
         message:
-          'Este formato trae el precio de lista además del stock, así que el costo ya sale de acá ' +
-          '(precio de lista menos 7%). La sábana se sigue usando solo para el precio sugerido de los básicos.' +
+          'Con este archivo alcanza: el costo es el precio de lista menos 7%, los básicos van al sugerido ' +
+          '(lista × 1,87 a la centena) y el resto lleva el markup 2,27.' +
           (ped.conTope ? ` Además, ${ped.conTope} talles venían como "+50" (el proveedor no publica el número exacto): esos se cargan con 50.` : ''),
       });
-      if (basicosSinSabana.length) {
-        alerts.push({
-          type: 'warning',
-          title: `${basicosSinSabana.length} básicos sin precio: falta la sábana`,
-          message:
-            'Estos modelos van SIEMPRE al precio sugerido del proveedor, y este archivo no trae ese dato. ' +
-            'Los dejo sin precio para no cambiárselo por error. Subí la sábana y volvé a analizar. Códigos: ' +
-            basicosSinSabana.join(', ') + '.',
-        });
-      }
     } else if (esFormatoNuevo) {
       const idx = (needle: string) => hdr0.findIndex(h => h.includes(needle));
       const cCod = 0;

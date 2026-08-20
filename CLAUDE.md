@@ -53,10 +53,14 @@ luxo     → LUXO
 
 ### 3.1 Converse y Le Coq ("iD") — PRECIOS
 
-Los precios salen de la **sábana** del proveedor (Excel con hojas *Le Coq Sportif*
-y *Converse*, columnas `SKU | DESCRIPCION | WHSL PRICE | RETAIL PRICE`).
-Se sube en la pestaña Sincronización. **El Excel de stock NO trae precios**: sin
-la sábana, los productos nuevos se crean en $0.
+Todo sale de **un solo archivo**: la `PlantillaPedido.xlsx` de iD (ver 3.1-ter).
+Su columna `Precio` es el **precio de lista (WHSL)**.
+
+> 🟢 **LA SÁBANA SE SACÓ (20-ago-2026).** Antes había que subir un segundo Excel
+> con `SKU | DESCRIPCION | WHSL PRICE | RETAIL PRICE`. Ya no: el WHSL viene en la
+> plantilla y el RETAIL **se calcula** (ver abajo). `listaPrecios.ts` sigue en el
+> repo y `processFiles()` todavía acepta una sábana como parámetro opcional, pero
+> la app **ya no la pide**.
 
 - **Costo** = `WHSL PRICE − 7%` (descuento general del proveedor) → `costoId()`
 - **Precio** = `WHSL PRICE × 2.27`, redondeado a terminación **…900** → `precioId()`
@@ -90,9 +94,12 @@ Código en `src/utils/plantillaPedido.ts`.
   386** códigos en común. En los 5 que difieren, la sábana repite el mismo valor
   (53422,4599 / retail 99900) para 5 modelos distintos → la buena es la del
   archivo. Por eso `whslDelArchivo` hace que **este precio le gane a la sábana**.
-- La sábana **sigue haciendo falta** para el `RETAIL` de los 45 básicos. Si no
-  está cargada, los básicos quedan **sin precio** y la app avisa. Es a propósito:
-  ponerles el markup 2,27 sería cambiarles el precio, justo lo que no va.
+- El **precio sugerido** (que necesitan los 45 básicos) **no viene en el archivo,
+  se calcula**: `redondearALaCentena(lista × 1,87)` → `sugeridoId()`.
+  Regla que dio Wanda el 20-ago-2026.
+  ✅ Verificado contra las **14.744** filas de la sábana del 04-08-26 que tienen
+  WHSL y RETAIL: da el RETAIL exacto en el **100%** (Le Coq 3.843/3.843,
+  Converse 10.901/10.901, los 45 básicos 45/45). Por eso la sábana quedó de más.
 
 > 🔴 **DOS TRAMPAS DE ESTE FORMATO — no tocar sin leer.**
 > **1)** Los talles se leen **por nombre de columna**, nunca por posición: el
@@ -207,7 +214,7 @@ Al crear, cada producto se clasifica (`autoConverseTable()`):
 curvas y se puede cambiar a mano en pantalla.
 
 Se crean **Activos**, publicados **solo en Point of Sale**, con el stock del
-archivo. Si no hay precio (Converse/Le Coq sin sábana) se crean en **$0**.
+archivo. Si el archivo no trae precio, se crean en **$0**.
 
 ### 3.6 Orchard
 
@@ -312,7 +319,7 @@ src/utils/
   tallesConverseLecoq.json  7 curvas + 659 códigos → curva
   converseCurvas.ts         Maestro código → tabla de talle
   conversePreciosFijos.ts   Los 45 básicos que van al precio sugerido
-  listaPrecios.ts           Lee la sábana de precios del proveedor
+  listaPrecios.ts           Lee la sábana (YA NO SE USA: quedó por compatibilidad)
   reposicionLogic.ts        Arma el pedido (ventas, stock, no preparados)
   pedidoPendiente.ts        Lee el Excel del pedido ya hecho ("en camino")
   writeStock.ts             Escribe stock (simular → confirmar)

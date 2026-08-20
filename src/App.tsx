@@ -4,8 +4,6 @@ import type { SyncConfig, SyncResult } from './utils/syncLogic';
 import { planStockWrite, executeStockWrite } from './utils/writeStock';
 import type { StockPlan } from './utils/writeStock';
 import { createProducts } from './utils/createProducts';
-import { leerListaPrecios } from './utils/listaPrecios';
-import type { ListaPrecios } from './utils/listaPrecios';
 import { aplicarPrecios, actualizacionesAplicables, sinCambios, margenPct } from './utils/updatePrices';
 import Reposicion from './Reposicion';
 
@@ -119,17 +117,10 @@ export default function App() {
   // Inputs de archivo ocultos: permiten seleccionar con un clic además de arrastrar.
   const providerInputRef = useRef<HTMLInputElement>(null);
 
-  // ---- SÁBANA DE PRECIOS (Converse / Le Coq) ----
-  const [lista, setLista] = useState<ListaPrecios | null>(null);
-  const listaInputRef = useRef<HTMLInputElement>(null);
-
-  const cargarLista = async (file: File) => {
-    try {
-      setLista(await leerListaPrecios(file));
-    } catch (e: any) {
-      alert('No pude leer la sábana de precios: ' + e.message);
-    }
-  };
+  // La SÁBANA DE PRECIOS se sacó el 20-ago-2026: la PlantillaPedido de iD ya
+  // trae el precio de lista, y el sugerido de los básicos se calcula (x1,87).
+  // processFiles() sigue aceptando una sábana por compatibilidad, pero la app
+  // ya no la pide.
 
   // --- Lógica central de cada archivo, reutilizada por drag & drop y por clic ---
   const processProviderFile = async (file: File) => {
@@ -176,7 +167,7 @@ export default function App() {
     setPreviewReady(false);
 
     try {
-      const res = await processFiles(providerFile, null, null, cfg, lista);
+      const res = await processFiles(providerFile, null, null, cfg, null);
       setResult(res);
       setPreviewReady(true);
     } catch (err: any) {
@@ -249,34 +240,6 @@ export default function App() {
               <h3>{providerFile ? '📄 Archivo Principal Listo' : (config.brand === 'bloque' ? '📥 Arrastrá o hacé clic: PRESUPUESTO (PDF) o Excel' : '📥 Arrastrá o hacé clic: Excel del Proveedor')}</h3>
               <p>{providerFile?.name}</p>
             </div>
-
-            {(config.brand === 'converse' || config.brand === 'lecoq') && (
-              <>
-                <input
-                  ref={listaInputRef}
-                  type="file"
-                  accept=".xlsx,.xls"
-                  style={{ display: 'none' }}
-                  onChange={e => { const f = e.target.files?.[0]; if (f) cargarLista(f); e.target.value = ''; }}
-                />
-                <div
-                  className={`dropzone ${lista ? 'has-file' : ''}`}
-                  onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) cargarLista(f); }}
-                  onDragOver={preventDefault}
-                  onClick={() => listaInputRef.current?.click()}
-                  style={{ marginTop: '0.8rem', cursor: 'pointer', borderColor: lista ? '#10b981' : '#f59e0b' }}
-                >
-                  <h3 style={{ color: lista ? '#10b981' : '#fbbf24' }}>
-                    {lista ? '✅ Sábana de precios cargada' : '💲 Arrastrá o hacé clic: sábana de precios'}
-                  </h3>
-                  <p>
-                    {lista
-                      ? `${lista.cantidad.toLocaleString('es-AR')} artículos (${lista.hojas.join(', ')})`
-                      : 'El Excel de stock no trae precios: sin esto los productos nuevos se crean en $0'}
-                  </p>
-                </div>
-              </>
-            )}
 
             <p style={{ marginTop: '0.8rem', fontSize: '0.85rem', opacity: 0.75, textAlign: 'center' }}>
               🔗 La app se conecta sola a Shopify. No necesitás subir ningún CSV.
