@@ -100,6 +100,11 @@ Código en `src/utils/plantillaPedido.ts`.
 > Leer por posición = cargar el stock en el talle equivocado.
 > **2)** La conversión numérica se hace **solo si el talle es todo dígitos**
 > (`/^\d+$/`). `parseInt("3XL")/10` daría `0.3`.
+> **3)** Las celdas que dicen **`+50`** significan «más de 50»: el proveedor no
+> publica el número exacto cuando tiene mucho. **Regla de Wanda: se cargan 50.**
+> En el archivo del 20-ago son **351 celdas** (121 productos). El `+` se saca a
+> propósito; no se confía en que `Number("+50")` devuelva 50 solo.
+> Y `-` significa que ese talle no lo maneja: se saltea, **no** se carga 0.
 >
 > Verificado contra `Stock 3.xlsx` (18-ago): de 243 códigos en común, 202 (83%)
 > dan **exactamente el mismo juego de talles**; el resto difiere en uno o dos

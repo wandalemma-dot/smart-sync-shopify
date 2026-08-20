@@ -832,7 +832,8 @@ export async function processFiles(
         title: `Archivo de pedido de iD: ${ped.productos} productos, ${ped.unidades} unidades`,
         message:
           'Este formato trae el precio de lista además del stock, así que el costo ya sale de acá ' +
-          '(precio de lista menos 7%). La sábana se sigue usando solo para el precio sugerido de los básicos.',
+          '(precio de lista menos 7%). La sábana se sigue usando solo para el precio sugerido de los básicos.' +
+          (ped.conTope ? ` Además, ${ped.conTope} talles venían como "+50" (el proveedor no publica el número exacto): esos se cargan con 50.` : ''),
       });
       if (basicosSinSabana.length) {
         alerts.push({

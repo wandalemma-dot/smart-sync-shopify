@@ -47,7 +47,13 @@ export interface ParsePedido {
   productos: number;
   unidades: number;
   talleColumnas: string[];         // los talles que traía el encabezado
+  conTope: number;                 // cuántas celdas venían como "+50"
 }
+
+// El proveedor no publica el stock exacto cuando tiene mucho: escribe "+50"
+// ("más de cincuenta"). Regla de Wanda: en esos casos cargamos 50 y listo.
+// El "+" se saca a propósito y NO se confía en que Number("+50") dé 50 solo.
+const PREFIJO_TOPE = '+';
 
 // Columnas que van DESPUÉS de los talles y no son talles.
 const NO_SON_TALLES = ['unidades', 'importe', 'idcuenta', 'idmarca', 'iditem'];
@@ -108,6 +114,7 @@ export function parsePlantillaPedido(rows: any[][], brand: 'converse' | 'lecoq')
   // 3) Recorrer de a pares: fila "Disponible" + fila "Cantidad".
   const items: Record<string, FilaPedido> = {};
   let unidades = 0;
+  let conTope = 0;
   for (let r = hRow + 1; r < rows.length; r++) {
     const a = rows[r] || [];
     const codigo = String(a[iCod] || '').trim();
@@ -126,8 +133,13 @@ export function parsePlantillaPedido(rows: any[][], brand: 'converse' | 'lecoq')
       items[key] = { codigo: key, nombre, color, precioLista, sizes: {} };
     }
     for (const { col, talle } of colTalle) {
-      const celda = String(a[col] ?? '').trim();
+      let celda = String(a[col] ?? '').trim();
       if (!celda || celda === '-') continue;                  // "-" = no lo maneja
+      // "+50" = "más de 50". Regla de Wanda: cargamos 50.
+      if (celda.startsWith(PREFIJO_TOPE)) {
+        celda = celda.slice(1).trim();
+        conTope++;
+      }
       const qty = Number(celda);
       if (!isFinite(qty)) continue;
       const norm = normalizarTalle(talle, brand);
@@ -142,6 +154,7 @@ export function parsePlantillaPedido(rows: any[][], brand: 'converse' | 'lecoq')
     productos: Object.keys(items).length,
     unidades,
     talleColumnas: colTalle.map((x) => x.talle),
+    conTope,
   };
 }
 
