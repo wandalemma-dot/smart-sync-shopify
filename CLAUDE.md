@@ -74,6 +74,39 @@ la sábana, los productos nuevos se crean en $0.
     Por eso `actualizacionesAplicables()` ordena **primero las que cambian el
     precio de venta** y después las de solo costo.
 
+### 3.1-ter iD — «PlantillaPedido.xlsx» (formato vigente desde agosto 2026)
+
+Es como Wanda baja hoy los archivos de iD: **uno por marca** (uno de Converse,
+otro de Le Coq). Reemplaza al viejo `Stock (N).xlsx`.
+Código en `src/utils/plantillaPedido.ts`.
+
+- Hoja `Plantilla`. Fila 0 = UUIDs (se ignora). Fila 1 = encabezado.
+- Los productos vienen **de a pares de filas**: la primera dice `Disponible`
+  (stock por talle), la segunda dice `Cantidad` (vacía, es donde ella escribe
+  el pedido) y trae el **nombre** y el **color**.
+- **Trae el precio de lista**, cosa que el formato viejo no tenía.
+  Confirmado por Wanda: la columna `Precio` es **el costo SIN el 7%**, o sea el
+  WHSL. Verificado contra la sábana del 04-08-26: **coincide exacto en 381 de
+  386** códigos en común. En los 5 que difieren, la sábana repite el mismo valor
+  (53422,4599 / retail 99900) para 5 modelos distintos → la buena es la del
+  archivo. Por eso `whslDelArchivo` hace que **este precio le gane a la sábana**.
+- La sábana **sigue haciendo falta** para el `RETAIL` de los 45 básicos. Si no
+  está cargada, los básicos quedan **sin precio** y la app avisa. Es a propósito:
+  ponerles el markup 2,27 sería cambiarles el precio, justo lo que no va.
+
+> 🔴 **DOS TRAMPAS DE ESTE FORMATO — no tocar sin leer.**
+> **1)** Los talles se leen **por nombre de columna**, nunca por posición: el
+> encabezado va `030,035,…,130` y **recién después** `075,085,095,100,015,020,…`.
+> Leer por posición = cargar el stock en el talle equivocado.
+> **2)** La conversión numérica se hace **solo si el talle es todo dígitos**
+> (`/^\d+$/`). `parseInt("3XL")/10` daría `0.3`.
+>
+> Verificado contra `Stock 3.xlsx` (18-ago): de 243 códigos en común, 202 (83%)
+> dan **exactamente el mismo juego de talles**; el resto difiere en uno o dos
+> talles sueltos, que es movimiento de stock entre el 18 y el 20 de agosto.
+> Chequeos puntuales: A10564C → costo 44.710 / precio 109.900, y 157197C →
+> costo 54.656, los dos iguales a lo que ya venía mostrando la app.
+
 ### 3.1-bis VART (marca nueva — agosto 2026, todavía sin cargar nada)
 
 Marca argentina de indumentaria y calzado. Usa la **plantilla de carga de INDY**

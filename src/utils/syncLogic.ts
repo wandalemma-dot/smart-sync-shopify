@@ -4,6 +4,7 @@ import { shopifyGraphQL, mismaSucursal } from './shopify';
 import { CONVERSE_CODE_TABLE } from './converseCurvas';
 import { esPrecioSugerido } from './conversePreciosFijos';
 import { parseVart, VART_LOCATION, VART_DESCUENTO } from './vartLogic';
+import { esPlantillaPedido, parsePlantillaPedido, tituloPedido } from './plantillaPedido';
 import type { ListaPrecios } from './listaPrecios';
 
 export type SyncMode = 'all' | 'stock_only' | 'cost_only' | 'price_only';
@@ -518,7 +519,7 @@ export async function processFiles(
   listaPrecios?: ListaPrecios | null,
 ): Promise<SyncResult> {
   const alerts: AlertMessage[] = [];
-  const excelMap: Record<string, { wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number, usaListaPrecios?: boolean, skuPorTalle?: Record<string, string> }> = {};
+  const excelMap: Record<string, { wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number, usaListaPrecios?: boolean, skuPorTalle?: Record<string, string>, whslDelArchivo?: boolean }> = {};
 
   if (config.brand === 'bloque' && /\.xlsx?$/i.test(providerFile.name)) {
     // Bloque en Excel (ej. la preventa de Protec).
@@ -800,7 +801,50 @@ export async function processFiles(
     const hdr0 = ((excelData[0] as any[]) || []).map(x => String(x || '').toLowerCase());
     const esFormatoNuevo = hdr0.some(h => h.includes('digo item')) && hdr0.some(h => h.includes('cantidad disponible'));
 
-    if (esFormatoNuevo) {
+    if (esPlantillaPedido(excelData as any[][])) {
+      // ---- PlantillaPedido.xlsx (lo que iD entrega desde agosto 2026) ----
+      // Ver src/utils/plantillaPedido.ts. Trae stock Y precio de lista, uno por
+      // marca. Los talles se leen por NOMBRE de columna (vienen desordenados).
+      const ped = parsePlantillaPedido(excelData as any[][], config.brand as 'converse' | 'lecoq');
+      const basicosSinSabana: string[] = [];
+      for (const f of Object.values(ped.items)) {
+        const cod = f.codigo.toLowerCase();
+        // ⚠ El precio de venta de los BÁSICOS de Converse es el sugerido del
+        // proveedor (RETAIL), y ESO este archivo no lo trae. Si le pusiéramos el
+        // markup 2,27 les estaríamos cambiando el precio, que es justo lo que no
+        // hay que hacer. Así que a los básicos los dejamos SIN precio salvo que
+        // esté cargada la sábana (que los completa más abajo).
+        const esBasico = config.brand === 'converse' && esPrecioSugerido(f.codigo);
+        if (esBasico && !listaPrecios) basicosSinSabana.push(f.codigo);
+        excelMap[cod] = {
+          wholesale: f.precioLista,
+          costFinal: costoId(f.precioLista),
+          publicPrice: esBasico ? undefined : redondear900(f.precioLista * ID_MARKUP),
+          sizes: f.sizes,
+          foundInShopify: false,
+          title: tituloPedido(f),
+          // El precio de ESTE archivo le gana a la sábana: es el que baja hoy.
+          whslDelArchivo: true,
+        };
+      }
+      alerts.push({
+        type: 'info',
+        title: `Archivo de pedido de iD: ${ped.productos} productos, ${ped.unidades} unidades`,
+        message:
+          'Este formato trae el precio de lista además del stock, así que el costo ya sale de acá ' +
+          '(precio de lista menos 7%). La sábana se sigue usando solo para el precio sugerido de los básicos.',
+      });
+      if (basicosSinSabana.length) {
+        alerts.push({
+          type: 'warning',
+          title: `${basicosSinSabana.length} básicos sin precio: falta la sábana`,
+          message:
+            'Estos modelos van SIEMPRE al precio sugerido del proveedor, y este archivo no trae ese dato. ' +
+            'Los dejo sin precio para no cambiárselo por error. Subí la sábana y volvé a analizar. Códigos: ' +
+            basicosSinSabana.join(', ') + '.',
+        });
+      }
+    } else if (esFormatoNuevo) {
       const idx = (needle: string) => hdr0.findIndex(h => h.includes(needle));
       const cCod = 0;
       const cDesc = idx('descripci') >= 0 ? idx('descripci') : 1;
@@ -865,9 +909,14 @@ export async function processFiles(
     for (const [cod, data] of Object.entries(excelMap)) {
       const p = listaPrecios.items[cod.toUpperCase()];
       if (!p) continue;
-      data.wholesale = p.whsl;                       // precio de LISTA
-      data.costFinal = costoId(p.whsl);              // lista - 7%
-      data.publicPrice = precioId(cod, p.whsl, p.retail); // sugerido o lista x2.27
+      // La PlantillaPedido de iD ya trae el precio de lista y es la que Wanda
+      // baja hoy, así que ESA le gana a la sábana (que puede estar vieja: en el
+      // archivo del 04-08-26 había 5 códigos con un valor repetido de relleno).
+      // De la sábana igual necesitamos el RETAIL para los básicos de Converse.
+      const lista = data.whslDelArchivo && data.wholesale > 0 ? data.wholesale : p.whsl;
+      data.wholesale = lista;                        // precio de LISTA
+      data.costFinal = costoId(lista);               // lista - 7%
+      data.publicPrice = precioId(cod, lista, p.retail); // sugerido o lista x2.27
       data.usaListaPrecios = true;
     }
   }
