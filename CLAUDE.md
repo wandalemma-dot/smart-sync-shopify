@@ -242,6 +242,22 @@ curvas y se puede cambiar a mano en pantalla.
 Se crean **Activos**, publicados **solo en Point of Sale**, con el stock del
 archivo. Si el archivo no trae precio, se crean en **$0**.
 
+### 3.5-bis Crear productos nuevos: se ELIGE cuál crear
+
+La caja «Crear los nuevos directo en Shopify» y la de «Configurar Tablas para
+Nuevos Productos» eran **dos paneles separados**, uno arriba y otro al final de
+la página. Wanda pidió tenerlos **juntos** (20-ago-2026): cada producto muestra
+su código, título, talles, unidades y su tabla de talle, todo en la misma fila.
+
+Además cada producto tiene una **casilla**: por defecto vienen todos tildados,
+pero hay cosas que no quiere publicar (cordones, medias sueltas). Los códigos
+tildados se pasan a `createProducts(..., soloEstos)`; si el parámetro no viene,
+se crean todos (como antes).
+
+- «Crear 1 de prueba» crea **el primero tildado**, no el primero de la lista.
+- ⚠️ El botón **📥 CSV de Nuevos (Matriz)** sigue exportando **todos**, no solo
+  los tildados. Si algún día molesta, hay que pasarle el mismo filtro.
+
 ### 3.6 Orchard
 
 - Match **por NOMBRE** (no por SKU ni tags): el título de Shopify es

@@ -90,12 +90,19 @@ export default function App() {
   const [creating, setCreating] = useState(false);
   const [createConfirm, setCreateConfirm] = useState(false);
   const [createDone, setCreateDone] = useState<string | null>(null);
+  // Productos que NO se van a crear. Por defecto se crean todos; acá quedan los
+  // que Wanda destilda (cordones, medias sueltas, cosas que no quiere publicar).
+  const [noCrear, setNoCrear] = useState<Record<string, boolean>>({});
+
+  const paraCrear = (r: SyncResult) => r.missingProducts.filter(p => !noCrear[p.coditm]);
 
   const handleCreateProducts = async (limit?: number) => {
-    if (!result || result.missingProducts.length === 0) return;
+    if (!result) return;
+    const elegidos = paraCrear(result).map(p => p.coditm);
+    if (elegidos.length === 0) { alert('No hay ningún producto tildado para crear.'); return; }
     setCreating(true); setCreateDone(null);
     try {
-      const res = await createProducts(result, config, tableSelections, limit);
+      const res = await createProducts(result, config, tableSelections, elegidos, limit);
       setCreateDone(`Creados ${res.created} · fallidos ${res.failed}` + (res.errors.length ? ` · ${res.errors.slice(0, 2).join(' | ')}` : ''));
     } catch (e: any) {
       alert('Error creando productos: ' + e.message);
@@ -496,33 +503,92 @@ export default function App() {
             </div>
           )}
 
-          {/* ====== CREAR PRODUCTOS NUEVOS DIRECTO EN SHOPIFY ====== */}
-          {result?.missingProducts && result.missingProducts.length > 0 && (
+          {/* ====== CREAR PRODUCTOS NUEVOS DIRECTO EN SHOPIFY ======
+               Antes esto estaba partido en dos cajas separadas: el botón acá y
+               la tabla de talles al final de todo. Wanda pidió tenerlo junto,
+               y poder elegir producto por producto cuál crear (hay cordones y
+               cosas sueltas que no quiere publicar). */}
+          {result?.missingProducts && result.missingProducts.length > 0 && (() => {
+            const elegidos = paraCrear(result);
+            const total = result.missingProducts.length;
+            return (
             <div style={{ marginTop: '2rem', padding: '1rem', border: '1px solid #8b5cf6', borderRadius: '8px', background: 'rgba(139,92,246,0.06)' }}>
               <h3 style={{ color: '#a78bfa', marginTop: 0 }}>🚀 Crear los nuevos directo en Shopify</h3>
               <p style={{ fontSize: '0.85rem', opacity: 0.85, marginTop: 0 }}>
-                Crea los {result.missingProducts.length} productos nuevos en <strong>Activo</strong>, publicados <strong>solo en Point of Sale</strong>, con el stock del archivo. Probá primero con 1.
+                Se crean en <strong>Activo</strong>, publicados <strong>solo en Point of Sale</strong>, con el stock del archivo.
+                Destildá lo que no quieras publicar. Probá primero con 1.
               </p>
+
+              <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.6rem', fontSize: '0.85rem' }}>
+                <button style={{ padding: '4px 10px', borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.06)', color: 'white', fontSize: '0.8rem' }}
+                  onClick={() => setNoCrear({})}>Marcar todos</button>
+                <button style={{ padding: '4px 10px', borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.06)', color: 'white', fontSize: '0.8rem' }}
+                  onClick={() => setNoCrear(Object.fromEntries(result.missingProducts.map(p => [p.coditm, true])))}>Desmarcar todos</button>
+                <span style={{ marginLeft: 'auto', opacity: 0.85 }}>
+                  Se van a crear: <strong style={{ color: '#a78bfa' }}>{elegidos.length}</strong> de {total}
+                </span>
+              </div>
+
+              <div style={{ maxHeight: '320px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', marginBottom: '0.8rem' }}>
+                {result.missingProducts.map(p => {
+                  const off = !!noCrear[p.coditm];
+                  const talles = Object.entries(p.sizes);
+                  const unidades = talles.reduce((a, [, q]) => a + (Number(q) || 0), 0);
+                  return (
+                    <div key={p.coditm} style={{ display: 'flex', gap: '10px', alignItems: 'center', padding: '0.5rem 0.6rem', borderBottom: '1px solid rgba(255,255,255,0.08)', opacity: off ? 0.4 : 1 }}>
+                      <input type="checkbox" checked={!off}
+                        onChange={e => setNoCrear({ ...noCrear, [p.coditm]: !e.target.checked })} />
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: '0.85rem' }}>
+                          <strong style={{ fontFamily: 'monospace' }}>{p.coditm.toUpperCase()}</strong> — {p.title}
+                        </div>
+                        <div style={{ fontSize: '0.72rem', opacity: 0.7 }}>
+                          {talles.length} {talles.length === 1 ? 'talle' : 'talles'} · {unidades} unidades
+                          {' · '}{talles.slice(0, 8).map(([t, q]) => `${t}:${q}`).join('  ')}{talles.length > 8 ? ' …' : ''}
+                        </div>
+                      </div>
+                      {config.brand === 'converse' && (
+                        <select
+                          value={tableSelections[p.coditm] ?? autoConverseTable(p.coditm, p.sizes)}
+                          onChange={e => setTableSelections({ ...tableSelections, [p.coditm]: parseInt(e.target.value) })}
+                          disabled={off}
+                          style={{ padding: '0.3rem', borderRadius: '4px', background: 'var(--bg-color)', color: 'white', border: '1px solid var(--glass-border)', fontSize: '0.78rem', maxWidth: '260px' }}
+                        >
+                          <option value={0}>🎒 Accesorio (sin talle)</option>
+                          <option value={-1}>👕 Indumentaria (talle como viene)</option>
+                          <option value={1}>👟 Tabla 1 (Empieza en ARG 34 = US 3)</option>
+                          <option value={2}>👟 Tabla 2 (Empieza en ARG 35 = US 3)</option>
+                          <option value={3}>👟 Tabla Mujer (Empieza en ARG 35 = US 5)</option>
+                          <option value={4}>👟 Tabla Niño (Empieza en ARG 27 = US 10.5)</option>
+                          <option value={5}>👟 Tabla Bebe (Empieza en ARG 20 = US 4)</option>
+                        </select>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
               <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                <button className="btn-primary" style={{ background: '#3b82f6' }} onClick={() => handleCreateProducts(1)} disabled={creating}>
-                  {creating ? <span className="loader"></span> : '🧪 Crear 1 de prueba (borrador)'}
+                <button className="btn-primary" style={{ background: '#3b82f6' }} onClick={() => handleCreateProducts(1)} disabled={creating || elegidos.length === 0}>
+                  {creating ? <span className="loader"></span> : '🧪 Crear 1 de prueba (el primero tildado)'}
                 </button>
               </div>
               <label style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '0.8rem', fontSize: '0.9rem' }}>
                 <input type="checkbox" checked={createConfirm} onChange={e => setCreateConfirm(e.target.checked)} />
-                Ya probé con 1 y quiero <strong>&nbsp;crear todos&nbsp;</strong> en Shopify (como borrador).
+                Ya probé con 1 y quiero <strong>&nbsp;crear los tildados&nbsp;</strong> en Shopify.
               </label>
               <button
                 className="btn-primary"
-                style={{ background: createConfirm ? '#8b5cf6' : '#6b7280', marginTop: '0.6rem' }}
+                style={{ background: createConfirm && elegidos.length > 0 ? '#8b5cf6' : '#6b7280', marginTop: '0.6rem' }}
                 onClick={() => handleCreateProducts()}
-                disabled={!createConfirm || creating}
+                disabled={!createConfirm || creating || elegidos.length === 0}
               >
-                {creating ? <span className="loader"></span> : `🚀 Crear todos (${result.missingProducts.length}) en Shopify`}
+                {creating ? <span className="loader"></span> : `🚀 Crear ${elegidos.length} en Shopify`}
               </button>
               {createDone && <p style={{ marginTop: '0.8rem', color: '#a78bfa', fontWeight: 'bold' }}>✅ {createDone}</p>}
             </div>
-          )}
+            );
+          })()}
 
           {/* ====== ESCRIBIR STOCK DIRECTO EN SHOPIFY ====== */}
           <div style={{ marginTop: '2rem', padding: '1rem', border: '1px solid #10b981', borderRadius: '8px', background: 'rgba(16,185,129,0.06)' }}>
@@ -773,37 +839,6 @@ export default function App() {
             )}
             {writeDone && <p style={{ marginTop: '0.8rem', color: '#10b981', fontWeight: 'bold' }}>✅ {writeDone}</p>}
           </div>
-
-          {result?.missingProducts && result.missingProducts.length > 0 && (
-            <div className="missing-products-section" style={{ marginTop: '2rem', padding: '1rem', background: 'rgba(245, 158, 11, 0.1)', border: '1px solid #f59e0b', borderRadius: '8px' }}>
-              <h3 style={{ color: '#f59e0b', marginBottom: '1rem' }}>Configurar Tablas para Nuevos Productos</h3>
-
-              <div style={{ maxHeight: '300px', overflowY: 'auto', marginBottom: '1rem' }}>
-                {result.missingProducts.map(p => (
-                  <div key={p.coditm} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem', borderBottom: '1px solid rgba(255,255,255,0.1)' }}>
-                    <div>
-                      <strong>{p.coditm.toUpperCase()}</strong> - {p.title}
-                    </div>
-                    {config.brand === 'converse' && (
-                      <select
-                        value={tableSelections[p.coditm] ?? autoConverseTable(p.coditm, p.sizes)}
-                        onChange={e => setTableSelections({...tableSelections, [p.coditm]: parseInt(e.target.value)})}
-                        style={{ padding: '0.3rem', borderRadius: '4px', background: 'var(--bg-color)', color: 'white', border: '1px solid var(--glass-border)' }}
-                      >
-                        <option value={0}>🎒 Accesorio (sin talle)</option>
-                        <option value={-1}>👕 Indumentaria (talle como viene)</option>
-                        <option value={1}>👟 Tabla 1 (Empieza en ARG 34 = US 3)</option>
-                        <option value={2}>👟 Tabla 2 (Empieza en ARG 35 = US 3)</option>
-                        <option value={3}>👟 Tabla Mujer (Empieza en ARG 35 = US 5)</option>
-                        <option value={4}>👟 Tabla Niño (Empieza en ARG 27 = US 10.5)</option>
-                        <option value={5}>👟 Tabla Bebe (Empieza en ARG 20 = US 4)</option>
-                      </select>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
 
           <div style={{ marginTop: '30px', display: 'flex', flexDirection: 'column', gap: '15px', alignItems: 'center' }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '15px', width: '100%', maxWidth: '900px', justifyContent: 'center' }}>

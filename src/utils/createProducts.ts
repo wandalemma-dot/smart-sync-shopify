@@ -100,10 +100,18 @@ export async function createProducts(
   result: SyncResult,
   config: SyncConfig,
   tableSelections: Record<string, number> = {},
+  // Códigos que Wanda eligió crear. Si viene vacío o sin definir, se crean
+  // todos (comportamiento de antes). Sirve para dejar afuera cosas que no
+  // quiere publicar, como los cordones o las medias sueltas.
+  soloEstos?: string[],
   limit?: number,
   onProgress?: (done: number, total: number) => void,
 ): Promise<CreateResult> {
-  let products = buildMatrixProducts(result, config, tableSelections);
+  const elegidos = soloEstos && soloEstos.length ? new Set(soloEstos) : null;
+  const base = elegidos
+    ? { ...result, missingProducts: result.missingProducts.filter((p) => elegidos.has(p.coditm)) }
+    : result;
+  let products = buildMatrixProducts(base, config, tableSelections);
   if (limit && limit > 0) products = products.slice(0, limit);
 
   const locId = await getLocationId(STOCK_LOCATION[config.brand]);
