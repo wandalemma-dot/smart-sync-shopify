@@ -219,6 +219,35 @@ El proveedor manda talles **US**; en Shopify están en **ARG**.
   **nombre del producto** para decidir.
 - Indumentaria (S, M, L, XL, 3XL, TU): va **tal cual**, sin conversión.
 
+> 🔴 **CÓMO SE DECIDE SI ES CALZADO — se pregunta AL REVÉS, a propósito.**
+> `esCalzadoLeCoq()` **no** busca palabras de zapatilla. Busca palabras de lo que
+> **NO** es zapatilla (`PANT`, `SOCKS`, `DRESS`, `TEE`, `BACKPACK`…, o sea
+> `LECOQ_CATEGORIAS`). Si el nombre **no** cae en ninguna y el talle es numérico
+> **≥ 30**, es calzado y se le resta 1.
+>
+> **Error real (agosto 2026, lo encontró Wanda).** Antes se detectaba el calzado
+> por una lista de palabras: `RUNNING`, `SNEAKER`, `STAR`, `COURT`. Como el
+> proveedor le pone **nombre de fantasía** a cada modelo, todo lo que no tuviera
+> esas palabras se quedaba **sin convertir, en silencio**: `Strider`,
+> `Carc Slides`, `Aa 75`, `Veloce Soft`. El stock del talle **45 se cargaba en el
+> 45 en vez del 44** (y así todo el producto, corrido un talle), y las filas
+> caían en **«Ya estaban bien»**, así que ni siquiera se veían como problema.
+>
+> Una lista de nombres de zapatilla **nunca va a estar completa**: cada temporada
+> el proveedor saca modelos nuevos. La lista de lo que no es calzado sí se puede
+> completar. **No volver a invertirlo.**
+>
+> Además es la **misma regla que ya usaban los títulos** (`lecoqCategoryWord()`
+> con el talle): por eso estos productos salían titulados
+> «Zapatillas Le Coq Sportif Strider» pero con el talle sin convertir.
+>
+> ➕ **Si aparece indumentaria con talle numérico y un nombre nuevo**, se agrega
+> esa palabra a `LECOQ_CATEGORIAS`. **No** se toca `esCalzadoLeCoq()`.
+>
+> 🛡 Hay tests que lo cuidan: `src/utils/__tests__/talleLeCoq.test.ts`.
+> **Si un cambio los hace fallar, el cambio está mal** — no se ajusta el test.
+> Se corren con `npm test`.
+
 ### 3.4 Le Coq — TÍTULOS
 
 El proveedor manda los nombres en inglés/francés. En la tienda van como
@@ -362,6 +391,7 @@ src/utils/
   converseCurvas.ts         Maestro código → tabla de talle
   conversePreciosFijos.ts   Los 45 básicos que van al precio sugerido
   listaPrecios.ts           Lee la sábana (YA NO SE USA: quedó por compatibilidad)
+  __tests__/                Tests de reglas que no se pueden romper (npm test)
   reposicionLogic.ts        Arma el pedido (ventas, stock, no preparados)
   pedidoPendiente.ts        Lee el Excel del pedido ya hecho ("en camino")
   writeStock.ts             Escribe stock (simular → confirmar)
@@ -375,9 +405,14 @@ src/utils/
 
 ```bash
 npm install
+npm test              # reglas de negocio que NO se pueden romper
 npx tsc --noEmit      # tipos
 npx vite build        # build
 ```
+
+⚠ **`npm test` no es opcional.** Ahí están escritas reglas del negocio que ya se
+rompieron una vez en silencio (los talles de Le Coq). Si algo falla ahí, está mal
+el cambio, no el test.
 
 Y **probá la lógica con los archivos reales** de la carpeta de la usuaria antes de
 dar algo por bueno. Varios bugs (precios en $9.900, talles corridos, 3XL→2) se

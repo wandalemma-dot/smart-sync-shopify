@@ -1,0 +1,72 @@
+===========================================================
+  ARREGLO DE LOS TALLES DE LE COQ  -  como subirlo a GitHub
+===========================================================
+
+QUE ARREGLA
+-----------
+En el calzado Le Coq, el talle de tu tienda tiene que ser UNO MENOS
+que el del proveedor (proveedor 45 = tu tienda 44).
+
+La app lo hacia solo con los modelos que tenian las palabras
+"Running", "Sneaker", "Star" o "Court" en el nombre. Los demas
+(Strider, Carc Slides, Aa 75, Veloce Soft...) quedaban SIN convertir
+y el stock del 45 se cargaba en el 45 en vez del 44, sin avisar.
+
+Ahora la pregunta se hace al reves: si el nombre NO dice que es
+pantalon / medias / vestido / remera / mochila, y el talle es un
+numero de calzado, entonces es zapatilla y le resta 1.
+
+
+COMO SUBIRLO (10 minutos, todo desde la web, no hace falta instalar nada)
+------------------------------------------------------------------------
+
+1) Descomprimi este archivo ZIP en tu computadora.
+   Te van a quedar: CLAUDE.md, package.json, package-lock.json
+   y una carpeta llamada "src".
+
+2) Entra a tu repositorio:
+   https://github.com/wandalemma-dot/smart-sync-shopify
+
+3) Arriba a la derecha, tocá el boton  "Add file"  y elegi
+   "Upload files".
+
+4) Arrastra a la pagina, TODO JUNTO y de una sola vez:
+       - CLAUDE.md
+       - package.json
+       - package-lock.json
+       - la carpeta  src   (arrastra la carpeta entera, asi como esta)
+
+   >>> IMPORTANTE: los 4 en la MISMA subida. <<<
+   package.json y package-lock.json son pareja: si subis uno solo,
+   la publicacion automatica falla.
+
+5) Mas abajo, donde dice "Commit changes", escribi por ejemplo:
+       Le Coq: el talle va uno menos en todo el calzado
+
+6) Dejale marcado  "Commit directly to the main branch"
+   y tocá el boton verde  "Commit changes".
+
+7) Listo. Vercel lo publica solo en unos minutos.
+   Despues entra a la app y refresca con  Ctrl + Shift + R
+   (si no, el navegador te muestra la version vieja).
+
+
+DESPUES DE PUBLICARLO
+---------------------
+La primera sincronizacion de Le Coq te va a mostrar MUCHOS mas
+cambios que de costumbre. Es esperado: recien ahi corrige todos los
+talles que venian corridos.
+
+Toca "Simular" y mira la lista antes de confirmar, para quedarte
+tranquila.
+
+
+QUE TRAE CADA ARCHIVO
+---------------------
+src/utils/syncLogic.ts              El arreglo en si. Es el importante.
+src/utils/__tests__/talleLeCoq...   Pruebas automaticas que cuidan la
+                                    regla para que no se vuelva a
+                                    romper en el futuro.
+package.json / package-lock.json    Habilitan esas pruebas (npm test).
+CLAUDE.md                           La regla explicada por escrito, para
+                                    que ningun chat futuro la pise.
