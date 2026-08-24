@@ -304,18 +304,49 @@ export function lecoqCategoryWord(name: string, talle?: string): string {
   return '';
 }
 
+// ============================================================================
+// ⚠⚠ LE COQ — ¿ESTE PRODUCTO ES CALZADO? De esto depende que se reste 1 al talle
+// ----------------------------------------------------------------------------
+// Regla del negocio: en el calzado Le Coq, el talle de Shopify es UNO MENOS que
+// el del Excel del proveedor (Excel 40 = Shopify 39). En lo que NO es calzado el
+// talle va tal cual: pantalones (38), medias (1, 2), vestidos (039).
+//
+// 🔴 LA PREGUNTA SE HACE AL REVÉS A PROPÓSITO. NO VOLVER A DARLA VUELTA.
+// Antes se buscaban palabras de zapatilla en el nombre (RUNNING, SNEAKER, STAR,
+// COURT) y TODO lo demás quedaba sin convertir. Como el proveedor le pone
+// nombre de fantasía a cada modelo, cada modelo nuevo rompía la regla EN
+// SILENCIO: Strider, Carc Slides, Aa 75 y Veloce Soft no tienen ninguna de esas
+// palabras, así que el stock del talle 45 se cargaba en el 45 en vez del 44, y
+// las filas aparecían en "Ya estaban bien" (error real, visto por Wanda en
+// agosto 2026). Una lista de nombres de zapatilla NUNCA va a estar completa.
+//
+// Ahora se pregunta al revés, que sí se puede completar: si el nombre dice
+// claramente que NO es calzado (PANT, SOCKS, DRESS, TEE, BACKPACK...) el talle
+// se respeta; si no reconocemos el nombre y el talle es numérico de calzado
+// (>= 30), es zapatilla y se le resta 1.
+//
+// Es además la MISMA regla que ya usaba el armado de títulos (ver el uso de
+// lecoqCategoryWord con el talle, más abajo): por eso estos productos salían
+// titulados "Zapatillas Le Coq Sportif Strider" pero sin convertir el talle.
+//
+// ➕ SI ALGÚN DÍA APARECE INDUMENTARIA CON TALLE NUMÉRICO Y UN NOMBRE NUEVO:
+//    se agrega esa palabra a LECOQ_CATEGORIAS (arriba). NO se invierte esto.
+// ============================================================================
+export function esCalzadoLeCoq(nombreProducto: string | undefined, talle: string | number): boolean {
+  const s = String(talle ?? '').trim();
+  if (!/^\d+([.,]\d+)?$/.test(s)) return false;    // 3XL, L, TU, UNICO -> no es talle de calzado
+  const n = parseFloat(s.replace(',', '.'));
+  if (isNaN(n) || n < 30) return false;             // medias (1, 2) y demás numéricos chicos
+  const cat = lecoqCategoryWord(String(nombreProducto ?? ''));
+  return cat === '' || cat === 'Zapatillas';        // '' = no lo reconocimos -> calzado
+}
+
 // LE COQ CALZADO: el talle de Shopify es UNO MENOS que el del Excel del
-// proveedor (Excel 40 = Shopify 39). Solo aplica al calzado (talles numéricos).
-// ⚠ SOLO se le resta 1 al CALZADO. Ojo que hay otros talles numéricos que NO
-// son calzado y no se tocan: pantalones (38), medias (1, 2), vestidos.
-// Por eso hace falta el nombre del producto: decide si es zapatilla o no.
+// proveedor (Excel 40 = Shopify 39). Ver esCalzadoLeCoq() acá arriba.
 export function talleShopifyLeCoq(talleExcel: string | number, nombreProducto?: string): string {
   const s = String(talleExcel ?? '').trim();
-  if (!/^\d+([.,]\d+)?$/.test(s)) return s;        // 3XL, L, TU -> tal cual
-  if (nombreProducto !== undefined && lecoqCategoryWord(nombreProducto) !== 'Zapatillas') return s;
-  const n = parseFloat(s.replace(',', '.'));
-  if (isNaN(n) || n < 30) return s;                 // medias 1/2, etc.
-  return String(n - 1);
+  if (!esCalzadoLeCoq(nombreProducto, s)) return s;
+  return String(parseFloat(s.replace(',', '.')) - 1);
 }
 
 // Palabra de categoría en español detectada por el texto del producto (Bloque/Protec).
