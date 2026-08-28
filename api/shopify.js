@@ -12,7 +12,11 @@ const ALLOWED_MUTATIONS = [
   'inventorySetQuantities', // escribir stock (cantidades)
   'productSet',                // crear productos nuevos
   'publishablePublish',        // publicar productos en un canal (Point of Sale)
-  'productVariantsBulkUpdate', // actualizar SOLO precio y costo de variantes
+  // Actualiza precio y costo de variantes y, desde el 29-ago-2026, también
+  // RENOMBRA el talle de las variantes con el talle corrido (botón aparte, con
+  // su confirmación). Renombrar no mueve stock: la mercadería se queda en la
+  // misma variante, que pasa a llamarse como corresponde.
+  'productVariantsBulkUpdate',
   // Da de alta una variante en una sucursal (y le pone la cantidad). Sin esto,
   // Shopify rechaza escribirle stock: "The specified inventory item is not
   // stocked at the location". Se usa SOLO desde el botón aparte que Wanda
