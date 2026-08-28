@@ -171,11 +171,14 @@ el archivo **no cubra con un número** se agrega a `changes` con `desired: 0` y
 > catálogo COMPLETO del proveedor. Las otras marcas mandan listas **parciales**
 > («cargá esto»): barrer ahí borraría stock real. Es la misma condición que ya
 > usa `enPeligro` en `syncLogic.ts`.
-> **2)** Si de un producto hubo **un solo talle que no se supo convertir**
-> (está en la tabla de conversión pero el US no figura), ese producto **queda
-> afuera del barrido**. Si no, un error de conversión pondría en 0 un talle que
-> el proveedor SÍ tiene. Esos casos siguen apareciendo en «No ubicados» para
-> revisión manual.
+> **2)** Un producto **queda afuera del barrido** si pasó cualquiera de estas
+> tres cosas: hubo un talle que no se supo **convertir**; hubo un talle del
+> proveedor que **no se pudo ubicar** en Shopify; o la **tabla de talle está
+> adivinada** (sin etiqueta y sin código en el maestro). Mientras haya stock del
+> proveedor sin ubicar no se apaga nada de ese producto. Caso real que lo obligó
+> (28-ago-2026): `A10547C` tenía 103 unidades sin ubicar y el barrido iba a poner
+> en 0 el talle 41, que tenía **116 unidades**. Esos casos siguen apareciendo en
+> «No ubicados» para revisión manual.
 >
 > 🛡 Tests: `src/utils/__tests__/talleACero.test.ts`. Si un cambio los hace
 > fallar, el cambio está mal.
@@ -239,10 +242,23 @@ El proveedor manda talles **US**; en Shopify están en **ARG**.
   **tabla de talle** (`TABLA DE TALLE CONVERSE 1`). Al crear productos nuevos hay
   que ponerle **las dos**.
 
-> 🔴 **CÓMO SE ELIGE LA TABLA — leer sí o sí.** Orden de prioridad (`converseTablaDe()`):
-> **1)** el **maestro de curvas por código** (`converseCurvas.ts`) — dato oficial del
-> proveedor; **2)** si el código no está, **solo** la etiqueta que empieza con
-> `TABLA DE TALLE`; **3)** si tampoco, Tabla 1.
+> 🔴 **CÓMO SE ELIGE LA TABLA — leer sí o sí.** Orden de prioridad
+> (`converseTablaInfo()`), **cambiado el 28-ago-2026**:
+> **1)** la **etiqueta** que empieza con `TABLA DE TALLE` (ninguna otra se mira);
+> **2)** si no tiene etiqueta, el **maestro de curvas por código**
+> (`converseCurvas.ts`); **3)** si tampoco está, Tabla 1 pero marcado como
+> **adivinado** — y un producto con tabla adivinada **nunca se barre a cero**.
+>
+> **Regla de Wanda:** «la idea de que haya tantas formas de ver la tabla de talle
+> es que la aplicación nunca adivine; si tiene etiqueta, usá la etiqueta».
+>
+> **Por qué se dio vuelta.** Medido contra la tienda real el 28-ago-2026: de los
+> 186 códigos del archivo que están en el maestro, hay **8 donde el maestro y la
+> etiqueta no coinciden**, y en los 8 **gana la etiqueta** — los talles que salen
+> del maestro caen en variantes que no existen en Shopify. Total: **43 aciertos
+> con el maestro contra 64 con la etiqueta, y 512 unidades perdidas**.
+> Los 8: `171425C`, `A10547C`, `A11716C`, `A11717C`, `A12332C`, `A15621C`,
+> `A16395C`, `A16534C`.
 >
 > **NUNCA buscar palabras sueltas ("mujer", "niño") en todas las etiquetas.**
 > Error real de agosto 2026: los productos tienen etiquetas de marketing
