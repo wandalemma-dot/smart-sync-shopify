@@ -39,6 +39,18 @@ export interface StockRow {
   inventoryItemId?: string;
 }
 
+// Un producto cuyos talles quedaron corridos en Shopify (dice 36 y es un 35).
+export interface ProductoTalleCorrido {
+  handle: string;
+  productId: string;
+  code: string;
+  title: string;
+  opcion: string;                 // nombre de la opción en Shopify ("Talle")
+  aciertosConConversion: number;  // la evidencia que respalda el diagnóstico
+  aciertosSinConversion: number;
+  variantes: { variantId: string; sku: string; actual: string; nuevo: string }[];
+}
+
 export interface StockPlan {
   locationName: string;
   locationId: string | null;
@@ -52,6 +64,9 @@ export interface StockPlan {
   // "The specified inventory item is not stocked at the location."
   // Se muestran, NO se escriben. Wanda decidió activarlas ella a mano.
   sinActivar: StockRow[];
+  // Productos cuyos talles quedaron corridos en Shopify (residuo del error
+  // viejo de Le Coq). NO se barren a cero hasta enderezarlos.
+  talleCorrido: ProductoTalleCorrido[];
 }
 
 export interface WriteResult {
@@ -67,12 +82,15 @@ const PRODUCTS_BY_HANDLE = `
     products(first: 50, query: $q) {
       edges {
         node {
+          id
           handle
           title
           tags
+          options { name }
           variants(first: 100) {
             edges {
               node {
+                id
                 sku
                 title
                 inventoryItem {
@@ -93,6 +111,18 @@ const PRODUCTS_BY_HANDLE = `
 const SET_MUTATION = `
   mutation Set($input: InventorySetQuantitiesInput!) {
     inventorySetQuantities(input: $input) {
+      userErrors { field message }
+    }
+  }
+`;
+
+// Renombra el talle de varias variantes de UN producto, en una sola llamada.
+// NO toca el stock: la mercadería se queda en la misma variante, que pasa a
+// llamarse como corresponde (el 36 que en realidad era un 35 pasa a decir 35).
+const RENAME_MUTATION = `
+  mutation Renombrar($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+    productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+      productVariants { id title }
       userErrors { field message }
     }
   }
@@ -122,7 +152,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
   const locName = STOCK_LOCATION[config.brand];
   const locId = await getLocationId(locName);
   if (!locId) {
-    return { locationName: locName, locationId: null, locationFound: false, changes: [], unchanged: 0, unchangedRows: [], notFound: [], sinActivar: [] };
+    return { locationName: locName, locationId: null, locationFound: false, changes: [], unchanged: 0, unchangedRows: [], notFound: [], sinActivar: [], talleCorrido: [] };
   }
 
   // Productos que ya matchearon contra Shopify (tienen handle). Guardamos el
@@ -146,6 +176,8 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
   const liveByHandle: Record<string, any[]> = {};
   const titleByHandle: Record<string, string> = {}; // título REAL de Shopify
   const tagsByHandle: Record<string, string> = {};   // etiquetas (para la tabla de talle)
+  const idByHandle: Record<string, string> = {};     // id del producto (para renombrar talles)
+  const opcionByHandle: Record<string, string> = {}; // nombre de la opción ("Talle")
   const CHUNK = 20;
   for (let i = 0; i < handles.length; i += CHUNK) {
     const chunk = handles.slice(i, i + CHUNK);
@@ -156,6 +188,8 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
       liveByHandle[p.handle] = (p.variants?.edges || []).map((e: any) => e.node);
       titleByHandle[p.handle] = String(p.title || '');
       tagsByHandle[p.handle] = Array.isArray(p.tags) ? p.tags.join(', ') : String(p.tags || '');
+      idByHandle[p.handle] = String(p.id || '');
+      opcionByHandle[p.handle] = String(p.options?.[0]?.name || 'Talle');
     }
   }
 
@@ -163,6 +197,52 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
   const unchangedRows: StockRow[] = [];
   const notFound: StockRow[] = [];
   const sinActivar: StockRow[] = [];
+
+  // ---- PRODUCTOS CON EL TALLE CORRIDO (residuo del error viejo de Le Coq) ----
+  // Le Coq calzado: en Shopify el talle va UNO MENOS que en el Excel. Hasta el
+  // 25-ago-2026 la app detectaba el calzado por una lista de palabras y los
+  // modelos con nombre de fantasía (Strider, Omega X Active, R850...) se creaban
+  // SIN restar. El código ya está arreglado, pero esos productos quedaron en
+  // Shopify con el talle corrido: el que dice 36 es en realidad un 35.
+  //
+  // Cómo se detecta, sin adivinar: por cada producto se cuenta cuántos talles
+  // del archivo caen en una variante que existe APLICANDO la conversión, y
+  // cuántos caen SIN aplicarla. Si gana "sin aplicarla", ese producto está
+  // corrido. Medido contra la tienda real (29-ago-2026), sobre 68 productos de
+  // calzado Le Coq: 300 aciertos con la conversión contra 277 sin ella, o sea
+  // que la regla general está bien y solo se apartan los casos puntuales.
+  const talleCorrido: ProductoTalleCorrido[] = [];
+  const evaluarCorrido = (handle: string, code: string, d: any, convTable: Record<string, string> | null) => {
+    if (config.brand !== 'lecoq' || convTable) return;   // solo Le Coq (Converse usa tabla)
+    const live = liveByHandle[handle] || [];
+    if (!live.length) return;
+    const enTienda = new Set(live.map((v: any) => String(v.title || '').trim()));
+    let conConv = 0, sinConv = 0, hayCalzado = false;
+    for (const size of Object.keys(d.sizes || {})) {
+      const convertido = String(talleShopifyLeCoq(size, d.title));
+      if (convertido === String(size)) continue;          // no es calzado: no opina
+      hayCalzado = true;
+      if (enTienda.has(convertido)) conConv++;
+      if (enTienda.has(String(size))) sinConv++;
+    }
+    if (!hayCalzado || sinConv <= conConv) return;
+    // Está corrido: proponemos bajar UN talle a cada variante numérica.
+    const variantes = live
+      .filter((v: any) => /^\d+(\.\d+)?$/.test(String(v.title || '').trim()) && v.id)
+      .map((v: any) => {
+        const actual = String(v.title).trim();
+        return { variantId: String(v.id), sku: String(v.sku || ''), actual, nuevo: String(Number(actual) - 1) };
+      })
+      .sort((a, b) => Number(a.actual) - Number(b.actual));  // ascendente: al bajar, nunca choca
+    if (!variantes.length) return;
+    talleCorrido.push({
+      handle, productId: idByHandle[handle] || '', code,
+      title: titleByHandle[handle] || d.title,
+      opcion: opcionByHandle[handle] || 'Talle',
+      aciertosConConversion: conConv, aciertosSinConversion: sinConv,
+      variantes,
+    });
+  };
 
   // ---- BARRIDO DE TALLES QUE EL PROVEEDOR YA NO TIENE (regla de Wanda) ----
   // El Excel de iD trae, por producto, SOLO los talles con stock. Los demás
@@ -200,6 +280,10 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     // producto no se barre a cero.
     if (info && info.origen === 'default') conversionDudosa.add(handle);
     codigoPorHandle.set(handle, code);
+    evaluarCorrido(handle, code, d, convTable);
+    // Un producto con el talle corrido no se barre a cero: primero hay que
+    // enderezarlo, si no apagaríamos talles que en realidad tienen mercadería.
+    if (talleCorrido.some((t) => t.handle === handle)) conversionDudosa.add(handle);
     for (const [size, qtyRaw] of Object.entries(d.sizes || {})) {
       const desired = Number(qtyRaw);
       // ⚠ Si hay tabla de conversión pero este talle NO está en ella, no sabemos
@@ -337,8 +421,55 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
 
   return {
     locationName: locName, locationId: locId, locationFound: true,
-    changes, unchanged: unchangedRows.length, unchangedRows, notFound, sinActivar,
+    changes, unchanged: unchangedRows.length, unchangedRows, notFound, sinActivar, talleCorrido,
   };
+}
+
+// ============================================================================
+// ENDEREZAR LOS TALLES CORRIDOS (botón aparte, con su propia confirmación)
+// ----------------------------------------------------------------------------
+// Solo cambia el NOMBRE del talle de variantes que ya existen. No crea, no
+// borra y NO mueve stock: los 12 pares que hoy están en el "36" siguen en la
+// misma variante, que pasa a llamarse "35" — que es el talle que realmente son.
+//
+// ⚠ Se renombra de MENOR A MAYOR y todo el producto en UNA sola llamada. Como
+//   todos los talles bajan uno, si se hiciera de a uno y en desorden se podría
+//   chocar con un talle que todavía no se renombró.
+// ============================================================================
+export async function enderezarTallesCorridos(
+  productos: ProductoTalleCorrido[],
+  onProgress?: (hechos: number, total: number) => void,
+): Promise<WriteResult> {
+  let written = 0, failed = 0;
+  const errors: string[] = [];
+  let hechos = 0;
+  for (const p of productos) {
+    if (!p.productId || !p.variantes.length) { hechos++; continue; }
+    const variants = p.variantes.map((v) => ({
+      id: v.variantId,
+      optionValues: [{ optionName: p.opcion, name: v.nuevo }],
+      // El SKU de la app es "{código}-{talle}": si no lo movemos queda mintiendo.
+      ...(v.sku && v.sku.endsWith(`-${v.actual}`)
+        ? { inventoryItem: { sku: `${v.sku.slice(0, -(v.actual.length + 1))}-${v.nuevo}` } }
+        : {}),
+    }));
+    try {
+      const data = await shopifyGraphQL<any>(RENAME_MUTATION, { productId: p.productId, variants });
+      const errs = data?.productVariantsBulkUpdate?.userErrors || [];
+      if (errs.length) {
+        failed += p.variantes.length;
+        errors.push(`${p.title}: ${errs.map((e: any) => e.message).join(' · ')}`);
+      } else {
+        written += p.variantes.length;
+      }
+    } catch (e: any) {
+      failed += p.variantes.length;
+      errors.push(`${p.title}: ${e?.message || e}`);
+    }
+    hechos++;
+    onProgress?.(hechos, productos.length);
+  }
+  return { written, failed, errors };
 }
 
 // PASO 2-bis (OPCIONAL, botón aparte) — Da de alta en la sucursal las variantes
