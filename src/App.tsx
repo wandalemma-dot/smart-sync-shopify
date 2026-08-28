@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, downloadInventoryCSV, autoConverseTable } from './utils/syncLogic';
 import type { SyncConfig, SyncResult } from './utils/syncLogic';
-import { planStockWrite, executeStockWrite, activarEnSucursal } from './utils/writeStock';
+import { planStockWrite, executeStockWrite, activarEnSucursal, enderezarTallesCorridos } from './utils/writeStock';
 import type { StockPlan } from './utils/writeStock';
 import { createProducts } from './utils/createProducts';
 import { aplicarPrecios, actualizacionesAplicables, sinCambios, margenPct } from './utils/updatePrices';
@@ -52,6 +52,30 @@ export default function App() {
       alert('Error dando de alta: ' + e.message);
     } finally {
       setAltaLoading(false);
+    }
+  };
+
+  // ---- ENDEREZAR LOS TALLES CORRIDOS (residuo del error viejo de Le Coq) ----
+  // Solo cambia el NOMBRE del talle: la mercadería se queda donde está.
+  const [corridoConfirm, setCorridoConfirm] = useState(false);
+  const [corridoLoading, setCorridoLoading] = useState(false);
+  const [corridoDone, setCorridoDone] = useState<string | null>(null);
+
+  const handleEnderezar = async () => {
+    if (!stockPlan || stockPlan.talleCorrido.length === 0) return;
+    setCorridoLoading(true); setCorridoDone(null);
+    try {
+      const res = await enderezarTallesCorridos(stockPlan.talleCorrido);
+      setCorridoDone(
+        `Talles renombrados: ${res.written} · fallidos ${res.failed}` +
+        (res.errors.length ? ` · ${res.errors.slice(0, 2).join(' | ')}` : '') +
+        ' — volvé a simular para ver el stock ya ubicado.',
+      );
+      setCorridoConfirm(false);
+    } catch (e: any) {
+      alert('Error enderezando los talles: ' + e.message);
+    } finally {
+      setCorridoLoading(false);
     }
   };
 
@@ -609,6 +633,9 @@ export default function App() {
                   {stockPlan.changes.some(c => c.motivo) && (
                     <> · <span style={{ color: '#f87171' }}>🗑️ A poner en 0 (el proveedor ya no los tiene): <strong>{stockPlan.changes.filter(c => c.motivo).length}</strong></span></>
                   )}
+                  {stockPlan.talleCorrido.length > 0 && (
+                    <> · <span style={{ color: '#fb923c' }}>📏 Talles corridos: <strong>{stockPlan.talleCorrido.length}</strong></span></>
+                  )}
                 </div>
                 {/* Buscador: para poder confirmar qué pasó con UN producto puntual.
                     Filtra solo lo que se ve; NO cambia lo que se escribe. */}
@@ -800,6 +827,56 @@ export default function App() {
                           </button>
                           {altaDone && <p style={{ marginTop: '0.5rem', color: '#c084fc', fontWeight: 'bold' }}>✅ {altaDone}</p>}
                         </details>
+                      )}
+
+                      {/* --- 5) TALLES CORRIDOS: hay que enderezarlos ANTES de escribir --- */}
+                      {stockPlan.talleCorrido.length > 0 && (
+                        <div style={{ marginTop: '1rem', padding: '0.9rem', border: '1px solid #fb923c', borderRadius: '8px', background: 'rgba(251,146,60,0.10)' }}>
+                          <strong style={{ color: '#fb923c' }}>📏 Talles corridos ({stockPlan.talleCorrido.length} productos)</strong>
+                          <p style={{ fontSize: '0.82rem', opacity: 0.9, margin: '0.4rem 0' }}>
+                            En estos productos el talle de Shopify quedó <strong>uno más arriba</strong> de lo que corresponde:
+                            el que dice 36 es en realidad un 35. Son de antes del arreglo de talles de Le Coq.
+                            <br />
+                            <strong>Solo se cambia el nombre del talle: el stock no se mueve.</strong> Los pares que hoy están
+                            en el 36 siguen siendo los mismos, pasan a llamarse 35.
+                          </p>
+                          <p style={{ fontSize: '0.78rem', opacity: 0.75, margin: '0.4rem 0' }}>
+                            Mientras estén corridos, a estos productos <strong>no se les apaga ningún talle</strong> ni se les
+                            escribe stock nuevo. Enderezalos primero y volvé a simular.
+                          </p>
+                          {stockPlan.talleCorrido.map((p) => (
+                            <div key={p.handle} style={{ marginTop: '0.6rem', padding: '0.5rem 0.7rem', background: 'rgba(0,0,0,0.2)', borderRadius: '6px' }}>
+                              <div style={{ fontSize: '0.85rem' }}>
+                                {p.title} <span style={{ fontFamily: 'monospace', opacity: 0.7 }}>{p.code}</span>
+                              </div>
+                              <div style={{ fontSize: '0.8rem', marginTop: '0.25rem' }}>
+                                {p.variantes.map((v) => (
+                                  <span key={v.variantId} style={{ display: 'inline-block', marginRight: '10px' }}>
+                                    <span style={{ opacity: 0.65, textDecoration: 'line-through' }}>{v.actual}</span>
+                                    <span style={{ color: '#fb923c', fontWeight: 'bold' }}> → {v.nuevo}</span>
+                                  </span>
+                                ))}
+                              </div>
+                              <div style={{ fontSize: '0.72rem', opacity: 0.6, marginTop: '0.25rem' }}>
+                                Del archivo del proveedor caen bien {p.aciertosSinConversion} talles sin convertir contra{' '}
+                                {p.aciertosConConversion} convirtiendo: por eso sé que está corrido.
+                              </div>
+                            </div>
+                          ))}
+                          <label style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '0.7rem', fontSize: '0.85rem' }}>
+                            <input type="checkbox" checked={corridoConfirm} onChange={e => setCorridoConfirm(e.target.checked)} />
+                            Entiendo que esto va a <strong>&nbsp;renombrar los talles&nbsp;</strong> de estos productos en Shopify.
+                          </label>
+                          <button
+                            className="btn-primary"
+                            style={{ background: corridoConfirm ? '#ea580c' : '#6b7280', marginTop: '0.5rem' }}
+                            onClick={handleEnderezar}
+                            disabled={!corridoConfirm || corridoLoading}
+                          >
+                            {corridoLoading ? <span className="loader"></span> : `📏 Enderezar los talles de ${stockPlan.talleCorrido.length} productos`}
+                          </button>
+                          {corridoDone && <p style={{ marginTop: '0.5rem', color: '#fb923c', fontWeight: 'bold' }}>✅ {corridoDone}</p>}
+                        </div>
                       )}
 
                     </>
