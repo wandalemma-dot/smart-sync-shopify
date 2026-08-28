@@ -186,6 +186,44 @@ el archivo **no cubra con un número** se agrega a `changes` con `desired: 0` y
 **Distinto de «el proveedor ya no lista el producto»** (`enPeligro`), que apaga el
 producto **entero** cuando su código no aparece en el Excel. Este barrido es el
 caso de al lado: el producto sigue, el talle no.
+
+### 3.1-sexies TALLES CORRIDOS — el residuo del error viejo de Le Coq
+
+Hasta el **25-ago-2026** la app detectaba el calzado Le Coq por una lista de
+palabras (`RUNNING`, `SNEAKER`, `STAR`, `COURT`), así que los modelos con nombre
+de fantasía se creaban **sin restarle uno al talle** (ver 3.3). El código ya está
+arreglado, pero **los productos que se crearon antes quedaron corridos en
+Shopify**: el que dice 36 es en realidad un 35.
+
+Encontrados el 29-ago-2026, todos creados el **19-ago** salvo uno de 2025:
+`LFN9924016` Veloce Urban · `LFN9924018` R850 Soft · `LFN9924033` Courtnet
+Classic · `LFN9924041` y `LFN9924043` Omega X Active · `LFO0125017` y
+`LFO0125018` Strider · `LFO0125070` R1100.
+
+**Cómo se detecta, sin adivinar** (`planStockWrite()`): por cada producto se
+cuenta cuántos talles del archivo caen en una variante que existe **aplicando**
+la conversión y cuántos **sin** aplicarla. Si gana «sin aplicarla», está corrido.
+Medido sobre los 68 productos de calzado Le Coq del archivo del 29-ago:
+**300 aciertos con la conversión contra 277 sin ella** — o sea que la regla
+general está bien y solo se apartan los casos puntuales.
+
+**Cómo se arregla** (`enderezarTallesCorridos()`, botón aparte con su
+confirmación): renombra el talle de cada variante numérica a uno menos, con
+`productVariantsBulkUpdate`. **NO mueve stock**: los pares que están en el «36»
+siguen en la misma variante, que pasa a llamarse «35» — que es el talle que
+realmente son. También corrige el SKU (`{código}-{talle}`).
+
+> 🔴 **DOS COSAS.**
+> **1)** Se renombra **de menor a mayor y todo el producto en UNA llamada**. Como
+> todos bajan un talle, hacerlo de a uno y en desorden podría chocar con un talle
+> que todavía no se renombró.
+> **2)** Un producto corrido **no se barre a cero** y no se le escribe stock hasta
+> enderezarlo: si no, se apagarían talles que en realidad tienen mercadería.
+>
+> 🛡 Tests en `src/utils/__tests__/talleACero.test.ts`.
+
+**Orden de trabajo:** enderezar → volver a simular → recién ahí crear los talles
+que falten. Al revés quedan duplicados (el 36 corrido *y* el 35 nuevo).
 >
 > Verificado contra `Stock 3.xlsx` (18-ago): de 243 códigos en común, 202 (83%)
 > dan **exactamente el mismo juego de talles**; el resto difiere en uno o dos
@@ -235,6 +273,14 @@ El proveedor manda talles **US**; en Shopify están en **ARG**.
 
 - Motor: `src/utils/conversorTalles.ts` + `tallesConverseLecoq.json`
   (7 curvas + 659 códigos → curva). Verificado: 140/140 conversiones reversibles.
+- ⚠ **Las tablas `convTable1..5` de `syncLogic.ts` se generan desde ese JSON, no
+  se editan a mano.** Hasta el 28-ago-2026 eran una segunda copia cargada a mano:
+  le faltaban **32 talles** (MUJER sin el US 7, NIÑO sin el US 2, BEBÉ sin el
+  US 5) y la de **BEBÉ estaba corrida un talle** (decía US 6 → AR 21 cuando es
+  AR 22, y así hasta el US 11), o sea que el stock de bebé entraba en el talle
+  equivocado **sin avisar**. Con las oficiales, los 298 talles/unidades que la
+  app no sabía convertir bajaron a **cero**.
+  🛡 Test: `src/utils/__tests__/tablasTalle.test.ts`.
 - **Nunca adivina**: si el código no está o el talle cae fuera de la curva,
   devuelve `ok: false` con el motivo. Esas filas **se muestran** en la UI para
   revisión manual, **nunca se descartan en silencio**.
