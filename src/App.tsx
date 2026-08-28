@@ -607,7 +607,7 @@ export default function App() {
                   {stockPlan.notFound.length > 0 && <> · No ubicados: {stockPlan.notFound.length}</>}
                   {stockPlan.sinActivar.length > 0 && <> · <span style={{ color: '#c084fc' }}>Sin alta en la sucursal: <strong>{stockPlan.sinActivar.length}</strong></span></>}
                   {stockPlan.changes.some(c => c.motivo) && (
-                    <> · <span style={{ color: '#f87171' }}>🗑️ A poner en 0 (el proveedor ya no los lista): <strong>{stockPlan.changes.filter(c => c.motivo).length}</strong></span></>
+                    <> · <span style={{ color: '#f87171' }}>🗑️ A poner en 0 (el proveedor ya no los tiene): <strong>{stockPlan.changes.filter(c => c.motivo).length}</strong></span></>
                   )}
                 </div>
                 {/* Buscador: para poder confirmar qué pasó con UN producto puntual.
