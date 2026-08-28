@@ -10,7 +10,7 @@
 // ============================================================================
 
 import { shopifyGraphQL, mismaSucursal } from './shopify';
-import { talleMatches, STOCK_LOCATION, converseTablaDe, talleShopifyLeCoq } from './syncLogic';
+import { talleMatches, STOCK_LOCATION, converseTablaInfo, talleShopifyLeCoq } from './syncLogic';
 import type { SyncResult, SyncConfig } from './syncLogic';
 
 export interface StockChange {
@@ -192,9 +192,13 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     // usando la tabla que indica la etiqueta del producto (TABLA DE TALLE CONVERSE X).
     // La tabla sale del CÓDIGO (maestro de curvas del proveedor). La etiqueta
     // solo se usa de respaldo, y únicamente la que dice "TABLA DE TALLE".
-    const convTable = config.brand === 'converse'
-      ? converseTablaDe(code, tagsByHandle[handle] || '')
+    const info = config.brand === 'converse'
+      ? converseTablaInfo(code, tagsByHandle[handle] || '')
       : null;
+    const convTable = info ? info.tabla : null;
+    // Sin etiqueta y sin código en el maestro: la tabla está ADIVINADA. Ese
+    // producto no se barre a cero.
+    if (info && info.origen === 'default') conversionDudosa.add(handle);
     codigoPorHandle.set(handle, code);
     for (const [size, qtyRaw] of Object.entries(d.sizes || {})) {
       const desired = Number(qtyRaw);
@@ -217,6 +221,12 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
       const v = live.find((n: any) =>
         hayConversion ? talleMatches(argSize, n.title) : talleMatches(size, n.title));
       if (!v || !v.inventoryItem?.id) {
+        // ⚠ No pudimos ubicar en Shopify un talle que el proveedor SÍ tiene.
+        // Mientras no sepamos dónde va ese stock, este producto NO se barre a
+        // cero: si no, apagaríamos talles que en realidad tienen mercadería.
+        // (Caso real 28-ago-2026: A10547C, 103 unidades sin ubicar y el 41 con
+        // 116 unidades que se habrían puesto en 0.)
+        conversionDudosa.add(handle);
         notFound.push({
           title: shopTitle, code, talle: String(argSize),
           talleProveedor: String(size), current: null, desired,

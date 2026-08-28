@@ -385,11 +385,33 @@ export function talleMatches(provSize: string, shopTalle: string): boolean {
 // Ej: 157197C tenía "TABLA DE TALLE CONVERSE 2" pero se le aplicaba la de MUJER,
 // y 142 pares de US 6 iban al talle 36.5 en vez del 39.
 //
-// ORDEN DE PRIORIDAD (no cambiar sin pensarlo):
-//   1) El MAESTRO DE CURVAS por código -> es el dato oficial del proveedor.
-//   2) Si el código no está en el maestro: SOLO la etiqueta que empieza con
-//      "TABLA DE TALLE". Ninguna otra etiqueta se mira.
-//   3) Si tampoco hay etiqueta: Tabla 1 (la más común).
+// ORDEN DE PRIORIDAD — CAMBIADO EL 28-ago-2026. Regla de Wanda: «la idea de que
+// haya tantas formas de ver la tabla de talle es que la aplicación nunca adivine;
+// si tiene etiqueta, usá la etiqueta».
+//   1) La ETIQUETA "TABLA DE TALLE ..." del producto. Ninguna otra se mira.
+//   2) Si no tiene etiqueta: el MAESTRO DE CURVAS por código.
+//   3) Si tampoco está: Tabla 1, pero marcado como ADIVINADO (ver más abajo).
+//
+// POR QUÉ SE DIO VUELTA. Antes mandaba el maestro. Contra la tienda real (28-ago)
+// hay 8 productos donde el maestro y la etiqueta NO coinciden, y en los 8 gana la
+// etiqueta: los talles que salen del maestro caen en variantes que NO EXISTEN en
+// Shopify, y las unidades se pierden. Medido producto por producto:
+//
+//   código    maestro / etiqueta   aciertos maestro   aciertos etiqueta
+//   171425C      3  /  2                 2 (5 u perdidas)      5 (0)
+//   A10547C      2  /  1                 6 (103 u)             9 (0)
+//   A11716C      2  /  1                 4 (187 u)             5 (175 u)
+//   A11717C      2  /  1                 8 (51 u)             11 (0)
+//   A12332C      2  /  1                 8 (57 u)             12 (0)
+//   A15621C      2  /  1                 5 (23 u)              7 (0)
+//   A16395C      2  /  1                 5 (4 u)               7 (0)
+//   A16534C      2  /  1                 5 (82 u)              8 (0)
+//   ------------------------------------------------------------------
+//   TOTAL                               43 aciertos           64 aciertos
+//
+// El error viejo (etiquetas de marketing "converse mujer" pisando la real) YA NO
+// APLICA: desde agosto 2026 solo se lee la etiqueta que empieza con "TABLA DE
+// TALLE", así que dar prioridad a la etiqueta no lo reabre.
 // ============================================================================
 
 const TABLA_POR_NUMERO: Record<number, Record<string, string>> = {
@@ -409,11 +431,24 @@ export function tablaDesdeEtiquetaTalle(tags: string): Record<string, string> | 
   return null; // etiqueta rara: mejor no adivinar
 }
 
-// Tabla definitiva para un producto. `codigo` manda; la etiqueta es respaldo.
-export function converseTablaDe(codigo: string, tags: string): Record<string, string> {
+// Tabla definitiva para un producto, con el ORIGEN del dato.
+// `origen: 'default'` significa QUE SE ADIVINÓ: no había ni etiqueta ni código en
+// el maestro. Esos productos no se barren a cero (ver writeStock.ts): apagar
+// stock a partir de una tabla adivinada sería un error grave.
+export function converseTablaInfo(codigo: string, tags: string): {
+  tabla: Record<string, string>;
+  origen: 'etiqueta' | 'maestro' | 'default';
+} {
+  const porEtiqueta = tablaDesdeEtiquetaTalle(tags);
+  if (porEtiqueta) return { tabla: porEtiqueta, origen: 'etiqueta' };
   const nro = CONVERSE_CODE_TABLE[String(codigo || '').toUpperCase()];
-  if (nro && TABLA_POR_NUMERO[nro]) return TABLA_POR_NUMERO[nro];
-  return tablaDesdeEtiquetaTalle(tags) || convTable1;
+  if (nro && TABLA_POR_NUMERO[nro]) return { tabla: TABLA_POR_NUMERO[nro], origen: 'maestro' };
+  return { tabla: convTable1, origen: 'default' };
+}
+
+// Tabla definitiva para un producto. La ETIQUETA manda; el maestro es respaldo.
+export function converseTablaDe(codigo: string, tags: string): Record<string, string> {
+  return converseTablaInfo(codigo, tags).tabla;
 }
 
 // Compatibilidad: si solo se tienen las etiquetas (sin código).
