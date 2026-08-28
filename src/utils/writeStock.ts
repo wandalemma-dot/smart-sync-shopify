@@ -164,6 +164,24 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
   const notFound: StockRow[] = [];
   const sinActivar: StockRow[] = [];
 
+  // ---- BARRIDO DE TALLES QUE EL PROVEEDOR YA NO TIENE (regla de Wanda) ----
+  // El Excel de iD trae, por producto, SOLO los talles con stock. Los demás
+  // vienen con guión (celda gris) y hasta ahora se salteaban: el talle se
+  // quedaba en Shopify con el stock viejo, disponible para la venta, PARA
+  // SIEMPRE. Regla de Wanda (28-ago-2026): si el archivo no le pone un número
+  // a ese talle, en Shopify va a CERO, sea guión, gris o lo que sea.
+  // Lo que sigue anota, por producto, qué variantes SÍ cubrió el archivo; las
+  // que quedan afuera y todavía tienen stock se barren más abajo.
+  const cubiertasPorHandle = new Map<string, Set<string>>();  // handle -> inventoryItemIds
+  const codigoPorHandle = new Map<string, string>();
+  // Productos donde la conversión de talle falló: NO se barren (ver abajo).
+  const conversionDudosa = new Set<string>();
+  const anotarCubierta = (handle: string, invId?: string) => {
+    if (!invId) return;
+    if (!cubiertasPorHandle.has(handle)) cubiertasPorHandle.set(handle, new Set());
+    cubiertasPorHandle.get(handle)!.add(invId);
+  };
+
   for (const { cod, d } of entries as { cod: string; d: any }[]) {
     const handle = d.shopifyHandle as string;
     const live = liveByHandle[handle] || [];
@@ -177,8 +195,14 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     const convTable = config.brand === 'converse'
       ? converseTablaDe(code, tagsByHandle[handle] || '')
       : null;
+    codigoPorHandle.set(handle, code);
     for (const [size, qtyRaw] of Object.entries(d.sizes || {})) {
       const desired = Number(qtyRaw);
+      // ⚠ Si hay tabla de conversión pero este talle NO está en ella, no sabemos
+      // a qué talle de Shopify corresponde. Ese producto queda EXCLUIDO del
+      // barrido a cero: si no, un talle que el proveedor SÍ tiene podría
+      // terminar en 0 solo porque no lo supimos traducir.
+      if (convTable && !(String(size) in convTable)) conversionDudosa.add(handle);
       // Converse: US -> ARG por tabla. Le Coq calzado: el talle de Shopify es
       // UNO MENOS que el del Excel (Excel 40 = Shopify 39).
       const argSize = convTable
@@ -207,6 +231,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
       // y se caen también las 99 variantes buenas que iban en ese lote.
       // Por eso se aparta ACÁ, antes de escribir.
       if (!lvl) {
+        anotarCubierta(handle, v.inventoryItem.id);
         sinActivar.push({
           title: shopTitle, code, talle: String(v.title || argSize),
           talleProveedor: String(size), current: null, desired,
@@ -214,6 +239,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
         });
         continue;
       }
+      anotarCubierta(handle, v.inventoryItem.id);
       const qEntry = (lvl.quantities || []).find((x: any) => x.name === 'available');
       const current = qEntry ? Number(qEntry.quantity) : 0;
       if (current === desired) {
@@ -233,6 +259,45 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
         current,
         desired,
       });
+    }
+  }
+
+  // ---- TALLES QUE EL PROVEEDOR YA NO TIENE -> A CERO ----
+  // El producto sigue en el Excel, pero ese talle ya no viene con número.
+  // Regla de Wanda: si el archivo no le pone número, en Shopify va a cero.
+  //
+  // ⚠ SOLO para CONVERSE y LE COQ (depósito iD): ahí el Excel es el catálogo
+  // COMPLETO del proveedor. Las otras marcas mandan listas PARCIALES
+  // ("cargá esto"), y poner en 0 lo que no aparece sería un error grave.
+  // Es la misma salvaguarda que ya usa `enPeligro` en syncLogic.ts.
+  const marcaConCatalogoCompleto = config.brand === 'converse' || config.brand === 'lecoq';
+  if (marcaConCatalogoCompleto) {
+    for (const [handle, cubiertas] of cubiertasPorHandle) {
+      // Si de este producto hubo algún talle que no supimos convertir, no lo
+      // barremos: podríamos poner en 0 un talle que el proveedor SÍ tiene.
+      if (conversionDudosa.has(handle)) continue;
+      const live = liveByHandle[handle] || [];
+      const shopTitle = titleByHandle[handle] || handle;
+      for (const v of live) {
+        const invId = v?.inventoryItem?.id;
+        if (!invId || cubiertas.has(invId)) continue;   // el archivo sí lo trae
+        const lvl = v.inventoryItem.inventoryLevel;
+        if (!lvl) continue;                             // no está en la sucursal: nada que apagar
+        const qEntry = (lvl.quantities || []).find((x: any) => x.name === 'available');
+        const current = qEntry ? Number(qEntry.quantity) : 0;
+        if (current <= 0) continue;                     // ya está en 0
+        changes.push({
+          handle,
+          title: shopTitle,
+          talle: String(v.title || ''),
+          sku: String(v.sku || ''),
+          code: codigoPorHandle.get(handle) || '',
+          inventoryItemId: invId,
+          current,
+          desired: 0,
+          motivo: 'El proveedor ya no tiene este talle',
+        });
+      }
     }
   }
 
