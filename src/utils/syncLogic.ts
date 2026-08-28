@@ -76,11 +76,21 @@ export interface AlertMessage {
   message: string;
 }
 
-export const convTable1: Record<string, string> = { '3': '34', '4': '35', '4.5': '36', '5': '36.5', '5.5': '37', '6': '37.5', '6.5': '38', '7': '39', '7.5': '39.5', '8': '40', '8.5': '41', '9': '41.5', '9.5': '42', '10': '43', '11': '44', '11.5': '45', '12': '45.5', '13': '46.5', '14': '48' };
-export const convTable2: Record<string, string> = { '3': '35', '3.5': '36', '4': '36.5', '4.5': '37', '5': '37.5', '5.5': '38', '6': '39', '6.5': '39.5', '7': '40', '7.5': '41', '8': '41.5', '8.5': '42', '9': '42.5', '9.5': '43', '10': '44', '10.5': '44.5', '11': '45', '11.5': '46', '12': '46.5', '13': '48', '14': '49' };
-export const convTable3: Record<string, string> = { '5': '35', '5.5': '36', '6': '36.5', '6.5': '37', '7.5': '38', '8': '39', '9': '40', '9.5': '41' };
-export const convTable4: Record<string, string> = { '10.5': '27', '11': '28', '11.5': '28.5', '12': '29', '12.5': '30', '13': '31', '13.5': '31.5', '1': '32', '1.5': '33', '2.5': '34', '3': '35' };
-export const convTable5: Record<string, string> = { '4': '20', '6': '21', '7': '22', '8': '23', '9': '24', '10': '25', '11': '26' };
+// ============================================================================
+// TABLAS DE CONVERSION US -> ARG. Salen de las planillas OFICIALES de Converse
+// (ARG Material Conversion ID Chart) y estan en `tallesConverseLecoq.json`.
+// Se generan desde ese archivo — NO se editan a mano. Antes estaban cargadas a
+// mano y les faltaban 32 talles; la de BEBE ademas estaba CORRIDA UN TALLE
+// (decia US 6 -> AR 21 cuando es AR 22, y asi hasta el US 11), o sea que el
+// stock de bebe entraba en el talle equivocado sin avisar. 28-ago-2026.
+// 🛡 `src/utils/__tests__/tablasTalle.test.ts` las compara contra el JSON
+//    oficial: si alguien las vuelve a tocar a mano, el test falla.
+// ============================================================================
+export const convTable1: Record<string, string> = { '3': '34', '3.5': '34.5', '4': '35', '4.5': '36', '5': '36.5', '5.5': '37', '6': '37.5', '6.5': '38', '7': '39', '7.5': '39.5', '8': '40', '8.5': '41', '9': '41.5', '9.5': '42', '10': '43', '10.5': '43.5', '11': '44', '11.5': '45', '12': '45.5', '12.5': '46', '13': '46.5', '13.5': '47', '14': '48', '14.5': '48.5', '15': '49' };
+export const convTable2: Record<string, string> = { '2.5': '34', '3': '35', '3.5': '36', '4': '36.5', '4.5': '37', '5': '37.5', '5.5': '38', '6': '39', '6.5': '39.5', '7': '40', '7.5': '41', '8': '41.5', '8.5': '42', '9': '42.5', '9.5': '43', '10': '44', '10.5': '44.5', '11': '45', '11.5': '46', '12': '46.5', '12.5': '47', '13': '48', '13.5': '48.5', '14': '49', '15': '50' };
+export const convTable3: Record<string, string> = { '5': '35', '5.5': '36', '6': '36.5', '6.5': '37', '7': '37.5', '7.5': '38', '8': '39', '8.5': '39.5', '9': '40', '9.5': '41', '10': '41.5', '10.5': '42', '11': '42.5', '11.5': '43', '12': '44', '12.5': '44.5', '13': '45' };
+export const convTable4: Record<string, string> = { '1': '32', '1.5': '33', '2': '33.5', '2.5': '34', '3': '35', '10.5': '27', '11': '28', '11.5': '28.5', '12': '29', '12.5': '30', '13': '31', '13.5': '31.5' };
+export const convTable5: Record<string, string> = { '2': '18', '2.5': '18.5', '3': '19', '3.5': '19.5', '4': '20', '4.5': '20.5', '5': '21', '5.5': '21.5', '6': '22', '6.5': '22.5', '7': '23', '7.5': '23.5', '8': '24', '8.5': '24.5', '9': '25', '9.5': '25.5', '10': '26', '10.5': '26.5', '11': '27' };
 
 // Configuración de precios por marca.
 // - markup: multiplicador sobre el precio mayorista para calcular el precio de venta.
