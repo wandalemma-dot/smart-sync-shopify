@@ -137,7 +137,52 @@ Código en `src/utils/plantillaPedido.ts`.
 > publica el número exacto cuando tiene mucho. **Regla de Wanda: se cargan 50.**
 > En el archivo del 20-ago son **351 celdas** (121 productos). El `+` se saca a
 > propósito; no se confía en que `Number("+50")` devuelva 50 solo.
-> Y `-` significa que ese talle no lo maneja: se saltea, **no** se carga 0.
+> Y `-` significa que ese talle el proveedor no lo tiene: **no entra al mapa de
+> talles** (ver 3.1-quinquies para qué pasa después con esos talles).
+
+### 3.1-quinquies El talle que ya no viene → VA A CERO (28-ago-2026)
+
+Regla de Wanda, dicha así:
+
+> «Si yo en mi tienda tengo un talle 42 y vos en esta tabla lo ves con un guión,
+> o en gris, o en blanco, lo que sea, lo tenés que poner en cero.»
+
+**El problema que arregla.** El Excel de iD trae, por producto, **solo los talles
+con stock**; el resto viene con `-`. Antes esos talles se salteaban y nunca se
+tocaban: si iD se quedaba sin el 42 de un modelo, en Shopify **ese 42 seguía
+disponible para la venta para siempre**. No es que se cargaba mal — es que no se
+cargaba nunca.
+
+**Qué dice el archivo, verificado.** En la `PlantillaPedido_6.xlsx` (28-ago-2026),
+de 12.342 celdas de talle: **10.833 con guión, 1.167 con número, 342 con `+50`,
+CERO celdas vacías y CERO ceros literales.** iD nunca escribe un 0. Además el
+guión siempre viene en celda **gris** (`D3D3D3` en la fila `Cantidad`), que es
+como el proveedor marca «este modelo no viene en ese talle». No hace falta leer
+el color: la regla es la misma para todos los casos.
+
+**Cómo quedó** (`planStockWrite()` en `writeStock.ts`): por cada producto que sí
+está en el Excel, toda variante que en la sucursal de iD **tenga stock > 0** y que
+el archivo **no cubra con un número** se agrega a `changes` con `desired: 0` y
+`motivo: 'El proveedor ya no tiene este talle'`. Sale en la lista roja
+**«A poner en 0»** de la pantalla y solo se escribe si Wanda confirma.
+
+> 🔴 **DOS SALVAGUARDAS QUE NO SE TOCAN.**
+> **1)** El barrido corre **solo en Converse y Le Coq**, donde el Excel es el
+> catálogo COMPLETO del proveedor. Las otras marcas mandan listas **parciales**
+> («cargá esto»): barrer ahí borraría stock real. Es la misma condición que ya
+> usa `enPeligro` en `syncLogic.ts`.
+> **2)** Si de un producto hubo **un solo talle que no se supo convertir**
+> (está en la tabla de conversión pero el US no figura), ese producto **queda
+> afuera del barrido**. Si no, un error de conversión pondría en 0 un talle que
+> el proveedor SÍ tiene. Esos casos siguen apareciendo en «No ubicados» para
+> revisión manual.
+>
+> 🛡 Tests: `src/utils/__tests__/talleACero.test.ts`. Si un cambio los hace
+> fallar, el cambio está mal.
+
+**Distinto de «el proveedor ya no lista el producto»** (`enPeligro`), que apaga el
+producto **entero** cuando su código no aparece en el Excel. Este barrido es el
+caso de al lado: el producto sigue, el talle no.
 >
 > Verificado contra `Stock 3.xlsx` (18-ago): de 243 códigos en común, 202 (83%)
 > dan **exactamente el mismo juego de talles**; el resto difiere en uno o dos
