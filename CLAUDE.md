@@ -441,6 +441,32 @@ Solo lectura. No escribe en Shopify ni carga la web externa.
   **"Posibles entregas"** (no los repone; los ve por si quiere empezar a trabajarlos).
 - Lo que **iD no tiene** no se muestra: no se puede pedir.
 
+> 🔴 **LA CONVERSIÓN DE TALLE DE ESTA PESTAÑA USA LA MISMA REGLA QUE LA
+> SINCRONIZACIÓN: la etiqueta manda.** Arreglado el 29-ago-2026.
+> `convertirConverse()` miraba **solo** el maestro de curvas e ignoraba la
+> etiqueta `TABLA DE TALLE` del producto, así que las dos pestañas daban
+> respuestas distintas para los 8 productos donde no coinciden (ver 3.2).
+>
+> **Acá el error cuesta más caro que en la sincronización**: no se escribe mal en
+> Shopify, se **pide mal a iD** y llega mercadería que no va. Caso real que lo
+> encontró Wanda: `A11716C` «Sport Casual Ox Blanco», etiqueta TABLA 1 pero en el
+> maestro tabla 2 — la reposición pedía toda la curva corrida:
+>
+> | Talle AR | Pedía | Corresponde |
+> |---|---|---|
+> | 41 | US 7.5 | **US 8.5** |
+> | 42 | US 8.5 | **US 9.5** |
+> | 43 | US 9.5 | **US 10** |
+> | 44 | US 10 | **US 11** |
+> | 45 | US 11 | **US 11.5** |
+>
+> `convertir()` y `convertirConverse()` reciben las **etiquetas** del producto y
+> son ellas las que eligen la curva; el maestro queda de respaldo. Si no hay ni
+> etiqueta ni código en el maestro, **no adivina**: devuelve `ok: false` y la fila
+> se muestra para revisión.
+>
+> 🛡 Tests: `src/utils/__tests__/curvaPedido.test.ts`.
+
 ---
 
 ## 5. Seguridad (no aflojar acá)
