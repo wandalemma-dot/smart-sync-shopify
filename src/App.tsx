@@ -634,7 +634,9 @@ export default function App() {
                     <> · <span style={{ color: '#f87171' }}>🗑️ A poner en 0 (el proveedor ya no los tiene): <strong>{stockPlan.changes.filter(c => c.motivo).length}</strong></span></>
                   )}
                   {stockPlan.talleCorrido.length > 0 && (
-                    <> · <span style={{ color: '#fb923c' }}>📏 Talles corridos: <strong>{stockPlan.talleCorrido.length}</strong></span></>
+                    <> · <span style={{ color: '#fb923c' }}>📏 Talles corridos: <strong>{stockPlan.talleCorrido.length}</strong>
+                      {stockPlan.apartadosPorCorrido.length > 0 && <> (apartadas {stockPlan.apartadosPorCorrido.length} filas)</>}
+                    </span></>
                   )}
                 </div>
                 {/* Buscador: para poder confirmar qué pasó con UN producto puntual.
@@ -844,6 +846,36 @@ export default function App() {
                             Mientras estén corridos, a estos productos <strong>no se les apaga ningún talle</strong> ni se les
                             escribe stock nuevo. Enderezalos primero y volvé a simular.
                           </p>
+                          {stockPlan.apartadosPorCorrido.length > 0 && (
+                            <details style={{ marginTop: '0.4rem' }}>
+                              <summary style={{ cursor: 'pointer', fontSize: '0.8rem', color: '#fb923c' }}>
+                                <strong>{stockPlan.apartadosPorCorrido.length} filas de stock quedaron apartadas</strong>
+                                <span style={{ opacity: 0.75 }}> — no se escriben. No es que no tengan cambios: no se pueden aplicar hasta enderezar el talle.</span>
+                              </summary>
+                              <div style={{ maxHeight: '220px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', marginTop: '0.4rem' }}>
+                                <table style={{ width: '100%', fontSize: '0.78rem', borderCollapse: 'collapse' }}>
+                                  <thead>
+                                    <tr style={{ position: 'sticky', top: 0, background: '#1f2937' }}>
+                                      <th style={{ textAlign: 'left', padding: '5px 10px' }}>Producto</th>
+                                      <th style={{ textAlign: 'left', padding: '5px' }}>Código</th>
+                                      <th style={{ padding: '5px' }}>Talle proveedor</th>
+                                      <th style={{ padding: '5px' }}>Stock que traía</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {stockPlan.apartadosPorCorrido.map((r, i) => (
+                                      <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
+                                        <td style={{ padding: '5px 10px' }}>{r.title}</td>
+                                        <td style={{ padding: '5px', fontFamily: 'monospace', opacity: 0.85 }}>{r.code}</td>
+                                        <td style={{ padding: '5px', textAlign: 'center' }}>{r.talleProveedor}</td>
+                                        <td style={{ padding: '5px', textAlign: 'center', color: '#fb923c', fontWeight: 'bold' }}>{r.desired}</td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </details>
+                          )}
                           {stockPlan.talleCorrido.map((p) => (
                             <div key={p.handle} style={{ marginTop: '0.6rem', padding: '0.5rem 0.7rem', background: 'rgba(0,0,0,0.2)', borderRadius: '6px' }}>
                               <div style={{ fontSize: '0.85rem' }}>

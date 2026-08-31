@@ -67,6 +67,10 @@ export interface StockPlan {
   // Productos cuyos talles quedaron corridos en Shopify (residuo del error
   // viejo de Le Coq). NO se barren a cero hasta enderezarlos.
   talleCorrido: ProductoTalleCorrido[];
+  // Filas de stock que quedaron APARTADAS porque su producto tiene el talle
+  // corrido. No se escriben. Van separadas de `unchangedRows` a propósito: no
+  // es que no tengan cambios, es que no se pueden aplicar todavía.
+  apartadosPorCorrido: StockRow[];
 }
 
 export interface WriteResult {
@@ -152,7 +156,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
   const locName = STOCK_LOCATION[config.brand];
   const locId = await getLocationId(locName);
   if (!locId) {
-    return { locationName: locName, locationId: null, locationFound: false, changes: [], unchanged: 0, unchangedRows: [], notFound: [], sinActivar: [], talleCorrido: [] };
+    return { locationName: locName, locationId: null, locationFound: false, changes: [], unchanged: 0, unchangedRows: [], notFound: [], sinActivar: [], talleCorrido: [], apartadosPorCorrido: [] };
   }
 
   // Productos que ya matchearon contra Shopify (tienen handle). Guardamos el
@@ -197,6 +201,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
   const unchangedRows: StockRow[] = [];
   const notFound: StockRow[] = [];
   const sinActivar: StockRow[] = [];
+  const apartadosPorCorrido: StockRow[] = [];
 
   // ---- PRODUCTOS CON EL TALLE CORRIDO (residuo del error viejo de Le Coq) ----
   // Le Coq calzado: en Shopify el talle va UNO MENOS que en el Excel. Hasta el
@@ -283,7 +288,8 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     evaluarCorrido(handle, code, d, convTable);
     // Un producto con el talle corrido no se barre a cero: primero hay que
     // enderezarlo, si no apagaríamos talles que en realidad tienen mercadería.
-    if (talleCorrido.some((t) => t.handle === handle)) conversionDudosa.add(handle);
+    const estaCorrido = talleCorrido.some((t) => t.handle === handle);
+    if (estaCorrido) conversionDudosa.add(handle);
     for (const [size, qtyRaw] of Object.entries(d.sizes || {})) {
       const desired = Number(qtyRaw);
       // ⚠ Si hay tabla de conversión pero este talle NO está en ella, no sabemos
@@ -298,6 +304,21 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
         : config.brand === 'lecoq'
           ? talleShopifyLeCoq(size, d.title)
           : String(size);
+      // ⚠⚠ PRODUCTO CON EL TALLE CORRIDO -> NO SE LE ESCRIBE NADA.
+      // Los nombres de talle de este producto están desplazados: el que dice 36
+      // es en realidad un 35. Entonces CUALQUIER match es un match a la variante
+      // equivocada, y el stock terminaría en el talle que no es.
+      // No alcanzaba con sacarlo del barrido a cero (`conversionDudosa`): las
+      // filas igual se pusheaban a `changes` y se escribían, mientras la pantalla
+      // le prometía a Wanda que a estos productos no se les escribe stock nuevo.
+      // Se apartan acá, antes de buscar la variante.
+      if (estaCorrido) {
+        apartadosPorCorrido.push({
+          title: shopTitle, code, talle: String(argSize),
+          talleProveedor: String(size), current: null, desired,
+        });
+        continue;
+      }
       // Si la marca tiene conversión de talle (Converse / Le Coq calzado) usamos
       // SOLO el talle convertido: si aceptáramos también el original podríamos
       // cargarle el stock al talle equivocado.
@@ -421,7 +442,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
 
   return {
     locationName: locName, locationId: locId, locationFound: true,
-    changes, unchanged: unchangedRows.length, unchangedRows, notFound, sinActivar, talleCorrido,
+    changes, unchanged: unchangedRows.length, unchangedRows, notFound, sinActivar, talleCorrido, apartadosPorCorrido,
   };
 }
 

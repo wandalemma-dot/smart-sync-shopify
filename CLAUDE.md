@@ -217,8 +217,18 @@ realmente son. También corrige el SKU (`{código}-{talle}`).
 > **1)** Se renombra **de menor a mayor y todo el producto en UNA llamada**. Como
 > todos bajan un talle, hacerlo de a uno y en desorden podría chocar con un talle
 > que todavía no se renombró.
-> **2)** Un producto corrido **no se barre a cero** y no se le escribe stock hasta
-> enderezarlo: si no, se apagarían talles que en realidad tienen mercadería.
+> **2)** Un producto corrido **no se barre a cero** y **no se le escribe stock**
+> hasta enderezarlo: si no, se apagarían talles que en realidad tienen mercadería.
+>
+> ⚠️ **Esto estuvo roto y se arregló el 31-ago-2026.** El producto se agregaba a
+> `conversionDudosa`, que **solo** lo sacaba del barrido a cero — pero las filas
+> igual se pusheaban a `changes` y `executeStockWrite()` las escribía. La pantalla
+> le prometía a Wanda que no se les escribía nada, y era falso: como los nombres
+> de talle están desplazados, **cualquier** match es a la variante equivocada y el
+> stock caía en el talle que no era. Ahora `planStockWrite()` corta ANTES de
+> buscar la variante y manda esas filas a **`apartadosPorCorrido`**, que se
+> muestra aparte en la pantalla. Van separadas de `unchangedRows` a propósito: no
+> es que no tengan cambios, es que no se pueden aplicar todavía.
 >
 > 🛡 Tests en `src/utils/__tests__/talleACero.test.ts`.
 

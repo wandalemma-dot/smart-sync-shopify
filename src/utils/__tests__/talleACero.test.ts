@@ -211,4 +211,23 @@ describe('productos con el talle corrido', () => {
     expect(plan.talleCorrido).toHaveLength(1);
     expect(plan.changes.filter((c) => c.desired === 0)).toHaveLength(0);
   });
+
+  it('un producto corrido NO genera escrituras de stock', async () => {
+    // El producto está corrido (36/40 del archivo caen tal cual en Shopify, sin
+    // convertir). Pero el archivo trae además el 41, que SÍ convierte al 40 que
+    // existe en la tienda. Antes eso generaba una escritura: le metía las 99
+    // unidades del 41 a la variante que dice 40 y en realidad es un 39.
+    // Mientras el producto esté corrido no se le escribe NADA.
+    responder([variante('36', 12), variante('40', 5), variante('44', 9)], '');
+    const plan = await planStockWrite(
+      { excelMap: { lfn9924043: { foundInShopify: true, shopifyHandle: 'zapa', title: 'OMEGA X ACTIVE', sizes: { '36': 12, '40': 5, '41': 99 } } }, enPeligro: [] } as any,
+      cfg('lecoq'),
+    );
+    expect(plan.talleCorrido).toHaveLength(1);
+    expect(plan.changes).toHaveLength(0);
+    // Y tienen que verse en pantalla como APARTADOS, no como "sin cambios".
+    expect(plan.apartadosPorCorrido.length).toBeGreaterThan(0);
+    expect(plan.apartadosPorCorrido.every((r) => r.code === 'LFN9924043')).toBe(true);
+    expect(plan.unchangedRows).toHaveLength(0);
+  });
 });
