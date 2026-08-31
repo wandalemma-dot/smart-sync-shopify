@@ -7,6 +7,40 @@
 > **Regla de oro:** cuando agregues un camino nuevo (una consulta, una escritura,
 > una pantalla), revisá si alguna regla de abajo tiene que aplicarse ahí también.
 
+---
+
+## 0. ARRANQUE OBLIGATORIO — leer antes de escribir una sola línea
+
+Wanda trabaja **desde dos computadoras** y a veces con **más de un chat**. Las
+conversaciones no se comparten entre sí; **este archivo y el repositorio son la
+única memoria común**. Por eso:
+
+> 🔴 **1) BAJÁ LO ÚLTIMO ANTES DE TOCAR NADA.**
+> Cloná el repo de nuevo (`git clone`) o hacé `git pull` en el momento.
+> **NUNCA** subas archivos desde una copia que tengas de antes, ni de otra
+> sesión, ni de un ZIP viejo. Git no te avisa: **pisa y listo**.
+> Ya pasó — el 31-ago-2026 una copia local había quedado **1.500 líneas atrás**
+> (tablas de talle de Converse corregidas, la regla del talle a cero, los talles
+> corridos y sus tests). Subirla habría borrado todo eso en silencio.
+>
+> 🔴 **2) UN SOLO CHAT POR VEZ sobre el repositorio.**
+> Dos chats trabajando a la vez se pisan, porque ninguno mira lo que hace el otro.
+>
+> 🔴 **3) ANTES DE TERMINAR:** `npm test` + `npx tsc --noEmit` + `npx vite build`.
+> Si algo falla, **el cambio está mal**: no lo subas.
+>
+> 🔴 **4) DEJÁ ESCRITO LO QUE APRENDISTE.** Si Wanda te dijo una regla de negocio
+> nueva, o encontraste una trampa, **sumala acá**. Lo que no queda en este
+> archivo, el próximo chat no lo sabe.
+
+**Frase para arrancar un chat nuevo** (Wanda la puede copiar y pegar tal cual):
+
+```
+Trabajo sobre https://github.com/wandalemma-dot/smart-sync-shopify
+Bajá lo último del repo y leé CLAUDE.md antes de tocar nada.
+No subas ninguna copia vieja que tengas.
+```
+
 La dueña del negocio es **Wanda** (tienda INDY, `indy-com-ar.myshopify.com`).
 No es programadora: explicale en castellano simple, sin jerga.
 
