@@ -221,6 +221,30 @@ el archivo **no cubra con un número** se agrega a `changes` con `desired: 0` y
 producto **entero** cuando su código no aparece en el Excel. Este barrido es el
 caso de al lado: el producto sigue, el talle no.
 
+### 3.1-quinquies CREAR LOS TALLES QUE FALTAN («No ubicados»)
+
+«No ubicado» = el producto **sí** está en Shopify, pero **ese talle no existe**
+como variante. Desde el 31-ago-2026 se pueden crear desde la app
+(`crearTallesFaltantes()`, `productVariantsBulkCreate`), con botón aparte y
+confirmación propia.
+
+- **Precio y costo salen del archivo de iD** (elección de Wanda, 31-ago-2026):
+  costo = lista − 7%, precio = sugerido ×1,87 si es básico o ×2,27 si no.
+  Se calculan en `planStockWrite()` y viajan en la fila de `notFound`.
+- Se agrupa **por producto**: una llamada por producto con todos sus talles.
+
+> 🔴 **VIENEN TODOS DESTILDADOS Y ASÍ TIENE QUE QUEDAR.**
+> Un «no ubicado» **no siempre** es un talle que falta: también aparece cuando la
+> conversión salió mal. Tildar por defecto sería inventarle talles a la tienda
+> (un 45 en una zapatilla de nena). Wanda mira la lista y tilda.
+>
+> 🔴 **NUNCA dejar que un producto con el TALLE CORRIDO llegue a `notFound`.**
+> Si llega, este botón le crea el talle «faltante» y queda **duplicado**: el 36
+> corrido *y* el 35 nuevo, con el stock repartido. Hoy es imposible porque
+> `planStockWrite()` los aparta antes de buscar la variante — y hay un test que
+> lo cuida (`un producto corrido NUNCA cae en "no ubicados"`).
+> **Orden correcto:** enderezar → volver a simular → recién ahí crear los que falten.
+
 ### 3.1-sexies TALLES CORRIDOS — el residuo del error viejo de Le Coq
 
 Hasta el **25-ago-2026** la app detectaba el calzado Le Coq por una lista de

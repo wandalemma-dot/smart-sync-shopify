@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, downloadInventoryCSV, autoConverseTable } from './utils/syncLogic';
 import type { SyncConfig, SyncResult } from './utils/syncLogic';
-import { planStockWrite, executeStockWrite, activarEnSucursal, enderezarTallesCorridos } from './utils/writeStock';
+import { planStockWrite, executeStockWrite, activarEnSucursal, enderezarTallesCorridos, crearTallesFaltantes } from './utils/writeStock';
 import type { StockPlan } from './utils/writeStock';
 import { createProducts } from './utils/createProducts';
 import { aplicarPrecios, actualizacionesAplicables, sinCambios, margenPct } from './utils/updatePrices';
@@ -38,6 +38,32 @@ export default function App() {
   const [stockBuscar, setStockBuscar] = useState('');
   // Alta en sucursal: paso APARTE, con su propia confirmación.
   const [altaConfirm, setAltaConfirm] = useState(false);
+  // Crear los talles que faltan ("No ubicados"). Vienen TODOS DESTILDADOS a
+  // propósito: un "no ubicado" no siempre es un talle que falta, a veces es una
+  // conversión que salió mal, y crear a ciegas mete talles inventados.
+  const [crearTalle, setCrearTalle] = useState<Record<string, boolean>>({});
+  const [faltantesConfirm, setFaltantesConfirm] = useState(false);
+  const [faltantesLoading, setFaltantesLoading] = useState(false);
+  const [faltantesDone, setFaltantesDone] = useState<string | null>(null);
+
+  const claveFila = (r: { code: string; talle: string; talleProveedor: string }) =>
+    `${r.code}|${r.talleProveedor}|${r.talle}`;
+
+  const handleCrearFaltantes = async () => {
+    if (!stockPlan) return;
+    const filas = stockPlan.notFound.filter(r => crearTalle[claveFila(r)] && r.productId);
+    if (filas.length === 0) { alert('No hay ningún talle tildado para crear.'); return; }
+    setFaltantesLoading(true); setFaltantesDone(null);
+    try {
+      const res = await crearTallesFaltantes(stockPlan, filas);
+      setFaltantesDone(`Talles creados ${res.written} · fallidos ${res.failed}` + (res.errors.length ? ` · ${res.errors.slice(0, 2).join(' | ')}` : ''));
+      setFaltantesConfirm(false);
+    } catch (e: any) {
+      alert('Error creando los talles: ' + e.message);
+    } finally {
+      setFaltantesLoading(false);
+    }
+  };
   const [altaLoading, setAltaLoading] = useState(false);
   const [altaDone, setAltaDone] = useState<string | null>(null);
 
@@ -758,26 +784,69 @@ export default function App() {
                             <table style={tabla}>
                               <thead>
                                 <tr style={cab}>
+                                  <th style={{ padding: '6px' }}>Crear</th>
                                   <th style={th}>Producto</th>
                                   <th style={{ ...th, padding: '6px' }}>Código</th>
                                   <th style={{ padding: '6px' }}>Talle proveedor</th>
                                   <th style={{ padding: '6px' }}>Talle buscado</th>
                                   <th style={{ padding: '6px' }}>Cantidad</th>
+                                  <th style={{ padding: '6px' }}>Precio</th>
                                 </tr>
                               </thead>
                               <tbody>
-                                {fNoUbic.map((r, i) => (
-                                  <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: 'rgba(245,158,11,0.07)' }}>
+                                {fNoUbic.map((r, i) => {
+                                  const k = claveFila(r);
+                                  const on = !!crearTalle[k];
+                                  return (
+                                  <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: on ? 'rgba(245,158,11,0.18)' : 'rgba(245,158,11,0.07)' }}>
+                                    <td style={{ padding: '6px', textAlign: 'center' }}>
+                                      <input type="checkbox" checked={on} disabled={!r.productId}
+                                        onChange={e => setCrearTalle({ ...crearTalle, [k]: e.target.checked })} />
+                                    </td>
                                     <td style={{ padding: '6px 10px' }}>{r.title}</td>
                                     <td style={{ padding: '6px', fontFamily: 'monospace', opacity: 0.85 }}>{r.code}</td>
                                     <td style={{ padding: '6px', textAlign: 'center', opacity: 0.7 }}>{r.talleProveedor}</td>
                                     <td style={{ padding: '6px', textAlign: 'center' }}>{r.talle}</td>
                                     <td style={{ padding: '6px', textAlign: 'center' }}>{r.desired}</td>
+                                    <td style={{ padding: '6px', textAlign: 'center', opacity: 0.8 }}>{r.precio ? `$${r.precio}` : '—'}</td>
                                   </tr>
-                                ))}
+                                  );
+                                })}
                               </tbody>
                             </table>
                           </div>
+
+                          {/* Crear los talles que faltan. Vienen destildados a propósito. */}
+                          <p style={{ fontSize: '0.78rem', opacity: 0.85, margin: '0.5rem 0' }}>
+                            Puedo <strong>crear estos talles</strong> en el producto, con su stock, precio y costo
+                            (los del archivo de iD). Vienen <strong>destildados</strong> a propósito:
+                            un "no ubicado" no siempre es un talle que falta — a veces es una conversión que salió mal,
+                            y ahí estaríamos inventando un talle. <strong>Mirá la lista y tildá los que correspondan.</strong>
+                          </p>
+                          <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', fontSize: '0.8rem', marginBottom: '0.4rem' }}>
+                            <button style={{ padding: '4px 10px', borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.06)', color: 'white', fontSize: '0.8rem' }}
+                              onClick={() => setCrearTalle(Object.fromEntries(fNoUbic.filter(r => r.productId).map(r => [claveFila(r), true])))}>
+                              Tildar los {fNoUbic.length} de la lista
+                            </button>
+                            <button style={{ padding: '4px 10px', borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.06)', color: 'white', fontSize: '0.8rem' }}
+                              onClick={() => setCrearTalle({})}>Destildar todos</button>
+                            <span style={{ marginLeft: 'auto', opacity: 0.85 }}>
+                              Tildados: <strong style={{ color: '#f59e0b' }}>{stockPlan.notFound.filter(r => crearTalle[claveFila(r)]).length}</strong>
+                            </span>
+                          </div>
+                          <label style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '0.85rem' }}>
+                            <input type="checkbox" checked={faltantesConfirm} onChange={e => setFaltantesConfirm(e.target.checked)} />
+                            Entiendo que esto va a <strong>&nbsp;crear talles nuevos&nbsp;</strong> en esos productos de Shopify.
+                          </label>
+                          <button
+                            className="btn-primary"
+                            style={{ background: faltantesConfirm ? '#d97706' : '#6b7280', marginTop: '0.5rem' }}
+                            onClick={handleCrearFaltantes}
+                            disabled={!faltantesConfirm || faltantesLoading}
+                          >
+                            {faltantesLoading ? <span className="loader"></span> : `➕ Crear ${stockPlan.notFound.filter(r => crearTalle[claveFila(r)]).length} talles en Shopify`}
+                          </button>
+                          {faltantesDone && <p style={{ marginTop: '0.5rem', color: '#f59e0b', fontWeight: 'bold' }}>✅ {faltantesDone}</p>}
                         </details>
                       )}
                       {/* --- 4) SIN ALTA EN LA SUCURSAL: hay que activarlas --- */}

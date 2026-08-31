@@ -37,6 +37,14 @@ export interface StockRow {
   desired: number;
   // Solo lo llevan las filas de `sinActivar`: hace falta para darlas de alta.
   inventoryItemId?: string;
+  // Solo lo llevan las filas de `notFound`: hace falta para poder CREAR el
+  // talle que falta. Precio y costo salen del archivo de iD (regla de Wanda,
+  // 31-ago-2026): costo = lista − 7%, precio = sugerido si es básico o ×2,27.
+  handle?: string;
+  productId?: string;
+  opcion?: string;        // nombre de la opción en Shopify ("Talle")
+  precio?: number;
+  costo?: number;
 }
 
 // Un producto cuyos talles quedaron corridos en Shopify (dice 36 y es un 35).
@@ -126,6 +134,17 @@ const SET_MUTATION = `
 const RENAME_MUTATION = `
   mutation Renombrar($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
     productVariantsBulkUpdate(productId: $productId, variants: $variants) {
+      productVariants { id title }
+      userErrors { field message }
+    }
+  }
+`;
+
+// Crea variantes nuevas en un producto que ya existe. Se usa para los talles
+// que el proveedor tiene y en Shopify no existen ("No ubicados").
+const CREATE_VARIANTS = `
+  mutation CrearTalles($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+    productVariantsBulkCreate(productId: $productId, variants: $variants) {
       productVariants { id title }
       userErrors { field message }
     }
@@ -335,6 +354,15 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
         notFound.push({
           title: shopTitle, code, talle: String(argSize),
           talleProveedor: String(size), current: null, desired,
+          // Para poder crear el talle después, sin volver a consultar Shopify.
+          // OJO: acá NO pueden caer productos con el talle corrido — esos se
+          // apartan más arriba. Es lo que evita crear duplicados (el 36 corrido
+          // y el 35 nuevo), que es la trampa documentada en CLAUDE.md.
+          handle,
+          productId: idByHandle[handle] || '',
+          opcion: opcionByHandle[handle] || 'Talle',
+          precio: Number(d.publicPrice) || 0,
+          costo: Number(d.costFinal) || 0,
         });
         continue;
       }
@@ -527,6 +555,69 @@ export async function activarEnSucursal(
       if (errors.length < 5) errors.push(`${f.title} ${f.talle}: ${err?.message || 'Error desconocido'}`);
     }
     onProgress?.(i + 1, filas.length);
+  }
+
+  return { written, failed, errors };
+}
+
+// CREAR LOS TALLES QUE FALTAN (botón aparte, con confirmación)
+// ----------------------------------------------------------------------------
+// Para los "No ubicados": el producto está en Shopify pero ese talle no existe.
+// Se crea la variante, con su stock, precio y costo, en la sucursal del plan.
+//
+// ⚠ DOS SALVAGUARDAS QUE NO SE SACAN:
+//   1) Los productos con el TALLE CORRIDO nunca llegan a `notFound` (se apartan
+//      antes), así que es imposible que esto cree el duplicado clásico: el 36
+//      corrido conviviendo con el 35 nuevo. Si algún día se cambia ese orden,
+//      esta función pasa a ser peligrosa.
+//   2) Se crea de a un producto por llamada, agrupando sus talles, y solo las
+//      filas que Wanda dejó tildadas.
+export async function crearTallesFaltantes(
+  plan: StockPlan,
+  filas: StockRow[],
+  onProgress?: (hechas: number, total: number) => void,
+): Promise<WriteResult> {
+  if (!plan.locationId) throw new Error('No se encontró la sucursal.');
+  // Agrupamos por producto: la mutación de Shopify trabaja por producto.
+  const porProducto = new Map<string, StockRow[]>();
+  for (const f of filas) {
+    if (!f.productId) continue;
+    if (!porProducto.has(f.productId)) porProducto.set(f.productId, []);
+    porProducto.get(f.productId)!.push(f);
+  }
+
+  let written = 0;
+  let failed = 0;
+  const errors: string[] = [];
+  let hechas = 0;
+  const total = filas.length;
+
+  for (const [productId, lista] of porProducto) {
+    const variants = lista.map((f) => {
+      const v: any = {
+        optionValues: [{ name: String(f.talle), optionName: f.opcion || 'Talle' }],
+        inventoryItem: { tracked: true },
+        inventoryQuantities: [{ locationId: plan.locationId, availableQuantity: Number(f.desired) || 0 }],
+      };
+      if (f.precio && f.precio > 0) v.price = String(f.precio);
+      if (f.costo && f.costo > 0) v.inventoryItem.cost = String(f.costo);
+      return v;
+    });
+    try {
+      const data = await shopifyGraphQL<any>(CREATE_VARIANTS, { productId, variants });
+      const ue = data?.productVariantsBulkCreate?.userErrors || [];
+      if (ue.length) {
+        failed += lista.length;
+        if (errors.length < 5) errors.push(`${lista[0].title}: ${ue[0].message}`);
+      } else {
+        written += lista.length;
+      }
+    } catch (err: any) {
+      failed += lista.length;
+      if (errors.length < 5) errors.push(`${lista[0].title}: ${err?.message || 'Error desconocido'}`);
+    }
+    hechas += lista.length;
+    onProgress?.(hechas, total);
   }
 
   return { written, failed, errors };

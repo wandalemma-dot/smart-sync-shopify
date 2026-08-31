@@ -22,6 +22,12 @@ const ALLOWED_MUTATIONS = [
   // stocked at the location". Se usa SOLO desde el botón aparte que Wanda
   // confirma a mano; nunca dentro de la escritura normal de stock.
   'inventoryActivate',
+  // Crea talles que faltan en un producto que YA existe ("No ubicados"): el
+  // proveedor tiene el talle y en Shopify la variante no está. Se usa SOLO
+  // desde el botón aparte, con las filas que Wanda dejó tildadas.
+  // ⚠ Los productos con el TALLE CORRIDO nunca llegan ahí (se apartan antes),
+  // que es lo que evita crear duplicados: el 36 corrido y el 35 nuevo.
+  'productVariantsBulkCreate',
 ];
 
 const SHOP = 'indy-com-ar.myshopify.com';

@@ -230,4 +230,34 @@ describe('productos con el talle corrido', () => {
     expect(plan.apartadosPorCorrido.every((r) => r.code === 'LFN9924043')).toBe(true);
     expect(plan.unchangedRows).toHaveLength(0);
   });
+
+  it('un producto corrido NUNCA cae en "no ubicados" (si no, se crearían duplicados)', async () => {
+    // Esto cuida al botón "Crear talles en Shopify", que trabaja sobre la lista
+    // de `notFound`. Si un producto corrido llegara ahí, la app le crearía el
+    // talle que "falta" y quedaría duplicado: el 36 corrido Y el 35 nuevo, con
+    // el stock repartido entre los dos. Es la trampa documentada en CLAUDE.md.
+    responder([variante('36', 12), variante('40', 5), variante('44', 9)], '');
+    const plan = await planStockWrite(
+      { excelMap: { lfn9924043: { foundInShopify: true, shopifyHandle: 'zapa', title: 'OMEGA X ACTIVE', sizes: { '36': 12, '40': 5, '41': 99 } } }, enPeligro: [] } as any,
+      cfg('lecoq'),
+    );
+    expect(plan.talleCorrido).toHaveLength(1);
+    expect(plan.notFound).toHaveLength(0);
+    expect(plan.apartadosPorCorrido).toHaveLength(3);
+  });
+
+  it('las filas de "no ubicados" llevan lo necesario para crear el talle', async () => {
+    // El 42 del proveedor (US 42 no está en la tabla 1 -> queda tal cual) no
+    // existe en la tienda. Esa fila tiene que traer precio y costo del archivo.
+    responder([variante('40', 5)]);
+    const plan = await planStockWrite(
+      { excelMap: { a99999c: { foundInShopify: true, shopifyHandle: 'zapa', title: 'Chuck', sizes: { '8': 5, '99': 3 }, publicPrice: 109900, costFinal: 44710 } }, enPeligro: [] } as any,
+      cfg('converse'),
+    );
+    const fila = plan.notFound.find((r) => r.talleProveedor === '99');
+    expect(fila).toBeDefined();
+    expect(fila!.precio).toBe(109900);
+    expect(fila!.costo).toBe(44710);
+    expect(fila!.opcion).toBe('Talle');
+  });
 });
