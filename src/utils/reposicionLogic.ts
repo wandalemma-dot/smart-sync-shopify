@@ -322,7 +322,10 @@ export async function analizarReposicion(
         const conv: Conversion = !esCalzado
           ? { ok: true, talleAr, tallePedido: talleAr, escala: '—' }
           : codigo
-            ? convertir(marca, codigo, talleAr)
+            // ⚠ Las ETIQUETAS van sí o sí: la "TABLA DE TALLE ..." del producto
+            //   manda sobre el maestro de curvas. Sin esto se pide el talle
+            //   equivocado (ver conversorTalles.ts, caso A11716C).
+            ? convertir(marca, codigo, talleAr, tagsStr)
             : { ok: false, talleAr, motivo: 'No encontré el código del proveedor en las etiquetas' };
 
         const base: FilaReposicion = {

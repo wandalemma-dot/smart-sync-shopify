@@ -68,17 +68,58 @@ export function curvaDe(sku: string): string | null {
   return SKU_A_CURVA[normCodigo(sku)] ?? null;
 }
 
+// ============================================================================
+// QUÉ CURVA USAR — la ETIQUETA del producto MANDA sobre el maestro.
+// ----------------------------------------------------------------------------
+// Misma regla que `converseTablaInfo()` en syncLogic.ts, y por el mismo motivo:
+// medido contra la tienda real (28-ago-2026) hay 8 productos donde el maestro y
+// la etiqueta no coinciden, y en los 8 gana la etiqueta.
+//
+// ⚠ ACÁ IMPORTA EL DOBLE. Esta conversión no escribe en Shopify: arma el PEDIDO
+//   que Wanda le hace a iD. Equivocar la curva significa PEDIR EL TALLE
+//   EQUIVOCADO y que llegue mercadería que no va.
+//   Caso real (29-ago-2026): A11716C «Sport Casual Ox Blanco» tiene la etiqueta
+//   TABLA 1 pero en el maestro figura como tabla 2. La reposición pedía US 7.5
+//   para el AR 41, cuando corresponde US 8.5.
+// ============================================================================
+const CURVA_POR_TABLA: Record<string, string> = {
+  '1': '2',      // TABLA DE TALLE CONVERSE 1
+  '2': '8',      // TABLA DE TALLE CONVERSE 2
+  MUJER: '8A',
+  NINO: '4',
+  BEBE: '5',
+};
+
+// Lee ÚNICAMENTE la etiqueta "TABLA DE TALLE ...". Devuelve null si no está.
+export function curvaDesdeEtiqueta(tags: string | string[] | null | undefined): string | null {
+  const lista = (Array.isArray(tags) ? tags : String(tags || '').split(','))
+    .map((s) => String(s).trim().toUpperCase());
+  const etq = lista.find((e) => e.startsWith('TABLA DE TALLE'));
+  if (!etq) return null;
+  if (etq.includes('NIÑO') || etq.includes('NINO')) return CURVA_POR_TABLA.NINO;
+  if (etq.includes('BEBE') || etq.includes('BEBÉ')) return CURVA_POR_TABLA.BEBE;
+  if (etq.includes('MUJER')) return CURVA_POR_TABLA.MUJER;
+  if (/\b2\b/.test(etq)) return CURVA_POR_TABLA['2'];
+  if (/\b1\b/.test(etq)) return CURVA_POR_TABLA['1'];
+  return null; // etiqueta rara: mejor no adivinar
+}
+
 // ---- CONVERSE: AR -> US, según la curva del modelo ----
-export function convertirConverse(sku: string, talleAr: string | number): Conversion {
+export function convertirConverse(
+  sku: string,
+  talleAr: string | number,
+  tags?: string | string[] | null,
+): Conversion {
   const codigo = normCodigo(sku);
   const talle = normTalle(talleAr);
 
   if (!codigo) return { ok: false, talleAr: talle, motivo: 'Falta el código del producto' };
   if (!talle) return { ok: false, talleAr: talle, motivo: 'Falta el talle' };
 
-  const curva = SKU_A_CURVA[codigo];
+  // La etiqueta del producto manda; el maestro es el respaldo (ver arriba).
+  const curva = curvaDesdeEtiqueta(tags) ?? SKU_A_CURVA[codigo];
   if (!curva) {
-    return { ok: false, talleAr: talle, motivo: `Código ${codigo} no está en el maestro de curvas` };
+    return { ok: false, talleAr: talle, motivo: `${codigo}: no tiene etiqueta "TABLA DE TALLE" y no está en el maestro de curvas` };
   }
 
   const tabla = CURVAS[curva];
@@ -122,10 +163,15 @@ export function convertirLeCoq(talleAr: string | number): Conversion {
 }
 
 // ---- Router por marca ----
-export function convertir(marca: Marca | string, sku: string, talleAr: string | number): Conversion {
+export function convertir(
+  marca: Marca | string,
+  sku: string,
+  talleAr: string | number,
+  tags?: string | string[] | null,
+): Conversion {
   const m = String(marca || '').toLowerCase();
   if (m.includes('coq')) return convertirLeCoq(talleAr);
-  if (m.includes('converse')) return convertirConverse(sku, talleAr);
+  if (m.includes('converse')) return convertirConverse(sku, talleAr, tags);
   return { ok: false, talleAr: normTalle(talleAr), motivo: `Marca "${marca}" no se convierte (solo Converse y Le Coq)` };
 }
 
