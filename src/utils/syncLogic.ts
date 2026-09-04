@@ -110,6 +110,22 @@ export const BRAND_PRICING: Record<SyncConfig['brand'], { markup: number; provid
   vart:     { markup: 0,    providerDiscount: 0,    usePublicPrice: true,  redondear9900: false },
 };
 
+// ---- NOMBRE DE LA MARCA (campo "Proveedor"/Vendor de Shopify) ----
+// ⚠ UNA SOLA FUENTE. Antes esto estaba escrito a mano y DUPLICADO en dos lugares
+// (buildMatrixProducts y downloadMatrixCSV). Cuando se sumó Vart nadie se acordó
+// de agregarla en ninguno de los dos, y los productos de Vart se crearon en
+// Shopify SIN marca. TypeScript no avisó (el proyecto no usa `strict`), así que
+// lo que cuida esto es el test de `marcaPorProducto.test.ts`.
+// Si agregás una marca nueva: sumala ACÁ y el test te dice si falta algo más.
+export const VENDOR_POR_MARCA: Record<SyncConfig['brand'], string> = {
+  converse: 'Converse',
+  lecoq: 'Le Coq Sportif',
+  orchard: 'Orchard',
+  bloque: 'Bloque',
+  luxo: 'Luxo',
+  vart: 'Vart',
+};
+
 // Precio de venta final según la marca.
 export function calcSellPrice(brand: SyncConfig['brand'], wholesale: number, publicPrice = 0): number {
   const cfg = BRAND_PRICING[brand];
@@ -1439,12 +1455,11 @@ export function autoConverseTable(coditm: string, sizes: Record<string, number>)
 
 export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tableSelections: Record<string, number> = {}): MatrixProduct[] {
   const out: MatrixProduct[] = [];
-  const vendorDefaults: Record<SyncConfig['brand'], string> = { lecoq: 'Le Coq Sportif', converse: 'Converse', orchard: 'Orchard', bloque: 'Bloque', luxo: 'Luxo' };
   const convTables = [convTable1, convTable2, convTable3, convTable4, convTable5];
 
   for (const prod of result.missingProducts) {
     let handle = prod.coditm.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const vendor = prod.vendor || vendorDefaults[config.brand];
+    const vendor = prod.vendor || VENDOR_POR_MARCA[config.brand];
     // Converse / Le Coq: si el archivo no trae precio (solo stock), el producto se
     // crea en 0 y la usuaria le pone el precio a mano. Las demás marcas calculan normal.
     const sinPrecio = (config.brand === 'converse' || config.brand === 'lecoq')
@@ -1577,8 +1592,7 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _table
 
   result.missingProducts.forEach(prod => {
     let handle = prod.coditm.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-    const vendorDefaults: Record<SyncConfig['brand'], string> = { lecoq: 'Le Coq Sportif', converse: 'Converse', orchard: 'Orchard', bloque: 'Bloque', luxo: 'Luxo' };
-    const vendor = prod.vendor || vendorDefaults[config.brand];
+    const vendor = prod.vendor || VENDOR_POR_MARCA[config.brand];
 
     const price = calcSellPrice(config.brand, prod.wholesale, prod.publicPrice || 0);
     const cost = prod.costFinal ?? calcCost(config.brand, prod.wholesale);
@@ -1694,18 +1708,14 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
   }
 
   // Sucursal donde se carga el stock, según la marca.
-  const stockLocation: Record<SyncConfig['brand'], string> = {
-    converse: 'ID (Converse - Le Coq Sportif)',
-    lecoq: 'ID (Converse - Le Coq Sportif)',
-    orchard: 'ORCHARD',
-    bloque: 'BLOQUE DISTRIBUTION',
-    luxo: 'LUXO',
-  };
+  // Antes acá había una copia a mano de STOCK_LOCATION, y también le faltaba
+  // Vart: el CSV de inventario le salía con la sucursal vacía. Usamos la de
+  // arriba, que es la única fuente.
   // Sucursales que deben quedar en 0 para esa marca (se maneja en una sola sucursal).
   const zeroLocations: Partial<Record<SyncConfig['brand'], string[]>> = {
     orchard: ['DEPOSITO MARTINEZ'],
   };
-  const mainLoc = stockLocation[config.brand];
+  const mainLoc = STOCK_LOCATION[config.brand];
   const zeros = zeroLocations[config.brand] || [];
 
   let csvContent = headers.join(',') + '\n';

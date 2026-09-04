@@ -221,6 +221,29 @@ el archivo **no cubra con un número** se agrega a `changes` con `desired: 0` y
 producto **entero** cuando su código no aparece en el Excel. Este barrido es el
 caso de al lado: el producto sigue, el talle no.
 
+### 3.0 UNA MARCA NUEVA NO ES SOLO AGREGARLA AL SELECTOR
+
+> 🔴 **PASÓ Y COSTÓ (31-ago-2026).** El nombre de la marca (el campo
+> **Proveedor / Vendor** de Shopify) estaba escrito a mano y **duplicado en dos
+> lugares**. Al sumar Vart nadie lo agregó en ninguno, y los productos de Vart
+> **se crearon en la tienda sin marca**. El CSV de inventario tenía el mismo
+> agujero con la sucursal.
+>
+> ⚠️ **TypeScript NO avisa de esto.** El proyecto no usa `strict`: a un
+> `Record<marca, string>` le pueden faltar marcas y compila igual.
+> Lo único que lo cuida es `src/utils/__tests__/marcaPorProducto.test.ts`.
+
+**Checklist para agregar una marca:**
+
+1. `SyncConfig['brand']` — sumar al union.
+2. `BRAND_PRICING` — reglas de precio.
+3. `VENDOR_POR_MARCA` — nombre que va al campo Proveedor de Shopify.
+4. `STOCK_LOCATION` — sucursal donde se escribe el stock.
+5. `VENDOR_QUERY` — cómo se la busca en Shopify (si se lee en vivo).
+6. `calcWeightGrams()` — peso de envío.
+7. El `<option>` en el selector de `App.tsx`.
+8. **Correr `npm test`.** Si falta algo de lo de arriba, te lo dice.
+
 ### 3.1-quinquies CREAR LOS TALLES QUE FALTAN («No ubicados»)
 
 «No ubicado» = el producto **sí** está en Shopify, pero **ese talle no existe**
