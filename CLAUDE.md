@@ -53,7 +53,7 @@ App web (React + Vite, deploy automático en Vercel desde `main`) con dos pesta�
 | Pestaña | Para qué sirve |
 |---|---|
 | **Sincronización** | Subís el archivo del proveedor → compara contra Shopify → actualiza stock, precios y crea productos nuevos. |
-| **Reposición** | Arma el pedido diario que Wanda le hace al proveedor (traer de iD a Martínez). **Solo lectura.** |
+| **Reposición** | Wanda sube el **export de Órdenes de Shopify** y la app le dice **en qué talle pedir** cada cosa que se vendió. **Solo lectura.** |
 
 La app **lee Shopify en vivo**: no hace falta subir el CSV de productos.
 
@@ -220,6 +220,39 @@ el archivo **no cubra con un número** se agrega a `changes` con `desired: 0` y
 **Distinto de «el proveedor ya no lista el producto»** (`enPeligro`), que apaga el
 producto **entero** cuando su código no aparece en el Excel. Este barrido es el
 caso de al lado: el producto sigue, el talle no.
+
+### 2.1 REPOSICIÓN — desde el export de ventas (vigente desde el 07-sep-2026)
+
+Wanda baja de Shopify **Órdenes → Exportar**, sube ese CSV, y la app arma el
+pedido con **el talle ya convertido al del proveedor**.
+Código en `src/utils/ventasCsv.ts` + `src/Reposicion.tsx`.
+
+- **Muestra TODO LO VENDIDO, tal cual** (decisión de Wanda). **No** descuenta el
+  stock de Martínez ni el pedido en camino.
+- Reemplazó a la versión que leía Shopify en vivo y cruzaba Martínez / iD /
+  órdenes. Esa quedó en el historial de git (commit anterior a este cambio),
+  junto con `reposicionLogic.ts`, que **se sigue usando** solo por su
+  `extraerCodigo()`.
+- El talle sale del final del `Lineitem name` (`"... Negro - 41"` → `41`), y se
+  parte por el **último** `" - "`, porque hay nombres con guiones adentro.
+- Las órdenes canceladas se saltean. Las marcas que no son Converse ni Le Coq
+  (Vans, DC, gotcha…) se ignoran: no se le piden a iD.
+
+> 🔴 **POR QUÉ IGUAL SE LEE SHOPIFY, aunque el CSV traiga las ventas.**
+> El talle AR se convierte según la **curva del modelo**, y la curva depende del
+> **código**. El export de ventas casi nunca lo trae: medido sobre el archivo
+> real del 07-sep, de **143 líneas de calzado solo 70 (49%)** tenían el código
+> en el SKU. Las otras 73 traían el **código de barras** (`888754866635`) o el
+> SKU vacío. Por eso se buscan los productos por título y el código sale de las
+> **etiquetas** (`extraerCodigo`). Si alguien "optimiza" sacando esa consulta,
+> la mitad del pedido queda sin convertir.
+>
+> 🔴 **EL MISMO TALLE AR NO DA SIEMPRE EL MISMO US.**
+> `AR 38` de la **A09429C** es `US 5.5`; `AR 38` de la **A16122C** es `US 6.5`.
+> Cuando no se sabe la curva, la fila va a **«A revisar»** y **NO se adivina**:
+> inventarla es hacerle pedir el par equivocado.
+>
+> 🛡 Tests en `src/utils/__tests__/ventasCsv.test.ts` (incluido ese caso exacto).
 
 ### 3.0 UNA MARCA NUEVA NO ES SOLO AGREGARLA AL SELECTOR
 
