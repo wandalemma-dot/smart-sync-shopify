@@ -37,19 +37,30 @@ describe('a qué contrato va cada artículo', () => {
 });
 
 describe('las cuentas', () => {
-  it('mochila HARLEM: 43999 -> costo 38499 -> precio 80848', () => {
-    expect(costoOrng(43999, 'mochilas')).toBe(38499);
-    expect(precioOrng(43999, 'mochilas')).toBe(80848);
+  it('mochila HARLEM: 43999 -> costo 38499 -> precio 92398', () => {
+    expect(costoOrng(43999, 'mochilas')).toBe(38499);   // el de lista MENOS 12,5%
+    expect(precioOrng(43999, 'mochilas')).toBe(92398);  // el de lista POR 2,1
   });
 
-  it('gorra BAY: 12999 -> costo 11049 -> precio 22098', () => {
+  it('gorra BAY: 12999 -> costo 11049 -> precio 25998', () => {
     expect(costoOrng(12999, 'accesorios')).toBe(11049);
-    expect(precioOrng(12999, 'accesorios')).toBe(22098);
+    expect(precioOrng(12999, 'accesorios')).toBe(25998);
   });
 
-  it('el markup se aplica sobre el costo YA bonificado, no sobre el de lista', () => {
-    // Si se aplicara sobre el de lista daría 43999*2,1 = 92398. No es eso.
-    expect(precioOrng(43999, 'mochilas')).not.toBe(Math.round(43999 * 2.1));
+  it('🔴 EL MARKUP VA SOBRE EL DE LISTA, NO SOBRE EL COSTO BONIFICADO', () => {
+    // Wanda, 08-sep-2026: "tenes que multiplicar el precio final directamente
+    // con el costo sin descuento". Sobre el bonificado daba 42,4% de margen;
+    // sobre el de lista da ~50%, que es con el que trabaja.
+    expect(precioOrng(43999, 'mochilas')).toBe(Math.round(43999 * 2.1));
+    expect(precioOrng(43999, 'mochilas')).not.toBe(Math.round(costoOrng(43999, 'mochilas') * 2.1));
+  });
+
+  it('el margen que queda es ~50%, no 42%', () => {
+    const IVA = 1.21;
+    const margen = (p: number, c: number) => (1 - c / (p / IVA)) * 100;
+    const m = margen(precioOrng(33999, 'mochilas'), costoOrng(33999, 'mochilas'));
+    expect(m).toBeGreaterThan(48);
+    expect(m).toBeLessThan(52);
   });
 });
 
@@ -72,9 +83,9 @@ describe('lectura del Excel', () => {
     const mochila = r.productos.find((p) => p.articulo === 'Mochila')!;
     const gorra = r.productos.find((p) => p.articulo === 'Caps')!;
     expect(mochila.familia).toBe('mochilas');
-    expect(mochila.precio).toBe(80848);
+    expect(mochila.precio).toBe(92398);
     expect(gorra.familia).toBe('accesorios');
-    expect(gorra.precio).toBe(22098);
+    expect(gorra.precio).toBe(25998);
   });
 
   it('arma el título con descripción y nombre', () => {

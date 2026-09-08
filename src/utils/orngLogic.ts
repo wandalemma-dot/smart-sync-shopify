@@ -46,12 +46,22 @@ export function costoOrng(costoLista: number, familia: 'mochilas' | 'accesorios'
 }
 
 /**
- * Precio de venta: el costo YA bonificado por el markup de esa familia.
- * 🟡 SIN REDONDEO, igual que Bloque (Wanda ya pidió una vez que a Bloque no se
- *    le agregue la terminación 9900). Si quiere ...900 o centena, se cambia acá.
+ * Precio de venta: el markup va sobre el precio de lista, SIN LA BONIFICACIÓN.
+ *
+ * 🔴 ESTO SE EQUIVOCÓ UNA VEZ Y NO SE VUELVE A CAMBIAR SIN PREGUNTAR.
+ *    Al principio se aplicaba el markup sobre el costo ya bonificado y daba
+ *    42,4% de margen. Wanda lo corrigió el 08-sep-2026: «tenés que multiplicar
+ *    el precio final directamente con el costo sin descuento».
+ *    Con el de lista da ~50%, que es el margen con el que trabaja, y coincide
+ *    con cómo estaban armados los precios viejos de su tienda:
+ *    Sunset lista 27999 × 2,1 = 58.798 y en Shopify estaba en 58.999.
+ *
+ *    La bonificación NO se pierde: es la ganancia. Baja el COSTO, no el precio.
+ *
+ * 🟡 SIN REDONDEO, igual que Bloque. Si quiere terminación …999, se cambia acá.
  */
 export function precioOrng(costoLista: number, familia: 'mochilas' | 'accesorios'): number {
-  return Math.round(costoOrng(costoLista, familia) * ORNG_REGLAS[familia].markup);
+  return Math.round(costoLista * ORNG_REGLAS[familia].markup);
 }
 
 export interface ProductoOrng {

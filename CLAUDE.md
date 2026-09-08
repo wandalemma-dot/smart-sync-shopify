@@ -362,12 +362,21 @@ Mochilas, bolsos y gorras. Código en `src/utils/orngLogic.ts`.
 > 🔴 **TIENE DOS CONTRATOS EN EL MISMO ARCHIVO.** Es lo único raro de esta marca
 > y es lo que no hay que unificar nunca:
 >
-> | Familia | Bonificación | Markup |
+> | Familia | Bonificación (baja el COSTO) | Markup (arma el PRECIO) |
 > |---|---|---|
 > | Mochilas y bolsos (Mochila, Matero, Lunchera) | **12,5%** | **×2,1** |
 > | Indumentaria y accesorios (Caps, gorras) | **15%** | **×2,0** |
 >
-> El markup va sobre el costo **YA bonificado**, no sobre el de lista.
+> 🔴 **EL MARKUP VA SOBRE EL PRECIO DE LISTA, SIN LA BONIFICACIÓN.**
+> `costo = lista × (1 − bonificación)` · `precio = lista × markup`
+> Son dos cuentas **independientes**, cada una parte del precio de lista.
+> Se equivocó una vez (08-sep-2026): se aplicaba el markup sobre el costo ya
+> bonificado y el margen daba **42,4%**. Wanda lo corrigió: *«tenés que
+> multiplicar el precio final directamente con el costo sin descuento»*.
+> Sobre el de lista da **~50%**, que es con el que trabaja, y coincide con cómo
+> estaban armados los precios viejos de la tienda (Sunset: lista 27.999 × 2,1 =
+> 58.798, y en Shopify estaba a 58.999).
+> **La bonificación no se pierde: es la ganancia.** Baja el costo, no el precio.
 > La familia se decide por la columna `ARTICULO`, fila por fila
 > (`familiaOrng()`), porque el archivo trae las dos mezcladas. Por eso es UNA
 > sola marca en el selector y no dos.
@@ -413,8 +422,8 @@ Shopify — si Wanda le carga el SKU, entra solo.
 
 Verificado contra el archivo real del 08-sep: **45 filas → 45 productos**,
 21 con contrato de mochilas y 24 de accesorios, sin duplicados.
-Ejemplos: HARLEM 43.999 → costo 38.499 → precio **80.848**;
-gorra BAY 12.999 → costo 11.049 → precio **22.098**.
+Ejemplos: HARLEM lista 43.999 → costo 38.499 · precio **92.398**;
+gorra BAY lista 12.999 → costo 11.049 · precio **25.998**. Margen ~49,6%.
 
 ### 3.1-bis VART (marca nueva — agosto 2026, todavía sin cargar nada)
 
