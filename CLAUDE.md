@@ -355,6 +355,45 @@ que falten. Al revés quedan duplicados (el 36 corrido *y* el 35 nuevo).
 > Chequeos puntuales: A10564C → costo 44.710 / precio 109.900, y 157197C →
 > costo 54.656, los dos iguales a lo que ya venía mostrando la app.
 
+### 3.1-septies ORNG (marca nueva — septiembre 2026)
+
+Mochilas, bolsos y gorras. Código en `src/utils/orngLogic.ts`.
+
+> 🔴 **TIENE DOS CONTRATOS EN EL MISMO ARCHIVO.** Es lo único raro de esta marca
+> y es lo que no hay que unificar nunca:
+>
+> | Familia | Bonificación | Markup |
+> |---|---|---|
+> | Mochilas y bolsos (Mochila, Matero, Lunchera) | **12,5%** | **×2,1** |
+> | Indumentaria y accesorios (Caps, gorras) | **15%** | **×2,0** |
+>
+> El markup va sobre el costo **YA bonificado**, no sobre el de lista.
+> La familia se decide por la columna `ARTICULO`, fila por fila
+> (`familiaOrng()`), porque el archivo trae las dos mezcladas. Por eso es UNA
+> sola marca en el selector y no dos.
+> 🛡 Tests en `src/utils/__tests__/orng.test.ts`.
+
+- **El Matero va con MOCHILAS**: en la web de ORNG está publicado dentro de la
+  categoría MOCHILAS (lo verificó Wanda). La Lunchera va igual, por ser bolso.
+- **Formato**: hoja `Hoja1`, encabezado en la fila 1.
+  `ARTICULO | CODIGO | COLOR | DESCRIPCION | NOMBRE | COMPOSICION | (bulto) | (unidad) | COSTO`
+- **La clave del producto es `CODIGO + COLOR`**: el código se repite por color
+  (la HUDSON `22050019` viene en NE, AZ y VE = 3 productos).
+- ⚠️ **NO TRAE STOCK.** No hay columna de cantidad disponible — la que dice `1`
+  es la unidad de venta, no lo que tiene el proveedor. De este archivo salen
+  **precios y productos nuevos**, nunca stock.
+- **Sin redondeo**: el precio queda exacto, igual que Bloque. 🟡 Si Wanda quiere
+  terminación …900 o centena, se cambia solo en `precioOrng()`.
+- 🟡 **PENDIENTES**: la sucursal (`STOCK_LOCATION.orng`, hoy `'ORNG'` sin
+  confirmar — no molesta porque no hay stock) y el **diccionario de colores**:
+  el archivo trae códigos (`NE`, `AZ`, `GMM`, `VM/NE`…) y por ahora van tal cual
+  al título. `VE` = Verde está confirmado por la web del proveedor.
+
+Verificado contra el archivo real del 08-sep: **45 filas → 45 productos**,
+21 con contrato de mochilas y 24 de accesorios, sin duplicados.
+Ejemplos: HARLEM 43.999 → costo 38.499 → precio **80.848**;
+gorra BAY 12.999 → costo 11.049 → precio **22.098**.
+
 ### 3.1-bis VART (marca nueva — agosto 2026, todavía sin cargar nada)
 
 Marca argentina de indumentaria y calzado. Usa la **plantilla de carga de INDY**

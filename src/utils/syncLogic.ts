@@ -5,13 +5,14 @@ import { CONVERSE_CODE_TABLE } from './converseCurvas';
 import { esPrecioSugerido } from './conversePreciosFijos';
 import { parseVart, VART_LOCATION, VART_DESCUENTO } from './vartLogic';
 import { esPlantillaPedido, parsePlantillaPedido, tituloPedido } from './plantillaPedido';
+import { parseOrng } from './orngLogic';
 import type { ListaPrecios } from './listaPrecios';
 
 export type SyncMode = 'all' | 'stock_only' | 'cost_only' | 'price_only';
 
 export interface SyncConfig {
   sheetName: string;
-  brand: 'lecoq' | 'converse' | 'bloque' | 'orchard' | 'luxo' | 'vart';
+  brand: 'lecoq' | 'converse' | 'bloque' | 'orchard' | 'luxo' | 'vart' | 'orng';
 }
 
 export interface MissingProduct {
@@ -108,6 +109,10 @@ export const BRAND_PRICING: Record<SyncConfig['brand'], { markup: number; provid
   // Markup"), así que la app NO calcula precio. El descuento comercial está
   // PENDIENTE de cerrar con el proveedor -> ver VART_DESCUENTO en vartLogic.ts.
   vart:     { markup: 0,    providerDiscount: 0,    usePublicPrice: true,  redondear9900: false },
+  // ORNG tiene DOS contratos en el mismo archivo (mochilas 12,5%/x2,1 y
+  // accesorios 15%/x2,0), así que el precio se calcula fila por fila en
+  // orngLogic.ts y acá se usa el ya calculado.
+  orng:     { markup: 0,    providerDiscount: 0,    usePublicPrice: true,  redondear9900: false },
 };
 
 // ---- NOMBRE DE LA MARCA (campo "Proveedor"/Vendor de Shopify) ----
@@ -124,6 +129,7 @@ export const VENDOR_POR_MARCA: Record<SyncConfig['brand'], string> = {
   bloque: 'Bloque',
   luxo: 'Luxo',
   vart: 'Vart',
+  orng: 'ORNG',
 };
 
 // Precio de venta final según la marca.
@@ -241,6 +247,7 @@ export function calcWeightGrams(brand: SyncConfig['brand'], artType?: string): n
   if (brand === 'orchard') return ORCHARD_WEIGHTS[artType || ''] ?? 250; // default remera
   if (brand === 'luxo') return TYPE_WEIGHTS[artType || ''] ?? 300; // por tipo, default 300
   if (brand === 'vart') return TYPE_WEIGHTS[artType || ''] ?? 300; // misma tabla que Luxo
+  if (brand === 'orng') return TYPE_WEIGHTS[artType || ''] ?? 500; // mochilas y gorras
   return 0;
 }
 
@@ -493,6 +500,9 @@ export const STOCK_LOCATION: Record<SyncConfig['brand'], string> = {
   // Shopify (con emoji, si lo lleva). Hasta entonces la simulación de stock va a
   // avisar "no encontré la sucursal" en vez de escribir en el lugar equivocado.
   vart: VART_LOCATION,
+  // 🟡 PENDIENTE: Wanda todavía no definió la sucursal de ORNG. Igual su archivo
+  // NO trae stock (es una lista de precios), así que por ahora no se usa.
+  orng: 'ORNG',
 };
 
 // ---- TRAER PRODUCTOS DE SHOPIFY EN VIVO (sin subir CSV) ----
@@ -504,6 +514,7 @@ const VENDOR_QUERY: Partial<Record<SyncConfig['brand'], string>> = {
   orchard: 'vendor:Orchard',
   luxo: 'vendor:Luxo',
   vart: 'vendor:Vart',
+  orng: 'vendor:ORNG',
 };
 
 const LIVE_LOCATIONS_QUERY = `query { locations(first: 50) { edges { node { id name } } } }`;
@@ -790,6 +801,39 @@ export async function processFiles(
       if (!isNaN(qty)) {
         excelMap[cod].sizes[rawSize] = (excelMap[cod].sizes[rawSize] || 0) + qty;
       }
+    }
+  } else if (config.brand === 'orng') {
+    // ORNG — lista de precios con las dos familias mezcladas. Ver orngLogic.ts.
+    // ⚠ El archivo NO trae stock: de acá salen precios y productos nuevos.
+    const excelData = await readExcel(providerFile, config.sheetName);
+    const orng = parseOrng(excelData as any[][]);
+    for (const p of orng.productos) {
+      excelMap[p.clave.toLowerCase()] = {
+        wholesale: p.costoLista,
+        costFinal: p.costo,
+        publicPrice: p.precio,
+        // Sin stock en el archivo: el producto se crea/actualiza con talle único.
+        sizes: { unico: 0 },
+        foundInShopify: false,
+        title: p.titulo,
+        vendor: 'ORNG',
+        artType: p.articulo.toLowerCase(),
+      };
+    }
+    const mochilas = orng.productos.filter((p) => p.familia === 'mochilas').length;
+    alerts.push({
+      type: 'info',
+      title: `ORNG: ${orng.productos.length} productos (${mochilas} con contrato de mochilas, ${orng.productos.length - mochilas} de accesorios)`,
+      message:
+        'Mochilas: 12,5% de bonificación y markup 2,1. Indumentaria y accesorios: 15% y markup 2,0. ' +
+        'Este archivo NO trae stock (no tiene columna de cantidad), así que solo se tocan precios y se crean los que falten.',
+    });
+    if (orng.duplicados.length) {
+      alerts.push({
+        type: 'warning',
+        title: `${orng.duplicados.length} códigos repetidos en el archivo`,
+        message: 'El mismo CÓDIGO + COLOR aparece más de una vez y solo se tomó el primero: ' + orng.duplicados.join(', ') + '.',
+      });
     }
   } else if (config.brand === 'vart') {
     // VART — misma plantilla INDY que Luxo, pero con validaciones propias.

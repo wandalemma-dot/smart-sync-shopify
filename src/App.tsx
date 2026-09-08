@@ -338,9 +338,18 @@ export default function App() {
                 <option value="orchard">Orchard</option>
                 <option value="luxo">Luxo</option>
                 <option value="vart">Vart</option>
+                <option value="orng">ORNG</option>
                 <option value="bloque">Bloque (PDFs)</option>
               </select>
             </div>
+
+            {config.brand === 'orng' && (
+              <p style={{ fontSize: '0.8rem', color: '#fbbf24', marginTop: '0.4rem' }}>
+                🆕 <strong>ORNG</strong> aplica <strong>dos contratos</strong> según la columna ARTICULO:
+                mochilas y bolsos <strong>12,5% y ×2,1</strong>; gorras y accesorios <strong>15% y ×2,0</strong>.
+                El archivo <strong>no trae stock</strong>: solo precios y productos nuevos.
+              </p>
+            )}
 
             {config.brand === 'vart' && (
               <p style={{ fontSize: '0.8rem', color: '#fbbf24', marginTop: '0.4rem' }}>
