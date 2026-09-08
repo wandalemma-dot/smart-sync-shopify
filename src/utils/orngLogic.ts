@@ -63,10 +63,26 @@ export function costoOrng(costoLista: number, familia: 'mochilas' | 'accesorios'
  *
  *    La bonificación NO se pierde: es la ganancia. Baja el COSTO, no el precio.
  *
- * 🟡 SIN REDONDEO, igual que Bloque. Si quiere terminación …999, se cambia acá.
+ * REDONDEO: terminación …999, siempre PARA ARRIBA (pedido de Wanda,
+ * 08-sep-2026). Es como estaban armados sus precios viejos: la Sunset daba
+ * 58.798 de cuenta exacta y en la tienda estaba a 58.999.
  */
 export function precioOrng(costoLista: number, familia: 'mochilas' | 'accesorios'): number {
-  return Math.round(costoLista * ORNG_REGLAS[familia].markup);
+  return redondear999(Math.round(costoLista * ORNG_REGLAS[familia].markup));
+}
+
+/**
+ * Lleva el precio a la terminación …999 más cercana HACIA ARRIBA.
+ *   71.398 -> 71.999 · 25.998 -> 25.999 · 65.098 -> 65.999
+ * Nunca baja el precio: si ya termina en 999 lo deja igual.
+ * (Vive acá y no en syncLogic para no armar un import circular: syncLogic ya
+ * importa este archivo.)
+ */
+export function redondear999(x: number): number {
+  if (!x || x <= 0) return 0;
+  let r = Math.floor(x / 1000) * 1000 + 999;
+  if (r < x) r += 1000;
+  return r;
 }
 
 export interface ProductoOrng {

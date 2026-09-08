@@ -412,8 +412,13 @@ Mochilas, bolsos y gorras. Código en `src/utils/orngLogic.ts`.
 - ⚠️ **NO TRAE STOCK.** No hay columna de cantidad disponible — la que dice `1`
   es la unidad de venta, no lo que tiene el proveedor. De este archivo salen
   **precios y productos nuevos**, nunca stock.
-- **Sin redondeo**: el precio queda exacto, igual que Bloque. 🟡 Si Wanda quiere
-  terminación …900 o centena, se cambia solo en `precioOrng()`.
+- **Redondeo: terminación …999, siempre PARA ARRIBA** (`redondear999()`, pedido
+  de Wanda el 08-sep-2026). `71.398 → 71.999` · `25.998 → 25.999`.
+  Nunca baja el precio; si ya termina en 999 lo deja igual.
+  Es como estaban armados sus precios viejos: la Sunset daba 58.798 de cuenta
+  exacta y en la tienda estaba a **58.999**.
+  ⚠️ `redondear999()` vive en `orngLogic.ts` y no en `syncLogic.ts` para no armar
+  un import circular (syncLogic ya importa orngLogic).
 
 > 🔴 **EL CONTRATO LO DECIDE EL VENDOR DE SHOPIFY, no el Excel.**
 > Wanda separa las dos familias con **dos vendors**: `Orng Mochilas` y `Orng`
@@ -443,8 +448,8 @@ Shopify — si Wanda le carga el SKU, entra solo.
 
 Verificado contra el archivo real del 08-sep: **45 filas → 45 productos**,
 21 con contrato de mochilas y 24 de accesorios, sin duplicados.
-Ejemplos: HARLEM lista 43.999 → costo 38.499 · precio **92.398**;
-gorra BAY lista 12.999 → costo 11.049 · precio **25.998**. Margen ~49,6%.
+Ejemplos: HARLEM lista 43.999 → costo **38.499,13** · precio **92.999**;
+gorra BAY lista 12.999 → costo **11.049,15** · precio **25.999**. Margen ~49,6%.
 
 ### 3.1-bis VART (marca nueva — agosto 2026, todavía sin cargar nada)
 

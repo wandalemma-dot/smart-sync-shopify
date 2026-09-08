@@ -9,7 +9,7 @@
 //   que falle: son contratos distintos y confundirlos cambia lo que se cobra.
 // ============================================================================
 import { describe, it, expect } from 'vitest';
-import { parseOrng, familiaOrng, costoOrng, precioOrng, ORNG_REGLAS } from '../orngLogic';
+import { parseOrng, familiaOrng, costoOrng, precioOrng, redondear999, ORNG_REGLAS } from '../orngLogic';
 
 const hoja = (filas: any[][]) => [
   ['ARTICULO', 'CODIGO ', 'COLOR ', 'DESCRIPCION ', 'NOMBRE ', 'COMPOSICION', '', '', 'COSTO'],
@@ -37,14 +37,27 @@ describe('a qué contrato va cada artículo', () => {
 });
 
 describe('las cuentas', () => {
-  it('mochila HARLEM: 43999 -> costo 38499,13 -> precio 92398', () => {
+  it('mochila HARLEM: 43999 -> costo 38499,13 -> precio 92999', () => {
     expect(costoOrng(43999, 'mochilas')).toBe(38499.13);  // el de lista MENOS 12,5%
-    expect(precioOrng(43999, 'mochilas')).toBe(92398);    // el de lista POR 2,1
+    expect(precioOrng(43999, 'mochilas')).toBe(92999);    // 43999 x 2,1 = 92398 -> 92999
   });
 
-  it('gorra BAY: 12999 -> costo 11049,15 -> precio 25998', () => {
+  it('gorra BAY: 12999 -> costo 11049,15 -> precio 25999', () => {
     expect(costoOrng(12999, 'accesorios')).toBe(11049.15);
-    expect(precioOrng(12999, 'accesorios')).toBe(25998);
+    expect(precioOrng(12999, 'accesorios')).toBe(25999);
+  });
+
+  it('el precio termina SIEMPRE en 999 y nunca baja', () => {
+    expect(redondear999(71398)).toBe(71999);
+    expect(redondear999(65098)).toBe(65999);
+    expect(redondear999(25998)).toBe(25999);
+    expect(redondear999(58798)).toBe(58999);   // el caso real de la Sunset
+    expect(redondear999(71999)).toBe(71999);   // si ya termina en 999, queda igual
+    // Nunca por debajo de la cuenta exacta.
+    for (const n of [1, 999, 1000, 1001, 12345, 92398]) {
+      expect(redondear999(n)).toBeGreaterThanOrEqual(n);
+      expect(redondear999(n) % 1000).toBe(999);
+    }
   });
 
   it('🔴 EL COSTO LLEVA CENTAVOS, NO SE REDONDEA AL PESO', () => {
@@ -60,8 +73,8 @@ describe('las cuentas', () => {
     // Wanda, 08-sep-2026: "tenes que multiplicar el precio final directamente
     // con el costo sin descuento". Sobre el bonificado daba 42,4% de margen;
     // sobre el de lista da ~50%, que es con el que trabaja.
-    expect(precioOrng(43999, 'mochilas')).toBe(Math.round(43999 * 2.1));
-    expect(precioOrng(43999, 'mochilas')).not.toBe(Math.round(costoOrng(43999, 'mochilas') * 2.1));
+    expect(precioOrng(43999, 'mochilas')).toBe(redondear999(Math.round(43999 * 2.1)));
+    expect(precioOrng(43999, 'mochilas')).not.toBe(redondear999(Math.round(costoOrng(43999, 'mochilas') * 2.1)));
   });
 
   it('el margen que queda es ~50%, no 42%', () => {
@@ -92,9 +105,9 @@ describe('lectura del Excel', () => {
     const mochila = r.productos.find((p) => p.articulo === 'Mochila')!;
     const gorra = r.productos.find((p) => p.articulo === 'Caps')!;
     expect(mochila.familia).toBe('mochilas');
-    expect(mochila.precio).toBe(92398);
+    expect(mochila.precio).toBe(92999);
     expect(gorra.familia).toBe('accesorios');
-    expect(gorra.precio).toBe(25998);
+    expect(gorra.precio).toBe(25999);
   });
 
   it('arma el título con descripción y nombre', () => {
