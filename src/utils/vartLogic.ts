@@ -171,14 +171,14 @@ export function parseVart(rows: any[][], descuento = VART_DESCUENTO): VartParse 
     if (!productos[base]) {
       productos[base] = {
         skuBase: base, nombre, descripcion, costo,
-        costoFinal: Math.round(costo * (1 - dto)),
+        costoFinal: Math.round(costo * (1 - dto) * 100) / 100,  // con centavos: «todo suma»
         precio, foto, sizes: {}, skuPorTalle: {},
       };
     }
     // Si en la primera fila del producto no vino el precio pero sí en otra, lo tomamos.
     const p = productos[base];
     if (!p.precio && precio) p.precio = precio;
-    if (!p.costo && costo) { p.costo = costo; p.costoFinal = Math.round(costo * (1 - dto)); }
+    if (!p.costo && costo) { p.costo = costo; p.costoFinal = Math.round(costo * (1 - dto) * 100) / 100; }
     p.sizes[talle] = (p.sizes[talle] || 0) + cantidad;
     p.skuPorTalle[talle] = sku;
   }

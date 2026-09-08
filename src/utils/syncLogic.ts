@@ -160,8 +160,21 @@ export function redondear900(x: number): number {
   return r;
 }
 
+// ---- REDONDEO DE COSTOS: A LOS CENTAVOS, NUNCA AL PESO ----
+// Regla de Wanda (08-sep-2026): «siempre agregar los decimales en los costos
+// con descuento, ya que todo suma».
+// Un costo bonificado casi nunca da un número redondo (48.074,8663 − 7% =
+// 44.709,63). Redondear al peso se comía centavos en CADA variante, y con
+// miles de variantes eso deja de ser insignificante.
+// Además Shopify guarda el costo CON decimales (en su export figura 27561.63),
+// así que redondear al peso hacía que un costo que ya estaba bien pareciera
+// distinto y se reescribiera al pedo en cada sincronización.
+export function redondear2(x: number): number {
+  return Math.round((Number(x) || 0) * 100) / 100;
+}
+
 export function costoId(precioLista: number): number {
-  return Math.round(precioLista * (1 - ID_DESCUENTO_GENERAL));
+  return redondear2(precioLista * (1 - ID_DESCUENTO_GENERAL));
 }
 
 // ---- PRECIO SUGERIDO DEL PROVEEDOR (los básicos van a este precio) ----
@@ -193,7 +206,7 @@ export function precioId(codigo: string, precioLista: number, sugerido = 0): num
 // Costo (Cost per item) según la marca, aplicando el descuento de proveedor.
 export function calcCost(brand: SyncConfig['brand'], wholesale: number): number {
   const cfg = BRAND_PRICING[brand];
-  return wholesale * (1 - cfg.providerDiscount);
+  return redondear2(wholesale * (1 - cfg.providerDiscount));
 }
 
 // ---- ORDEN DE TALLES ----
@@ -962,7 +975,7 @@ export async function processFiles(
       if (isNaN(costo) && isNaN(precio)) continue;
       const norm = desc.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
       const artType = luxoTypes.find(t => norm.includes(t)) || '';
-      const costFinal = Math.round(costo * (1 - dpct));
+      const costFinal = redondear2(costo * (1 - dpct));
       if (!excelMap[cod]) {
         excelMap[cod] = { wholesale: costo, publicPrice: precio, costFinal, sizes: {}, foundInShopify: false, title: desc, vendor: 'Luxo', artType };
       }
@@ -1334,7 +1347,10 @@ export async function processFiles(
            const costoActual = (variant as any).cost !== undefined && (variant as any).cost !== ''
              ? parseFloat((variant as any).cost) : 0;
            const cambiaPrecio = calculatedPrice > 0 && calculatedPrice !== variantPrice;
-           const cambiaCosto = calculatedCost > 0 && Math.round(costoActual) !== Math.round(calculatedCost);
+           // Comparamos EN CENTAVOS. Antes se comparaba al peso y un costo que
+           // en Shopify era 27561.63 se veía distinto de 27561.63 calculado.
+           const cambiaCosto = calculatedCost > 0
+             && Math.round(costoActual * 100) !== Math.round(calculatedCost * 100);
 
            if (provData.wholesale > 0) {
               const sku = variant.sku || cod;

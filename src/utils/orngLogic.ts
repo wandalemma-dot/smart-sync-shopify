@@ -40,9 +40,14 @@ export function familiaOrng(articulo: string): 'mochilas' | 'accesorios' {
   return ORNG_ARTICULOS_MOCHILA.some((x) => a.includes(x)) ? 'mochilas' : 'accesorios';
 }
 
-/** Costo final: el de lista menos la bonificación comercial de esa familia. */
+/**
+ * Costo final: el de lista menos la bonificación comercial de esa familia.
+ * CON DECIMALES (a los centavos), por pedido de Wanda: «todo suma».
+ * Shopify guarda el costo con decimales, así que redondear al peso además
+ * hacía que un costo correcto pareciera distinto en cada sincronización.
+ */
 export function costoOrng(costoLista: number, familia: 'mochilas' | 'accesorios'): number {
-  return Math.round(costoLista * (1 - ORNG_REGLAS[familia].descuento));
+  return Math.round(costoLista * (1 - ORNG_REGLAS[familia].descuento) * 100) / 100;
 }
 
 /**

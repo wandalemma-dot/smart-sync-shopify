@@ -254,6 +254,27 @@ Código en `src/utils/ventasCsv.ts` + `src/Reposicion.tsx`.
 >
 > 🛡 Tests en `src/utils/__tests__/ventasCsv.test.ts` (incluido ese caso exacto).
 
+### 2.2 LOS COSTOS VAN CON CENTAVOS — NUNCA REDONDEAR AL PESO
+
+Regla de Wanda (08-sep-2026): *«siempre agregar los decimales en los costos con
+descuento, ya que todo suma»*.
+
+Un costo bonificado casi nunca da redondo: `48.074,8663 − 7% = 44.709,63`,
+`43.999 − 12,5% = 38.499,13`. Redondear al peso se comía centavos en **cada
+variante**, y con miles de variantes deja de ser insignificante.
+
+> 🔴 **Y HAY UNA SEGUNDA RAZÓN, MENOS OBVIA.** Shopify **guarda el costo con
+> decimales**: en el export real de Wanda figura `27561.63`. Si la app calcula
+> `27562`, un costo que ya estaba **bien** parece distinto, entra en la lista de
+> cambios y **se reescribe al pedo en cada sincronización**. Por eso la
+> comparación de costos también se hace **en centavos**, no al peso.
+
+- Helper único: **`redondear2()`** en `syncLogic.ts`.
+- Lo usan `costoId()` (Converse/Le Coq), `calcCost()` (Bloque/Orchard),
+  `costoOrng()` y el costo de Luxo y de Vart.
+- ⚠️ **Los PRECIOS de venta no llevan centavos**: son redondos a propósito
+  (…900 en Converse, ×2,1 exacto en ORNG). Esto es solo para los costos.
+
 ### 3.0 UNA MARCA NUEVA NO ES SOLO AGREGARLA AL SELECTOR
 
 > 🔴 **PASÓ Y COSTÓ (31-ago-2026).** El nombre de la marca (el campo

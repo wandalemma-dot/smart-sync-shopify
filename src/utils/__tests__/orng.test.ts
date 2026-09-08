@@ -37,14 +37,23 @@ describe('a qué contrato va cada artículo', () => {
 });
 
 describe('las cuentas', () => {
-  it('mochila HARLEM: 43999 -> costo 38499 -> precio 92398', () => {
-    expect(costoOrng(43999, 'mochilas')).toBe(38499);   // el de lista MENOS 12,5%
-    expect(precioOrng(43999, 'mochilas')).toBe(92398);  // el de lista POR 2,1
+  it('mochila HARLEM: 43999 -> costo 38499,13 -> precio 92398', () => {
+    expect(costoOrng(43999, 'mochilas')).toBe(38499.13);  // el de lista MENOS 12,5%
+    expect(precioOrng(43999, 'mochilas')).toBe(92398);    // el de lista POR 2,1
   });
 
-  it('gorra BAY: 12999 -> costo 11049 -> precio 25998', () => {
-    expect(costoOrng(12999, 'accesorios')).toBe(11049);
+  it('gorra BAY: 12999 -> costo 11049,15 -> precio 25998', () => {
+    expect(costoOrng(12999, 'accesorios')).toBe(11049.15);
     expect(precioOrng(12999, 'accesorios')).toBe(25998);
+  });
+
+  it('🔴 EL COSTO LLEVA CENTAVOS, NO SE REDONDEA AL PESO', () => {
+    // Wanda, 08-sep-2026: "siempre agregar los decimales en los costos con
+    // descuento, ya que todo suma". Y Shopify guarda el costo con decimales:
+    // si redondeáramos, un costo ya correcto parecería distinto y se
+    // reescribiría al pedo en cada sincronización.
+    expect(costoOrng(43999, 'mochilas')).not.toBe(Math.round(43999 * 0.875));
+    expect(costoOrng(33999, 'mochilas')).toBe(29749.13);
   });
 
   it('🔴 EL MARKUP VA SOBRE EL DE LISTA, NO SOBRE EL COSTO BONIFICADO', () => {
