@@ -384,10 +384,32 @@ Mochilas, bolsos y gorras. Código en `src/utils/orngLogic.ts`.
   **precios y productos nuevos**, nunca stock.
 - **Sin redondeo**: el precio queda exacto, igual que Bloque. 🟡 Si Wanda quiere
   terminación …900 o centena, se cambia solo en `precioOrng()`.
-- 🟡 **PENDIENTES**: la sucursal (`STOCK_LOCATION.orng`, hoy `'ORNG'` sin
-  confirmar — no molesta porque no hay stock) y el **diccionario de colores**:
-  el archivo trae códigos (`NE`, `AZ`, `GMM`, `VM/NE`…) y por ahora van tal cual
-  al título. `VE` = Verde está confirmado por la web del proveedor.
+
+> 🔴 **EL CONTRATO LO DECIDE EL VENDOR DE SHOPIFY, no el Excel.**
+> Wanda separa las dos familias con **dos vendors**: `Orng Mochilas` y `Orng`
+> («yo los divido por el proveedor»). Esa es SU clasificación y manda sobre la
+> columna `ARTICULO`, que queda solo como respaldo para los productos que
+> todavía no existen en la tienda. Si mueve un producto de un vendor al otro,
+> la app la sigue sola. Por eso `VENDOR_QUERY.orng` busca **los dos**.
+
+**Cómo matchea contra Shopify: por el CÓDIGO, que es el prefijo del SKU.**
+En la tienda el SKU es `CODIGO.NOMBRE.COLOR` (`22050019.HUD.NEG`), a veces sin
+el punto (`22050020HEL.AZ`). Las abreviaturas de color **no** son las del Excel
+(Excel `NE`/`VE`/`GMM` ↔ Shopify `NEG`/`VER`/`GRM`), así que matchear por color
+sería adivinar esas equivalencias. Se matchea por código y listo:
+**verificado que los 18 códigos tienen el mismo costo en todos sus colores**,
+así que no hay riesgo de mezclar precios.
+Medido contra el export real del 08-sep: **44 de 45 productos matchean**.
+El que falla es `Mochila Orng Harlem Arena`, que **tiene el SKU vacío** en
+Shopify — si Wanda le carga el SKU, entra solo.
+
+- ⚠️ **ORNG no tiene sucursal y no la necesita.** Está en `MARCAS_SIN_STOCK`.
+  Antes el análisis moría con «No encontré la sucursal "ORNG"» y no dejaba ni
+  actualizar precios; ahora, si la marca no lleva stock, usa cualquier sucursal
+  solo para poder leer las variantes.
+- 🟡 **PENDIENTE**: el **diccionario de colores**. El archivo trae códigos
+  (`NE`, `AZ`, `GMM`, `VM/NE`…) y por ahora van tal cual al título de los
+  productos nuevos. `VE` = Verde está confirmado por la web del proveedor.
 
 Verificado contra el archivo real del 08-sep: **45 filas → 45 productos**,
 21 con contrato de mochilas y 24 de accesorios, sin duplicados.

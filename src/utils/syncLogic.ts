@@ -5,7 +5,7 @@ import { CONVERSE_CODE_TABLE } from './converseCurvas';
 import { esPrecioSugerido } from './conversePreciosFijos';
 import { parseVart, VART_LOCATION, VART_DESCUENTO } from './vartLogic';
 import { esPlantillaPedido, parsePlantillaPedido, tituloPedido } from './plantillaPedido';
-import { parseOrng } from './orngLogic';
+import { parseOrng, costoOrng, precioOrng } from './orngLogic';
 import type { ListaPrecios } from './listaPrecios';
 
 export type SyncMode = 'all' | 'stock_only' | 'cost_only' | 'price_only';
@@ -514,7 +514,7 @@ const VENDOR_QUERY: Partial<Record<SyncConfig['brand'], string>> = {
   orchard: 'vendor:Orchard',
   luxo: 'vendor:Luxo',
   vart: 'vendor:Vart',
-  orng: 'vendor:ORNG',
+  orng: 'vendor:Orng OR vendor:"Orng Mochilas"',
 };
 
 const LIVE_LOCATIONS_QUERY = `query { locations(first: 50) { edges { node { id name } } } }`;
@@ -530,6 +530,7 @@ const LIVE_PRODUCTS_QUERY = `
           id
           handle
           title
+          vendor
           tags
           variants(first: 100) {
             edges {
@@ -581,6 +582,16 @@ const LIVE_VARIANTS_BY_SKU_QUERY = `
     }
   }
 `;
+
+// Marcas cuyo archivo NO trae stock: no necesitan sucursal propia.
+export const MARCAS_SIN_STOCK: SyncConfig['brand'][] = ['orng'];
+
+// Primera sucursal que devuelva Shopify. Solo se usa como último recurso para
+// las marcas sin stock, para poder leer las variantes.
+async function fetchPrimeraLocationId(): Promise<string | null> {
+  const data = await shopifyGraphQL<any>(LIVE_LOCATIONS_QUERY);
+  return data?.locations?.edges?.[0]?.node?.id || null;
+}
 
 async function fetchLocationIdByName(name: string): Promise<string | null> {
   const data = await shopifyGraphQL<any>(LIVE_LOCATIONS_QUERY);
@@ -807,23 +818,34 @@ export async function processFiles(
     // ⚠ El archivo NO trae stock: de acá salen precios y productos nuevos.
     const excelData = await readExcel(providerFile, config.sheetName);
     const orng = parseOrng(excelData as any[][]);
-    for (const p of orng.productos) {
-      excelMap[p.clave.toLowerCase()] = {
+    // ⚠ LA CLAVE ES EL CÓDIGO, NO EL CÓDIGO+COLOR.
+    // En Shopify el SKU es "CODIGO.NOMBRE.COLOR" (22050019.HUD.NEG), y las
+    // abreviaturas de color NO son las del Excel (Excel NE/VE/GMM ↔ Shopify
+    // NEG/VER/GRM). Matchear por color sería adivinar esas equivalencias.
+    // Se matchea por el CÓDIGO, que es el prefijo del SKU. Es seguro para
+    // precios: verificado sobre el archivo real, los 18 códigos tienen el MISMO
+    // costo y el mismo artículo en todos sus colores.
+    const porCodigo = new Map<string, typeof orng.productos[number]>();
+    for (const p of orng.productos) if (!porCodigo.has(p.codigo)) porCodigo.set(p.codigo, p);
+    for (const [codigo, p] of porCodigo) {
+      const colores = orng.productos.filter((x) => x.codigo === codigo).map((x) => x.color);
+      excelMap[codigo.toLowerCase()] = {
         wholesale: p.costoLista,
         costFinal: p.costo,
         publicPrice: p.precio,
-        // Sin stock en el archivo: el producto se crea/actualiza con talle único.
+        // Sin stock en el archivo: talle único.
         sizes: { unico: 0 },
         foundInShopify: false,
-        title: p.titulo,
-        vendor: 'ORNG',
+        title: p.titulo + (colores.length > 1 ? ` (${colores.length} colores)` : ''),
+        // Los vendors REALES de la tienda de Wanda: "Orng Mochilas" y "Orng".
+        vendor: p.familia === 'mochilas' ? 'Orng Mochilas' : 'Orng',
         artType: p.articulo.toLowerCase(),
       };
     }
     const mochilas = orng.productos.filter((p) => p.familia === 'mochilas').length;
     alerts.push({
       type: 'info',
-      title: `ORNG: ${orng.productos.length} productos (${mochilas} con contrato de mochilas, ${orng.productos.length - mochilas} de accesorios)`,
+      title: `ORNG: ${porCodigo.size} códigos / ${orng.productos.length} colores (${mochilas} filas con contrato de mochilas, ${orng.productos.length - mochilas} de accesorios)`,
       message:
         'Mochilas: 12,5% de bonificación y markup 2,1. Indumentaria y accesorios: 15% y markup 2,0. ' +
         'Este archivo NO trae stock (no tiene columna de cantidad), así que solo se tocan precios y se crean los que falten.',
@@ -1066,6 +1088,7 @@ export async function processFiles(
   interface ShopifyProductNode {
     handle: string;
     title: string;
+    vendor?: string;
     tags: string;
     variants: { edges: { node: { id: string; title: string; sku: string; price: string; inventoryQuantity: number } }[] };
   }
@@ -1175,8 +1198,18 @@ export async function processFiles(
     const vendorQuery = VENDOR_QUERY[config.brand];
     if (vendorQuery) {
       const locName = STOCK_LOCATION[config.brand];
-      const locId = await fetchLocationIdByName(locName);
-      if (!locId) throw new Error(`No encontré la sucursal "${locName}" en Shopify.`);
+      let locId = await fetchLocationIdByName(locName);
+      if (!locId) {
+        // ⚠ ORNG no maneja stock (su archivo es una lista de precios), así que
+        // no tiene sucursal propia. Antes esto tiraba "No encontré la sucursal"
+        // y no se podía ni actualizar precios. Si la marca no lleva stock,
+        // usamos cualquier sucursal solo para poder leer las variantes.
+        if (!MARCAS_SIN_STOCK.includes(config.brand)) {
+          throw new Error(`No encontré la sucursal "${locName}" en Shopify.`);
+        }
+        locId = await fetchLocationIdByName(LOC_MARTINEZ_NOMBRE) || await fetchPrimeraLocationId();
+        if (!locId) throw new Error('No pude leer ninguna sucursal de Shopify.');
+      }
       // También miramos Martínez: si un producto ya está ahí, Wanda NO le cambia
       // el precio (ya lo compró al costo viejo).
       const marId = await fetchLocationIdByName(LOC_MARTINEZ_NOMBRE) || locId;
@@ -1212,6 +1245,7 @@ export async function processFiles(
           shopifyProducts.push({
             handle: String(n.handle || ''),
             title: String(n.title || ''),
+            vendor: String(n.vendor || ''),
             tags: Array.isArray(n.tags) ? n.tags.join(', ') : String(n.tags || ''),
             variants: { edges: variants },
           });
@@ -1261,6 +1295,18 @@ export async function processFiles(
       }
 
       if (match) {
+        // ⚠ ORNG: EL CONTRATO LO DECIDE EL PROVEEDOR (vendor) DE SHOPIFY.
+        // Wanda separa las dos familias con dos vendors: "Orng Mochilas" y
+        // "Orng". Esa es SU clasificación, así que manda sobre lo que diga la
+        // columna ARTICULO del Excel (que se usa solo para los que todavía no
+        // existen en la tienda). Si mueve un producto de un vendor al otro, la
+        // app la sigue sola.
+        if (config.brand === 'orng' && prod.vendor) {
+          const esMochila = /mochila/i.test(prod.vendor);
+          const familia = esMochila ? 'mochilas' : 'accesorios';
+          provData.costFinal = costoOrng(provData.wholesale, familia);
+          provData.publicPrice = precioOrng(provData.wholesale, familia);
+        }
         handlesMatcheados.add(prod.handle);
         provData.foundInShopify = true;
         provData.shopifyHandle = prod.handle;
