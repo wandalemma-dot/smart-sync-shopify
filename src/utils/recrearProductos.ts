@@ -22,26 +22,22 @@
 
 export interface LineaRecrear {
   titulo: string;
-  talle: string;         // vacío = accesorio, va SIN variante de talle
+  talle: string;         // vacío = sin variante
   sku: string;
-  codigo: string;        // lo que va antes del primer "!" (o el SKU entero)
-  talleDelSku: string;   // lo que va después del último "!"
-  sinTalle: boolean;     // true = producto sin variante
-  coincide: boolean;     // ¿el talle de la línea es el mismo que el del SKU?
+  sinTalle: boolean;
 }
 
 export interface ProductoRecrear {
-  codigo: string;
+  codigo: string;                               // el SKU de la primera variante (para mostrar)
   titulo: string;
-  sinTalle: boolean;                            // sin variante de talle
-  talles: { talle: string; sku: string }[];     // si sinTalle, es una sola con talle ''
+  sinTalle: boolean;
+  talles: { talle: string; sku: string }[];
 }
 
 export interface ParseRecrear {
   productos: ProductoRecrear[];
   lineas: LineaRecrear[];
-  sospechosas: LineaRecrear[];   // el talle no coincide con el del SKU
-  ignoradas: string[];           // grupos que no se pudieron interpretar
+  ignoradas: string[];
   skusRepetidos: string[];
   sinTalleCount: number;
 }
@@ -54,51 +50,64 @@ function esSinTalle(talle: string): boolean {
 }
 
 /**
- * Lee el texto pegado. Viene SIEMPRE de a TRES líneas:
+ * ¿Esta línea es un SKU?
  *
- *     Bermuda Quiksilver Slim Basic Blue Azul Claro   <- título
- *     33                                              <- talle (VACÍO si es accesorio)
- *     2221110009!20!33                                <- SKU
+ * ⚠ NO SE PUEDE IR POR POSICIÓN. Se intentó leer de a 3 líneas fijas y falló:
+ *   la cantidad de líneas en blanco que copia Shopify es VARIABLE, y el talle a
+ *   veces está y a veces no. Hay que reconocer el SKU por cómo es.
  *
- * ⚠ LAS LÍNEAS VACÍAS NO SE PUEDEN BORRAR.
- *   Se intentó y salió mal: en los accesorios el talle viene vacío, así que al
- *   sacar esa línea se corría TODO un renglón y cada producto se quedaba con el
- *   título del siguiente como talle. Se recorre de a 3 y punto.
+ * Los tres formatos reales de Wanda:
+ *   2221110009!20!33   con "!"  (código!color!talle)
+ *   IFNX1J2CP4RR0IZ    letras MAYÚSCULAS y números, sin espacios
+ *   7795456688744      código de barras
+ *
+ * Y lo que NO es SKU:
+ *   "Bolsa De Dormir Montagne Tenorio Pro Rojo"  -> tiene espacios
+ *   "Izquierdo" / "Derecho"                      -> tiene minúsculas
+ *   "33" / "M" / "XL"                            -> muy corto
+ */
+export function esSku(linea: string): boolean {
+  const l = String(linea || '').trim();
+  if (!l || /\s/.test(l)) return false;          // con espacios nunca
+  if (l.includes('!')) return true;              // 2221110009!20!33
+  if (/^\d{8,}$/.test(l)) return true;           // código de barras
+  // ICHW1I1MACAN3ST: solo mayúsculas/números, largo, y con las dos cosas.
+  return /^[A-Z0-9._\-/]{6,}$/.test(l) && /\d/.test(l) && /[A-Z]/.test(l);
+}
+
+/**
+ * Lee el texto que Wanda copia de la pantalla de la transferencia.
+ *
+ * Cada producto es: título → (talle, si tiene) → SKU, con cualquier cantidad de
+ * líneas en blanco en el medio. Se avanza hasta encontrar un SKU y lo anterior
+ * se reparte: si la última línea antes del SKU es UNA SOLA PALABRA, es el talle
+ * ("Izquierdo", "33", "M"); si tiene espacios, es parte del título y el producto
+ * va sin talle.
  */
 export function parseRecrear(texto: string): ParseRecrear {
-  // OJO: solo se saca el \r y los espacios de los costados. Las vacías QUEDAN.
-  const todas = String(texto || '').split(/\r?\n/).map((l) => l.trim());
-  // Sí se recortan las vacías del principio y del final (al copiar suelen sobrar).
-  while (todas.length && !todas[0]) todas.shift();
-  while (todas.length && !todas[todas.length - 1]) todas.pop();
+  const lineas = String(texto || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
 
   const out: LineaRecrear[] = [];
   const ignoradas: string[] = [];
+  let buffer: string[] = [];
 
-  for (let i = 0; i < todas.length; i += 3) {
-    const titulo = (todas[i] || '').trim();
-    const talle = (todas[i + 1] ?? '').trim();
-    const sku = (todas[i + 2] || '').trim();
+  for (const l of lineas) {
+    if (!esSku(l)) { buffer.push(l); continue; }
 
-    if (!titulo || !sku) {
-      const resto = todas.slice(i, i + 3).filter(Boolean);
-      if (resto.length) ignoradas.push(resto.join(' ⏎ '));
-      continue;
-    }
+    if (!buffer.length) { ignoradas.push(l); continue; }
 
-    const partes = sku.split('!');
-    const codigo = partes[0].trim();
-    // El talle es el ÚLTIMO segmento del SKU. En "2232127002!79!U" el 79 es el
-    // color y la U el talle; en "13225058!U" no hay color.
-    const talleDelSku = partes.length > 1 ? partes[partes.length - 1].trim() : '';
-    const sinTalle = esSinTalle(talle);
+    // ¿La última línea antes del SKU es un talle? Solo si es una sola palabra.
+    // Los títulos siempre tienen espacios ("Bolsa De Dormir Montagne...").
+    const ultima = buffer[buffer.length - 1];
+    const hayTalle = buffer.length > 1 && !/\s/.test(ultima);
+    const talle = hayTalle ? ultima : '';
+    const titulo = (hayTalle ? buffer.slice(0, -1) : buffer).join(' ').trim();
+    buffer = [];
 
-    out.push({
-      titulo, talle, sku, codigo, talleDelSku, sinTalle,
-      // Si no tiene talle no hay nada que comparar: no es sospechosa.
-      coincide: sinTalle || !talleDelSku || talleDelSku.toUpperCase() === talle.toUpperCase(),
-    });
+    if (!titulo) { ignoradas.push(l); continue; }
+    out.push({ titulo, talle, sku: l, sinTalle: esSinTalle(talle) });
   }
+  if (buffer.length) ignoradas.push(...buffer);
 
   // SKU repetido: se carga una sola vez.
   const vistos = new Set<string>();
@@ -110,22 +119,37 @@ export function parseRecrear(texto: string): ParseRecrear {
     limpias.push(l);
   }
 
-  // Agrupar por CÓDIGO (no por título: el mismo título puede ser otro producto).
-  const porCodigo = new Map<string, ProductoRecrear>();
+  // ---- AGRUPAR POR TÍTULO ----
+  // En Shopify, la "Bolsa De Dormir Tenorio Pro Rojo" es UN producto con dos
+  // variantes (Izquierdo y Derecho), y cada variante tiene su propio SKU
+  // (IFNX1J2CP4RR0IZ / IFNX1J2CP4RR0DE). Por eso se agrupa por TÍTULO.
+  //
+  // ⚠ PERO SI UN TALLE SE REPITE dentro del mismo título, son DOS productos
+  //   distintos: Shopify no acepta dos variantes con el mismo valor de opción.
+  //   Ahí se abre un producto nuevo. Los SKU siempre se conservan, que es lo
+  //   único que hace que la transferencia se reenganche.
+  const productos: ProductoRecrear[] = [];
+  const abiertos = new Map<string, ProductoRecrear[]>();
+
   for (const l of limpias) {
-    if (!porCodigo.has(l.codigo)) {
-      porCodigo.set(l.codigo, { codigo: l.codigo, titulo: l.titulo, sinTalle: l.sinTalle, talles: [] });
+    const clave = l.titulo.toUpperCase();
+    if (!abiertos.has(clave)) abiertos.set(clave, []);
+    const grupo = abiertos.get(clave)!;
+    const valor = l.sinTalle ? '' : l.talle.toUpperCase();
+    // Buscamos un producto de ese título donde ese talle todavía no esté.
+    let destino = grupo.find((p) => !p.talles.some((t) => (p.sinTalle ? '' : t.talle.toUpperCase()) === valor));
+    if (!destino) {
+      destino = { codigo: l.sku, titulo: l.titulo, sinTalle: l.sinTalle, talles: [] };
+      grupo.push(destino);
+      productos.push(destino);
     }
-    const p = porCodigo.get(l.codigo)!;
-    // Si alguna de sus líneas trae talle, el producto SÍ lleva variantes.
-    if (!l.sinTalle) p.sinTalle = false;
-    p.talles.push({ talle: l.talle, sku: l.sku });
+    if (!l.sinTalle) destino.sinTalle = false;
+    destino.talles.push({ talle: l.talle, sku: l.sku });
   }
 
   return {
-    productos: [...porCodigo.values()],
+    productos,
     lineas: limpias,
-    sospechosas: limpias.filter((l) => !l.coincide),
     ignoradas,
     skusRepetidos,
     sinTalleCount: limpias.filter((l) => l.sinTalle).length,

@@ -102,24 +102,8 @@ export default function Recuperar() {
             📦 <strong>{res.productos.length}</strong> productos · <strong>{totalTalles}</strong> talles
             {totalUnidades > 0 && <> · <strong>{totalUnidades}</strong> unidades</>}
             {res.sinTalleCount > 0 && <> · <span style={{ color: '#60a5fa' }}><strong>{res.sinTalleCount}</strong> sin talle (accesorios)</span></>}
-            {res.sospechosas.length > 0 && <> · <span style={{ color: '#fb923c' }}>a revisar: <strong>{res.sospechosas.length}</strong></span></>}
             {res.ignoradas.length > 0 && <> · <span style={{ opacity: 0.7 }}>{res.ignoradas.length} líneas que no entendí</span></>}
           </div>
-
-          {res.sospechosas.length > 0 && (
-            <div style={{ padding: '0.8rem', border: '1px solid #fb923c', borderRadius: 8, background: 'rgba(251,146,60,0.10)', marginBottom: '0.8rem', fontSize: '0.83rem' }}>
-              <strong style={{ color: '#fb923c' }}>⚠️ El talle no coincide con el del SKU</strong>
-              <p style={{ margin: '0.3rem 0', opacity: 0.9 }}>
-                El SKU termina en el talle, así que estas líneas quedaron desalineadas al copiar.
-                Igual se crean con el talle que dice la línea — revisalas antes:
-              </p>
-              {res.sospechosas.map((l) => (
-                <div key={l.sku} style={{ fontFamily: 'monospace', fontSize: '0.78rem' }}>
-                  {l.sku} → la línea dice <strong>{l.talle}</strong> y el SKU termina en <strong>{l.talleDelSku}</strong>
-                </div>
-              ))}
-            </div>
-          )}
 
           <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap', alignItems: 'flex-end', marginBottom: '0.8rem' }}>
             <div>
@@ -143,7 +127,7 @@ export default function Recuperar() {
               <thead>
                 <tr>
                   <th style={th}>Producto</th>
-                  <th style={th}>Código</th>
+                  <th style={th}>Variantes</th>
                   <th style={{ ...th, textAlign: 'center' }}>Talle</th>
                   <th style={th}>SKU</th>
                   <th style={{ ...th, textAlign: 'center' }}>Cantidad</th>
@@ -153,7 +137,7 @@ export default function Recuperar() {
                 {res.productos.map((p) => p.talles.map((t, j) => (
                   <tr key={t.sku} style={{ borderTop: j === 0 ? '2px solid rgba(255,255,255,0.18)' : '1px solid rgba(255,255,255,0.06)' }}>
                     <td style={td}>{j === 0 ? p.titulo : ''}</td>
-                    <td style={{ ...td, fontFamily: 'monospace', opacity: 0.85 }}>{j === 0 ? p.codigo : ''}</td>
+                    <td style={{ ...td, textAlign: 'center', opacity: 0.85 }}>{j === 0 ? (p.sinTalle ? '1' : p.talles.length) : ''}</td>
                     <td style={{ ...td, textAlign: 'center', fontWeight: 'bold' }}>
                       {p.sinTalle ? <span style={{ color: '#60a5fa', fontWeight: 'normal', fontSize: '0.78rem' }}>sin talle</span> : t.talle}
                     </td>

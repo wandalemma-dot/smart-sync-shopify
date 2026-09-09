@@ -279,31 +279,35 @@ Código en `src/utils/recrearProductos.ts` + `src/Recuperar.tsx`.
 > Agrupar por título los fusionaría en un producto solo.
 > El código es lo que va **antes del primer `!`**.
 
-> 🔴 **LAS LÍNEAS VACÍAS NO SE BORRAN. NUNCA.**
-> Se recorre **de a 3 líneas exactas**. En los **accesorios** (gorros, medias,
-> cartucheras) el talle viene **vacío**, así que la línea del medio es `''`.
-> Se intentó filtrar las vacías y salió mal (09-sep-2026): se corría TODO un
-> renglón y cada producto se quedaba con el **título del siguiente como talle**
-> — el «Piluso Thrasher» apareció con talle «Piluso Roxy Niña Lorem Azul», y
-> encima disparaba alertas falsas de «el talle no coincide».
-> 🛡 El bloque `accesorios: el talle viene VACÍO` del test cuida exactamente eso.
+> 🔴 **EL SKU SE RECONOCE POR CÓMO ES, NUNCA POR SU POSICIÓN.**
+> Se intentó leer de a 3 líneas fijas y **falló dos veces**: la cantidad de
+> líneas en blanco que copia Shopify es **variable** y el talle **a veces no
+> está**. De 8 productos leía 4, y corría los renglones (un producto quedaba
+> con el título del siguiente como talle).
+>
+> `esSku()` mira la forma de la línea:
+> con `!` · código de barras (8+ dígitos) · o MAYÚSCULAS+números sin espacios
+> (`IFNX1J2CP4RR0IZ`). Un título tiene **espacios**; un talle como `Izquierdo`
+> tiene **minúsculas**; `33` o `M` son **muy cortos**.
 
-- **Accesorios → SIN VARIANTE de talle** (pedido de Wanda). Se crean con la
-  opción por defecto de Shopify (`Title` / `Default Title`).
-  Cuenta como accesorio si el talle está **vacío** o dice `U`/`TU`/`ÚNICO`.
-- **El SKU tiene tres formatos** y los tres valen:
-  `2221110009!20!33` (código!color!talle) · `13225058!U` (código!talle) ·
-  `7795456688744` (código de barras, sin ningún `!`).
-  El **talle es el ÚLTIMO segmento**; el del medio, cuando está, es el color.
-- **Chequeo propio**: si el SKU termina en un talle y no coincide con el de la
-  línea, se avisa (no se descarta). En los accesorios no se chequea: no hay
-  talle que comparar.
-- **Las cantidades las escribe Wanda a mano**, una por talle, en la misma tabla.
-  Elige también la marca y la sucursal (las sucursales se leen de Shopify).
-- ⚠️ **Se crean como BORRADOR y en $0**, a propósito: son productos de
-  recuperación. Un producto en $0 publicado se podría vender a $0; en borrador,
-  no. Wanda le pone precio y lo publica desde Shopify.
-- El código queda como **etiqueta** del producto, para poder encontrarlo después.
+**Cómo se arma cada producto:** se acumulan líneas hasta encontrar un SKU. Si la
+última línea antes del SKU es **una sola palabra**, es el talle (`Izquierdo`,
+`33`, `M`); si tiene espacios, es parte del título y el producto va **sin talle**.
+
+> 🔴 **SE AGRUPA POR TÍTULO, NO POR CÓDIGO.**
+> En Shopify la *«Bolsa De Dormir Montagne Tenorio Pro Rojo»* es **un** producto
+> con dos variantes, Izquierdo y Derecho, y cada una tiene su propio SKU
+> (`IFNX1J2CP4RR0IZ` / `IFNX1J2CP4RR0DE`). Agrupar por código las habría
+> partido en dos productos.
+> **Excepción:** si dentro del mismo título se repite un talle, son dos
+> productos distintos — Shopify no acepta dos variantes con el mismo valor de
+> opción. Los SKU se conservan siempre, que es lo único que importa.
+
+- **Sin talle → SIN VARIANTE** (pedido de Wanda). Se crea con la opción por
+  defecto de Shopify (`Title` / `Default Title`). Cuenta como sin talle si la
+  línea está vacía o dice `U`/`TU`/`ÚNICO`.
+- **Los tres formatos de SKU** valen: `2221110009!20!33` (código!color!talle) ·
+  `13225058!U` (código!talle) · `IFNX1J2CP4RR0IZ` y `7795456688744` (sin `!`).
 
 🛡 Tests en `src/utils/__tests__/recrear.test.ts`, con el texto real de Wanda.
 
