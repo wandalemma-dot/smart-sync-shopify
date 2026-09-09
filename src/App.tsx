@@ -6,10 +6,11 @@ import type { StockPlan } from './utils/writeStock';
 import { createProducts } from './utils/createProducts';
 import { aplicarPrecios, actualizacionesAplicables, sinCambios, margenPct } from './utils/updatePrices';
 import Reposicion from './Reposicion';
+import Recuperar from './Recuperar';
 
 export default function App() {
   // Pestaña activa: sincronización (lo de siempre) o reposición (pedido a iD).
-  const [tab, setTab] = useState<'sync' | 'reposicion'>('sync');
+  const [tab, setTab] = useState<'sync' | 'reposicion' | 'recuperar'>('sync');
   const [providerFile, setProviderFile] = useState<File | null>(null);
 
   const [sheets, setSheets] = useState<string[]>([]);
@@ -276,7 +277,7 @@ export default function App() {
 
       {/* ====== PESTAÑAS ====== */}
       <div style={{ display: 'flex', gap: '8px', marginBottom: '1.2rem' }}>
-        {([['sync', '🔄 Sincronización'], ['reposicion', '📦 Reposición']] as const).map(([id, label]) => (
+        {([['sync', '🔄 Sincronización'], ['reposicion', '📦 Reposición'], ['recuperar', '♻️ Recuperar']] as const).map(([id, label]) => (
           <button
             key={id}
             onClick={() => setTab(id)}
@@ -292,7 +293,7 @@ export default function App() {
         ))}
       </div>
 
-      {tab === 'reposicion' ? <Reposicion /> : (<>
+      {tab === 'recuperar' ? <Recuperar /> : tab === 'reposicion' ? <Reposicion /> : (<>
 
       {!previewReady ? (
         <div className="main-grid">

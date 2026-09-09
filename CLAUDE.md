@@ -54,6 +54,7 @@ App web (React + Vite, deploy automático en Vercel desde `main`) con dos pesta�
 |---|---|
 | **Sincronización** | Subís el archivo del proveedor → compara contra Shopify → actualiza stock, precios y crea productos nuevos. |
 | **Reposición** | Wanda sube el **export de Órdenes de Shopify** y la app le dice **en qué talle pedir** cada cosa que se vendió. **Solo lectura.** |
+| **Recuperar** | Recrea productos borrados a partir del texto de una transferencia vieja, **con el mismo SKU**, para que la transferencia vuelva a engancharse. |
 
 La app **lee Shopify en vivo**: no hace falta subir el CSV de productos.
 
@@ -253,6 +254,44 @@ Código en `src/utils/ventasCsv.ts` + `src/Reposicion.tsx`.
 > inventarla es hacerle pedir el par equivocado.
 >
 > 🛡 Tests en `src/utils/__tests__/ventasCsv.test.ts` (incluido ese caso exacto).
+
+### 2.3 RECUPERAR productos borrados (transferencias viejas)
+
+Wanda tiene transferencias viejas que apuntan a productos que ya borró, y para
+recibirlas el producto tiene que existir otra vez **con el mismo SKU**. Shopify
+no le deja exportar eso: lo único que puede hacer es **copiar el texto de la
+pantalla**, que viene de a tres líneas:
+
+```
+Bermuda Quiksilver Slim Basic Blue Azul Claro   <- título
+33                                              <- talle
+2221110009!20!33                                <- SKU
+```
+
+Código en `src/utils/recrearProductos.ts` + `src/Recuperar.tsx`.
+
+> 🔴 **EL SKU MANDA Y VA TAL CUAL.** Es lo único que reengancha la transferencia.
+> Si se “normaliza” o se le saca algo, el trabajo no sirve para nada.
+>
+> 🔴 **AGRUPAR POR CÓDIGO, NUNCA POR TÍTULO.** En el ejemplo real, *"Bermuda
+> Quiksilver Slim Basic Blue Azul Claro"* aparece con el código `2221110009`
+> (talle 33) **y** con el `2231110023` (talle 28): son dos temporadas distintas.
+> Agrupar por título los fusionaría en un producto solo.
+> El código es lo que va **antes del primer `!`**.
+
+- El lector es **tolerante**: busca las líneas con pinta de SKU (`x!y!z`) y para
+  cada una toma la de arriba como talle y lo anterior como título. Así aguanta
+  un título cortado en dos líneas.
+- **Chequeo propio**: el SKU termina en el talle, así que si no coinciden la
+  línea quedó desalineada al copiar y se avisa (no se descarta).
+- **Las cantidades las escribe Wanda a mano**, una por talle, en la misma tabla.
+  Elige también la marca y la sucursal (las sucursales se leen de Shopify).
+- ⚠️ **Se crean como BORRADOR y en $0**, a propósito: son productos de
+  recuperación. Un producto en $0 publicado se podría vender a $0; en borrador,
+  no. Wanda le pone precio y lo publica desde Shopify.
+- El código queda como **etiqueta** del producto, para poder encontrarlo después.
+
+🛡 Tests en `src/utils/__tests__/recrear.test.ts`, con el texto real de Wanda.
 
 ### 2.2 LOS COSTOS VAN CON CENTAVOS — NUNCA REDONDEAR AL PESO
 
