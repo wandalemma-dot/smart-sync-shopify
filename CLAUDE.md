@@ -279,11 +279,25 @@ Código en `src/utils/recrearProductos.ts` + `src/Recuperar.tsx`.
 > Agrupar por título los fusionaría en un producto solo.
 > El código es lo que va **antes del primer `!`**.
 
-- El lector es **tolerante**: busca las líneas con pinta de SKU (`x!y!z`) y para
-  cada una toma la de arriba como talle y lo anterior como título. Así aguanta
-  un título cortado en dos líneas.
-- **Chequeo propio**: el SKU termina en el talle, así que si no coinciden la
-  línea quedó desalineada al copiar y se avisa (no se descarta).
+> 🔴 **LAS LÍNEAS VACÍAS NO SE BORRAN. NUNCA.**
+> Se recorre **de a 3 líneas exactas**. En los **accesorios** (gorros, medias,
+> cartucheras) el talle viene **vacío**, así que la línea del medio es `''`.
+> Se intentó filtrar las vacías y salió mal (09-sep-2026): se corría TODO un
+> renglón y cada producto se quedaba con el **título del siguiente como talle**
+> — el «Piluso Thrasher» apareció con talle «Piluso Roxy Niña Lorem Azul», y
+> encima disparaba alertas falsas de «el talle no coincide».
+> 🛡 El bloque `accesorios: el talle viene VACÍO` del test cuida exactamente eso.
+
+- **Accesorios → SIN VARIANTE de talle** (pedido de Wanda). Se crean con la
+  opción por defecto de Shopify (`Title` / `Default Title`).
+  Cuenta como accesorio si el talle está **vacío** o dice `U`/`TU`/`ÚNICO`.
+- **El SKU tiene tres formatos** y los tres valen:
+  `2221110009!20!33` (código!color!talle) · `13225058!U` (código!talle) ·
+  `7795456688744` (código de barras, sin ningún `!`).
+  El **talle es el ÚLTIMO segmento**; el del medio, cuando está, es el color.
+- **Chequeo propio**: si el SKU termina en un talle y no coincide con el de la
+  línea, se avisa (no se descarta). En los accesorios no se chequea: no hay
+  talle que comparar.
 - **Las cantidades las escribe Wanda a mano**, una por talle, en la misma tabla.
   Elige también la marca y la sucursal (las sucursales se leen de Shopify).
 - ⚠️ **Se crean como BORRADOR y en $0**, a propósito: son productos de

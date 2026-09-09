@@ -22,66 +22,83 @@
 
 export interface LineaRecrear {
   titulo: string;
-  talle: string;
+  talle: string;         // vacío = accesorio, va SIN variante de talle
   sku: string;
-  codigo: string;        // lo que va antes del primer "!"
+  codigo: string;        // lo que va antes del primer "!" (o el SKU entero)
   talleDelSku: string;   // lo que va después del último "!"
+  sinTalle: boolean;     // true = producto sin variante
   coincide: boolean;     // ¿el talle de la línea es el mismo que el del SKU?
 }
 
 export interface ProductoRecrear {
   codigo: string;
   titulo: string;
-  talles: { talle: string; sku: string }[];
+  sinTalle: boolean;                            // sin variante de talle
+  talles: { talle: string; sku: string }[];     // si sinTalle, es una sola con talle ''
 }
 
 export interface ParseRecrear {
   productos: ProductoRecrear[];
   lineas: LineaRecrear[];
   sospechosas: LineaRecrear[];   // el talle no coincide con el del SKU
-  ignoradas: string[];           // texto que no se pudo interpretar
+  ignoradas: string[];           // grupos que no se pudieron interpretar
   skusRepetidos: string[];
+  sinTalleCount: number;
 }
 
-// Un SKU de estos tiene al menos dos "!" y algo a cada lado: 2221110009!20!33
-const RE_SKU = /^[^!\s]+![^!\s]*![^!\s]+$/;
+// Talles que en realidad significan "no tiene talle".
+const TALLES_UNICOS = ['', 'U', 'TU', 'UNICO', 'ÚNICO', 'UNIQUE', 'ONE SIZE'];
+
+function esSinTalle(talle: string): boolean {
+  return TALLES_UNICOS.includes(String(talle || '').trim().toUpperCase());
+}
 
 /**
- * Lee el texto pegado. Es tolerante: busca las líneas que tienen pinta de SKU y,
- * para cada una, toma la línea de arriba como talle y todo lo anterior (desde el
- * SKU previo) como título. Así no se rompe si un título viene cortado en dos.
+ * Lee el texto pegado. Viene SIEMPRE de a TRES líneas:
+ *
+ *     Bermuda Quiksilver Slim Basic Blue Azul Claro   <- título
+ *     33                                              <- talle (VACÍO si es accesorio)
+ *     2221110009!20!33                                <- SKU
+ *
+ * ⚠ LAS LÍNEAS VACÍAS NO SE PUEDEN BORRAR.
+ *   Se intentó y salió mal: en los accesorios el talle viene vacío, así que al
+ *   sacar esa línea se corría TODO un renglón y cada producto se quedaba con el
+ *   título del siguiente como talle. Se recorre de a 3 y punto.
  */
 export function parseRecrear(texto: string): ParseRecrear {
-  const lineas = String(texto || '')
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean);
+  // OJO: solo se saca el \r y los espacios de los costados. Las vacías QUEDAN.
+  const todas = String(texto || '').split(/\r?\n/).map((l) => l.trim());
+  // Sí se recortan las vacías del principio y del final (al copiar suelen sobrar).
+  while (todas.length && !todas[0]) todas.shift();
+  while (todas.length && !todas[todas.length - 1]) todas.pop();
 
   const out: LineaRecrear[] = [];
   const ignoradas: string[] = [];
-  let buffer: string[] = [];   // lo que todavía no se asignó a ningún producto
 
-  for (const l of lineas) {
-    if (!RE_SKU.test(l)) { buffer.push(l); continue; }
+  for (let i = 0; i < todas.length; i += 3) {
+    const titulo = (todas[i] || '').trim();
+    const talle = (todas[i + 1] ?? '').trim();
+    const sku = (todas[i + 2] || '').trim();
 
-    // Encontramos un SKU: la línea de arriba es el talle y el resto, el título.
-    const talle = buffer.length ? buffer[buffer.length - 1] : '';
-    const titulo = buffer.slice(0, -1).join(' ').trim();
-    buffer = [];
+    if (!titulo || !sku) {
+      const resto = todas.slice(i, i + 3).filter(Boolean);
+      if (resto.length) ignoradas.push(resto.join(' ⏎ '));
+      continue;
+    }
 
-    if (!titulo || !talle) { ignoradas.push(l); continue; }
-
-    const partes = l.split('!');
+    const partes = sku.split('!');
     const codigo = partes[0].trim();
-    const talleDelSku = partes[partes.length - 1].trim();
+    // El talle es el ÚLTIMO segmento del SKU. En "2232127002!79!U" el 79 es el
+    // color y la U el talle; en "13225058!U" no hay color.
+    const talleDelSku = partes.length > 1 ? partes[partes.length - 1].trim() : '';
+    const sinTalle = esSinTalle(talle);
 
     out.push({
-      titulo, talle, sku: l, codigo, talleDelSku,
-      coincide: talleDelSku.toUpperCase() === talle.toUpperCase(),
+      titulo, talle, sku, codigo, talleDelSku, sinTalle,
+      // Si no tiene talle no hay nada que comparar: no es sospechosa.
+      coincide: sinTalle || !talleDelSku || talleDelSku.toUpperCase() === talle.toUpperCase(),
     });
   }
-  // Lo que quedó suelto al final no era un producto completo.
-  if (buffer.length) ignoradas.push(...buffer);
 
   // SKU repetido: se carga una sola vez.
   const vistos = new Set<string>();
@@ -97,9 +114,12 @@ export function parseRecrear(texto: string): ParseRecrear {
   const porCodigo = new Map<string, ProductoRecrear>();
   for (const l of limpias) {
     if (!porCodigo.has(l.codigo)) {
-      porCodigo.set(l.codigo, { codigo: l.codigo, titulo: l.titulo, talles: [] });
+      porCodigo.set(l.codigo, { codigo: l.codigo, titulo: l.titulo, sinTalle: l.sinTalle, talles: [] });
     }
-    porCodigo.get(l.codigo)!.talles.push({ talle: l.talle, sku: l.sku });
+    const p = porCodigo.get(l.codigo)!;
+    // Si alguna de sus líneas trae talle, el producto SÍ lleva variantes.
+    if (!l.sinTalle) p.sinTalle = false;
+    p.talles.push({ talle: l.talle, sku: l.sku });
   }
 
   return {
@@ -108,6 +128,7 @@ export function parseRecrear(texto: string): ParseRecrear {
     sospechosas: limpias.filter((l) => !l.coincide),
     ignoradas,
     skusRepetidos,
+    sinTalleCount: limpias.filter((l) => l.sinTalle).length,
   };
 }
 
@@ -163,11 +184,16 @@ export async function crearProductosRecuperados(
 
   for (let i = 0; i < productos.length; i++) {
     const p = productos[i];
+    // ⚠ ACCESORIOS: SIN VARIANTE DE TALLE (pedido de Wanda, 09-sep-2026).
+    // Un gorro o una cartuchera no tienen talle. Se crean con la opción por
+    // defecto de Shopify (Title / Default Title), como cualquier producto único.
     const variants = p.talles.map((t) => {
       const v: any = {
         // ⚠ EL SKU VA TAL CUAL. Es lo único que reengancha la transferencia.
         inventoryItem: { sku: t.sku, tracked: true },
-        optionValues: [{ optionName: 'Talle', name: t.talle }],
+        optionValues: p.sinTalle
+          ? [{ optionName: 'Title', name: 'Default Title' }]
+          : [{ optionName: 'Talle', name: t.talle }],
         price: '0',
       };
       if (opciones.locationId) {
@@ -184,10 +210,9 @@ export async function crearProductosRecuperados(
       title: p.titulo,
       status: 'DRAFT',            // borrador: no se puede vender en $0 por error
       variants,
-      productOptions: [{
-        name: 'Talle',
-        values: [...new Set(p.talles.map((t) => t.talle))].map((name) => ({ name })),
-      }],
+      productOptions: p.sinTalle
+        ? [{ name: 'Title', values: [{ name: 'Default Title' }] }]
+        : [{ name: 'Talle', values: [...new Set(p.talles.map((t) => t.talle))].map((name) => ({ name })) }],
       tags: [p.codigo],           // el código, para poder encontrarlo después
     };
     if (opciones.vendor) input.vendor = opciones.vendor;

@@ -13,9 +13,13 @@ import { useState, useEffect } from 'react';
 import { parseRecrear, listarSucursales, crearProductosRecuperados } from './utils/recrearProductos';
 import type { ParseRecrear, Sucursal } from './utils/recrearProductos';
 
+// Ojo: la línea del medio va VACÍA cuando es un accesorio (sin talle).
 const EJEMPLO = `Bermuda Quiksilver Slim Basic Blue Azul Claro
 33
-2221110009!20!33`;
+2221110009!20!33
+Gorro Champion Bordo
+
+7795456688744`;
 
 export default function Recuperar() {
   const [texto, setTexto] = useState('');
@@ -97,6 +101,7 @@ export default function Recuperar() {
           <div style={{ fontSize: '0.9rem', marginBottom: '0.7rem' }}>
             📦 <strong>{res.productos.length}</strong> productos · <strong>{totalTalles}</strong> talles
             {totalUnidades > 0 && <> · <strong>{totalUnidades}</strong> unidades</>}
+            {res.sinTalleCount > 0 && <> · <span style={{ color: '#60a5fa' }}><strong>{res.sinTalleCount}</strong> sin talle (accesorios)</span></>}
             {res.sospechosas.length > 0 && <> · <span style={{ color: '#fb923c' }}>a revisar: <strong>{res.sospechosas.length}</strong></span></>}
             {res.ignoradas.length > 0 && <> · <span style={{ opacity: 0.7 }}>{res.ignoradas.length} líneas que no entendí</span></>}
           </div>
@@ -149,7 +154,9 @@ export default function Recuperar() {
                   <tr key={t.sku} style={{ borderTop: j === 0 ? '2px solid rgba(255,255,255,0.18)' : '1px solid rgba(255,255,255,0.06)' }}>
                     <td style={td}>{j === 0 ? p.titulo : ''}</td>
                     <td style={{ ...td, fontFamily: 'monospace', opacity: 0.85 }}>{j === 0 ? p.codigo : ''}</td>
-                    <td style={{ ...td, textAlign: 'center', fontWeight: 'bold' }}>{t.talle}</td>
+                    <td style={{ ...td, textAlign: 'center', fontWeight: 'bold' }}>
+                      {p.sinTalle ? <span style={{ color: '#60a5fa', fontWeight: 'normal', fontSize: '0.78rem' }}>sin talle</span> : t.talle}
+                    </td>
                     <td style={{ ...td, fontFamily: 'monospace', fontSize: '0.78rem', opacity: 0.9 }}>{t.sku}</td>
                     <td style={{ ...td, textAlign: 'center' }}>
                       <input type="number" min={0} value={cantidades[t.sku] ?? ''}
@@ -166,6 +173,7 @@ export default function Recuperar() {
           <p style={{ fontSize: '0.8rem', opacity: 0.8, marginTop: '0.6rem' }}>
             Se crean como <strong>borrador</strong> y en <strong>$0</strong>. Es a propósito: así no se pueden
             vender por error mientras no tengan precio. Les ponés precio y los publicás desde Shopify.
+            Los <strong>accesorios</strong> (gorros, medias, cartucheras) se crean <strong>sin variante de talle</strong>.
           </p>
 
           <label style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '0.5rem', fontSize: '0.9rem' }}>

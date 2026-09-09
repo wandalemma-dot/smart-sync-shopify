@@ -59,14 +59,6 @@ M
     expect(r.productos[0].talles.map((t) => t.talle)).toEqual(['S', 'M']);
   });
 
-  it('aguanta un título cortado en dos líneas', () => {
-    const r = parseRecrear(`Campera Quiksilver
-Nieve Negro
-M
-9911110001!20!M`);
-    expect(r.productos[0].titulo).toBe('Campera Quiksilver Nieve Negro');
-  });
-
   it('avisa cuando el talle no coincide con el final del SKU', () => {
     const r = parseRecrear(`Remera Rara
 L
@@ -84,6 +76,67 @@ Algo
 111!20!33`);
     expect(r.lineas).toHaveLength(1);
     expect(r.skusRepetidos).toEqual(['111!20!33']);
+  });
+
+  // ⚠ ESTE BLOQUE ES EL QUE MÁS IMPORTA. Se rompió una vez: el lector borraba
+  // las líneas vacías y, como en los accesorios el talle viene vacío, se corría
+  // TODO un renglón y cada producto se quedaba con el título del siguiente
+  // como talle. Si estos tests fallan, se volvió a romper lo mismo.
+  describe('accesorios: el talle viene VACÍO', () => {
+    // Texto real de Wanda: título / (vacío) / SKU.
+    const ACCESORIOS = [
+      'Piluso Thrasher Godzilla Camuflado M 2118M', '', '3251117021!20!U',
+      'Medias Dc Willis Boys Rojo Azul', '', '13225058!U',
+      'Gorro Champion Bordo', '', '7795456688744',
+    ].join('\n');
+
+    it('NO se corre un renglón: cada producto se queda con SU título', () => {
+      const r = parseRecrear(ACCESORIOS);
+      expect(r.productos).toHaveLength(3);
+      expect(r.productos.map((p) => p.titulo)).toEqual([
+        'Piluso Thrasher Godzilla Camuflado M 2118M',
+        'Medias Dc Willis Boys Rojo Azul',
+        'Gorro Champion Bordo',
+      ]);
+    });
+
+    it('quedan marcados SIN talle (se crean sin variante)', () => {
+      const r = parseRecrear(ACCESORIOS);
+      expect(r.productos.every((p) => p.sinTalle)).toBe(true);
+      expect(r.sinTalleCount).toBe(3);
+    });
+
+    it('no dispara alertas falsas de "el talle no coincide"', () => {
+      expect(parseRecrear(ACCESORIOS).sospechosas).toHaveLength(0);
+    });
+
+    it('acepta el SKU como código de barras, sin ningún "!"', () => {
+      const r = parseRecrear('Gorro Champion Bordo\n\n7795456688744');
+      expect(r.productos[0].talles[0].sku).toBe('7795456688744');
+      expect(r.productos[0].codigo).toBe('7795456688744');
+    });
+
+    it('acepta el SKU con un solo "!"', () => {
+      const r = parseRecrear('Medias Dc Willis Boys Rojo Azul\n\n13225058!U');
+      expect(r.productos[0].codigo).toBe('13225058');
+      expect(r.productos[0].sinTalle).toBe(true);
+    });
+
+    it('un talle "U" también cuenta como sin talle', () => {
+      const r = parseRecrear('Gorra X\nU\n999!20!U');
+      expect(r.productos[0].sinTalle).toBe(true);
+    });
+
+    it('mezcla accesorios y ropa en el mismo pegado', () => {
+      const r = parseRecrear([
+        'Gorro Champion Bordo', '', '7795456688744',
+        'Bermuda Quiksilver Slim Basic', '33', '2221110009!20!33',
+      ].join('\n'));
+      expect(r.productos).toHaveLength(2);
+      expect(r.productos[0].sinTalle).toBe(true);
+      expect(r.productos[1].sinTalle).toBe(false);
+      expect(r.productos[1].talles[0].talle).toBe('33');
+    });
   });
 
   it('no inventa nada con texto suelto', () => {
