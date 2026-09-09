@@ -15,20 +15,76 @@ import { describe, it, expect } from 'vitest';
 import { parseRecrear, esSku } from '../recrearProductos';
 
 describe('reconocer cuál línea es el SKU', () => {
-  it('los tres formatos reales son SKU', () => {
-    expect(esSku('2221110009!20!33')).toBe(true);   // código!color!talle
-    expect(esSku('13225058!U')).toBe(true);         // código!talle
-    expect(esSku('IFNX1J2CP4RR0IZ')).toBe(true);    // mayúsculas + números
-    expect(esSku('ICHW1I1MACAN3ST')).toBe(true);
-    expect(esSku('7795456688744')).toBe(true);      // código de barras
+  // ⚠ TODOS ESTOS SON SKU REALES DE LA TIENDA DE WANDA. Son un despelote:
+  // separadores "!" y "$", con y sin minúsculas, de 6 a 16 caracteres.
+  // Cuando uno NO se reconoce, el título se come el producto siguiente entero
+  // (pasó: "Bermuda Gotcha Basic Niño Negro 10 GKS20600$10 Bermuda Quiksilver
+  // Spikas Niño Azul" quedó como un solo título).
+  const SKUS_REALES = [
+    '2221110009!20!33', '13225058!U', '2221110032!10!20',   // separador "!"
+    '20BFLS1912$6', 'GKS20600$10',                          // separador "$"
+    'grid10E',                                              // con minúsculas
+    'IFNX1J2CP4RR0IZ', 'ICHW1I1MACAN3ST', 'IWUYBOTUAMAL0ST', 'IIMP1I2439ZZZZ',
+    'UA220510A', '20B19128', '110230116B', '20BFLS140548J', 'FKW1630110E',
+    'BAR1620136A', '010292A', '01360100110E', '12000225A', '21911010288A',
+    '016578Y', '2318170285',
+    '7795456688744', '7791000175777', '194433896801',       // códigos de barras
+  ];
+
+  it.each(SKUS_REALES)('%s es un SKU', (sku) => {
+    expect(esSku(sku)).toBe(true);
   });
 
-  it('los títulos y los talles NO son SKU', () => {
-    expect(esSku('Bolsa De Dormir Montagne Tenorio Pro Rojo')).toBe(false); // tiene espacios
-    expect(esSku('Izquierdo')).toBe(false);   // tiene minúsculas
-    expect(esSku('Derecho')).toBe(false);
-    expect(esSku('33')).toBe(false);          // muy corto
-    expect(esSku('M')).toBe(false);
+  const NO_SON_SKU = [
+    'Bolsa De Dormir Montagne Tenorio Pro Rojo',   // título: tiene espacios
+    'Bermuda Rusty Blummer Runt Niño Negro Bordo',
+    'Izquierdo', 'Derecho',                        // talle sin números
+    'M', 'U', 'XL',
+    '33', '28', '10', '16', '8', '2', '25', '6',   // talles: cortos
+  ];
+
+  it.each(NO_SON_SKU)('%s NO es un SKU', (linea) => {
+    expect(esSku(linea)).toBe(false);
+  });
+});
+
+describe('el caso que pegoteaba los títulos', () => {
+  // Antes, al no reconocer "20BFLS1912$6" ni "grid10E", el título seguía
+  // acumulando y salía "Bermuda Vans Gridlock Niño Negro 10 grid10E Jogger
+  // Rusty Hook Out Niño Azul Gastado" como un solo producto.
+  const PEGOTEADO = `Bermuda Rusty Blummer Runt Niño Negro Bordo
+6
+20BFLS1912$6
+Bermuda Rusty Blummer Runt Niño Negro Bordo
+2
+20BFLS1912$2
+Bermuda Vans Gridlock Niño Negro
+10
+grid10E
+Jogger Rusty Hook Out Niño Azul Gastado
+6
+BAR1620136A
+Bermuda Gotcha Basic Niño Negro
+10
+GKS20600$10`;
+
+  it('cada producto queda con SU título, sin comerse el siguiente', () => {
+    const r = parseRecrear(PEGOTEADO);
+    expect(r.productos.map((p) => p.titulo)).toEqual([
+      'Bermuda Rusty Blummer Runt Niño Negro Bordo',
+      'Bermuda Vans Gridlock Niño Negro',
+      'Jogger Rusty Hook Out Niño Azul Gastado',
+      'Bermuda Gotcha Basic Niño Negro',
+    ]);
+    expect(r.ignoradas).toHaveLength(0);
+  });
+
+  it('la Blummer junta sus dos talles en un producto', () => {
+    const r = parseRecrear(PEGOTEADO);
+    expect(r.productos[0].talles).toEqual([
+      { talle: '6', sku: '20BFLS1912$6' },
+      { talle: '2', sku: '20BFLS1912$2' },
+    ]);
   });
 });
 

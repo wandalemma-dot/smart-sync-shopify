@@ -285,10 +285,21 @@ Código en `src/utils/recrearProductos.ts` + `src/Recuperar.tsx`.
 > está**. De 8 productos leía 4, y corría los renglones (un producto quedaba
 > con el título del siguiente como talle).
 >
-> `esSku()` mira la forma de la línea:
-> con `!` · código de barras (8+ dígitos) · o MAYÚSCULAS+números sin espacios
-> (`IFNX1J2CP4RR0IZ`). Un título tiene **espacios**; un talle como `Izquierdo`
-> tiene **minúsculas**; `33` o `M` son **muy cortos**.
+> **Y TAMPOCO SE PUEDE EXIGIR UN FORMATO FIJO.** Se intentó pedir MAYÚSCULAS y
+> volvió a fallar: los SKU de la tienda son un despelote. Todos estos son reales:
+> `2221110009!20!33` · `20BFLS1912$6` · `grid10E` · `UA220510A` · `016578Y` ·
+> `IFNX1J2CP4RR0IZ` · `7795456688744` · `01360100110E`.
+> Hay separadores **`!` y `$`**, hay **minúsculas**, y los largos van de 6 a 16.
+> Cuando uno no se reconoce, **el título se come el producto siguiente entero**
+> («Bermuda Gotcha Basic Niño Negro 10 GKS20600$10 Bermuda Quiksilver Spikas
+> Niño Azul» quedó como un solo título).
+>
+> `esSku()` se queda con lo único que cumplen TODOS y ninguna otra línea:
+> **sin espacios** (los títulos tienen) · **con al menos un número**
+> (`Izquierdo`, `M` no tienen) · **largo ≥ 5 o con separador** (`33`, `10`, `16`
+> son talles).
+> 🛡 El test los recorre uno por uno con `it.each`: si aparece un formato nuevo,
+> se agrega ahí.
 
 **Cómo se arma cada producto:** se acumulan líneas hasta encontrar un SKU. Si la
 última línea antes del SKU es **una sola palabra**, es el talle (`Izquierdo`,

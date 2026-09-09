@@ -53,26 +53,29 @@ function esSinTalle(talle: string): boolean {
  * ¿Esta línea es un SKU?
  *
  * ⚠ NO SE PUEDE IR POR POSICIÓN. Se intentó leer de a 3 líneas fijas y falló:
- *   la cantidad de líneas en blanco que copia Shopify es VARIABLE, y el talle a
- *   veces está y a veces no. Hay que reconocer el SKU por cómo es.
+ *   la cantidad de líneas en blanco que copia Shopify es VARIABLE y el talle a
+ *   veces no está. Hay que reconocer el SKU por cómo es.
  *
- * Los tres formatos reales de Wanda:
- *   2221110009!20!33   con "!"  (código!color!talle)
- *   IFNX1J2CP4RR0IZ    letras MAYÚSCULAS y números, sin espacios
- *   7795456688744      código de barras
+ * ⚠ Y NO SE PUEDE EXIGIR UN FORMATO FIJO. Se intentó pedir MAYÚSCULAS y volvió
+ *   a fallar: los SKU de Wanda son un despelote. Todos estos son reales:
+ *     2221110009!20!33   20BFLS1912$6   grid10E   UA220510A   7795456688744
+ *     IFNX1J2CP4RR0IZ    13225058!U     016578Y   01360100110E
+ *   Hay separadores "!" y "$", hay minúsculas, hay largos de 6 a 16.
+ *   Cuando uno no se reconoce, el título se come el producto siguiente entero.
  *
- * Y lo que NO es SKU:
- *   "Bolsa De Dormir Montagne Tenorio Pro Rojo"  -> tiene espacios
- *   "Izquierdo" / "Derecho"                      -> tiene minúsculas
- *   "33" / "M" / "XL"                            -> muy corto
+ * Lo único que TODOS cumplen y que ninguna otra línea cumple:
+ *   • no tiene espacios (los títulos sí: "Bolsa De Dormir Montagne")
+ *   • tiene al menos un número ("Izquierdo", "Derecho", "M" no tienen)
+ *   • es largo, o trae un separador ("33", "10", "16" son talles, no SKU)
  */
 export function esSku(linea: string): boolean {
   const l = String(linea || '').trim();
-  if (!l || /\s/.test(l)) return false;          // con espacios nunca
-  if (l.includes('!')) return true;              // 2221110009!20!33
-  if (/^\d{8,}$/.test(l)) return true;           // código de barras
-  // ICHW1I1MACAN3ST: solo mayúsculas/números, largo, y con las dos cosas.
-  return /^[A-Z0-9._\-/]{6,}$/.test(l) && /\d/.test(l) && /[A-Z]/.test(l);
+  if (!l || /\s/.test(l)) return false;   // con espacios es un título
+  if (!/\d/.test(l)) return false;        // sin números es un talle (Izquierdo)
+  // Con separador vale aunque sea corto: "13225058!U", "20BFLS1912$6".
+  if (l.includes('!') || l.includes('$')) return true;
+  // Sin separador, tiene que ser largo: así "33", "10" o "16" siguen siendo talles.
+  return l.length >= 5;
 }
 
 /**
