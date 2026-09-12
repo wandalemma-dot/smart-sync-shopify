@@ -86,6 +86,7 @@ const CURVA_POR_TABLA: Record<string, string> = {
   '1': '2',      // TABLA DE TALLE CONVERSE 1
   '2': '8',      // TABLA DE TALLE CONVERSE 2
   MUJER: '8A',
+  MUJER2: '7',
   NINO: '4',
   BEBE: '5',
 };
@@ -98,7 +99,7 @@ export function curvaDesdeEtiqueta(tags: string | string[] | null | undefined): 
   if (!etq) return null;
   if (etq.includes('NIÑO') || etq.includes('NINO')) return CURVA_POR_TABLA.NINO;
   if (etq.includes('BEBE') || etq.includes('BEBÉ')) return CURVA_POR_TABLA.BEBE;
-  if (etq.includes('MUJER')) return CURVA_POR_TABLA.MUJER;
+  if (etq.includes('MUJER')) return /\b2\b/.test(etq) ? CURVA_POR_TABLA.MUJER2 : CURVA_POR_TABLA.MUJER;
   if (/\b2\b/.test(etq)) return CURVA_POR_TABLA['2'];
   if (/\b1\b/.test(etq)) return CURVA_POR_TABLA['1'];
   return null; // etiqueta rara: mejor no adivinar

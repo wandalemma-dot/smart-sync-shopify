@@ -1,6 +1,6 @@
 // AUTO-GENERADO desde el maestro de curvas de Converse (ID MASTER - CURVA DE CONVERSION).
 // Mapea el codigo del producto -> numero de tabla de talle (convTable1..5).
-// Curvas: 2=Tabla1, 8=Tabla2, 8A/7=Mujer, 4=Niño, 5=Bebe, 9=Tabla1.
+// Curvas: 2=Tabla1, 8=Tabla2, 8A=Mujer, 7=Mujer2 (tabla interna 6), 4=Niño, 5=Bebe, 9=Tabla1.
 export const CONVERSE_CODE_TABLE: Record<string, number> = {
   "172180C": 1,
   "A08647C": 1,
@@ -75,9 +75,9 @@ export const CONVERSE_CODE_TABLE: Record<string, number> = {
   "A15991C": 2,
   "A06145C": 2,
   "A15514C": 2,
-  "A13016C": 3,
-  "A13014C": 3,
-  "A15435C": 3,
+  "A13016C": 6,
+  "A13014C": 6,
+  "A15435C": 6,
   "A12814C": 2,
   "A06435C": 2,
   "A10039C": 2,
@@ -203,7 +203,7 @@ export const CONVERSE_CODE_TABLE: Record<string, number> = {
   "A10437C": 1,
   "A08331C": 1,
   "A02809C": 2,
-  "A14160C": 3,
+  "A14160C": 6,
   "A12941C": 1,
   "A13889C": 1,
   "A14275C": 1,
