@@ -2,6 +2,8 @@ import * as XLSX from 'xlsx';
 import { escapeCSV, triggerDownload, todayStamp } from './csv';
 import { shopifyGraphQL, mismaSucursal } from './shopify';
 import { CONVERSE_CODE_TABLE } from './converseCurvas';
+import tablasConverse from './tallesConverseLecoq.json';
+import { curvaDesdeEtiqueta } from './conversorTalles';
 import { esPrecioSugerido } from './conversePreciosFijos';
 import { parseVart, VART_LOCATION, VART_DESCUENTO } from './vartLogic';
 import { esPlantillaPedido, parsePlantillaPedido, tituloPedido } from './plantillaPedido';
@@ -41,7 +43,6 @@ export interface UpdateAction {
   newCost?: number;      // Cost per item (costo del proveedor con su descuento)
   oldCost?: number;      // costo que hoy tiene en Shopify
   productId?: string;    // id del producto (para actualizar por API)
-  inventoryItemId?: string;
   sinCambios?: boolean;  // ya coincide precio y costo: se muestra en verde, no se aplica
   // Stock en DEPOSITO MARTINEZ. Si es > 0, el producto YA lo compró al costo
   // viejo -> no se le cambia el precio (viene destildado por defecto).
@@ -92,6 +93,9 @@ export const convTable2: Record<string, string> = { '2.5': '34', '3': '35', '3.5
 export const convTable3: Record<string, string> = { '5': '35', '5.5': '36', '6': '36.5', '6.5': '37', '7': '37.5', '7.5': '38', '8': '39', '8.5': '39.5', '9': '40', '9.5': '41', '10': '41.5', '10.5': '42', '11': '42.5', '11.5': '43', '12': '44', '12.5': '44.5', '13': '45' };
 export const convTable4: Record<string, string> = { '1': '32', '1.5': '33', '2': '33.5', '2.5': '34', '3': '35', '10.5': '27', '11': '28', '11.5': '28.5', '12': '29', '12.5': '30', '13': '31', '13.5': '31.5' };
 export const convTable5: Record<string, string> = { '2': '18', '2.5': '18.5', '3': '19', '3.5': '19.5', '4': '20', '4.5': '20.5', '5': '21', '5.5': '21.5', '6': '22', '6.5': '22.5', '7': '23', '7.5': '23.5', '8': '24', '8.5': '24.5', '9': '25', '9.5': '25.5', '10': '26', '10.5': '26.5', '11': '27' };
+
+// Mujer 2 conserva la curva 7 completa del proveedor, distinta de Mujer (8A).
+export const convTable6: Record<string, string> = tablasConverse.curvas['7'].us_a_ar;
 
 // Configuración de precios por marca.
 // - markup: multiplicador sobre el precio mayorista para calcular el precio de venta.
@@ -461,20 +465,17 @@ export function talleMatches(provSize: string, shopTalle: string): boolean {
 // ============================================================================
 
 const TABLA_POR_NUMERO: Record<number, Record<string, string>> = {
-  1: convTable1, 2: convTable2, 3: convTable3, 4: convTable4, 5: convTable5,
+  1: convTable1, 2: convTable2, 3: convTable3, 4: convTable4, 5: convTable5, 6: convTable6,
 };
 
 // Lee ÚNICAMENTE la etiqueta "TABLA DE TALLE ...". Devuelve null si no está.
 export function tablaDesdeEtiquetaTalle(tags: string): Record<string, string> | null {
-  const etiquetas = String(tags || '').split(',').map((s) => s.trim().toUpperCase());
-  const etq = etiquetas.find((e) => e.startsWith('TABLA DE TALLE'));
-  if (!etq) return null;
-  if (etq.includes('NIÑO') || etq.includes('NINO')) return convTable4;
-  if (etq.includes('BEBE') || etq.includes('BEBÉ')) return convTable5;
-  if (etq.includes('MUJER')) return convTable3;
-  if (/\b2\b/.test(etq)) return convTable2;
-  if (/\b1\b/.test(etq)) return convTable1;
-  return null; // etiqueta rara: mejor no adivinar
+  const curva = curvaDesdeEtiqueta(tags);
+  const tablas: Record<string, Record<string, string>> = {
+    '2': convTable1, '8': convTable2, '8A': convTable3,
+    '4': convTable4, '5': convTable5, '7': convTable6,
+  };
+  return curva ? tablas[curva] ?? null : null;
 }
 
 // Tabla definitiva para un producto, con el ORIGEN del dato.
@@ -665,7 +666,7 @@ export async function processFiles(
   listaPrecios?: ListaPrecios | null,
 ): Promise<SyncResult> {
   const alerts: AlertMessage[] = [];
-  const excelMap: Record<string, { wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number, usaListaPrecios?: boolean, skuPorTalle?: Record<string, string>, whslDelArchivo?: boolean }> = {};
+  const excelMap: Record<string, { wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyTags?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number, usaListaPrecios?: boolean, skuPorTalle?: Record<string, string>, whslDelArchivo?: boolean }> = {};
 
   if (config.brand === 'bloque' && /\.xlsx?$/i.test(providerFile.name)) {
     // Bloque en Excel (ej. la preventa de Protec).
@@ -1323,6 +1324,7 @@ export async function processFiles(
         handlesMatcheados.add(prod.handle);
         provData.foundInShopify = true;
         provData.shopifyHandle = prod.handle;
+        provData.shopifyTags = prod.tags;
         provData.shopifyVariants = prod.variants.edges.map((e: any) => e.node);
         
         // Precio de venta y COSTO según la marca (Orchard usa el precio público directo).
@@ -1536,32 +1538,49 @@ const CONVERSE_TABLE_TAG: Record<number, string> = {
   3: 'TABLA DE TALLE CONVERSE MUJER',
   4: 'TABLA DE TALLE CONVERSE NIÑO',
   5: 'TABLA DE TALLE CONVERSE BEBE',
+  6: 'TABLA DE TALLE CONVERSE MUJER 2',
 };
 
 // Adivina la categoría de un producto Converse por sus talles:
 //   0  = Accesorio (talle único / TU) -> sin variantes de talle
 //   -1 = Indumentaria (talles en letras S/M/L) -> se dejan como vienen
-//   1  = Zapatilla (talles numéricos) -> aplica tabla de talle (default Tabla 1)
+//   -2 = Talles numéricos sin curva conocida: requiere elegir una tabla.
 export function detectConverseKind(sizes: Record<string, number>): number {
   const keys = Object.keys(sizes || {});
   if (keys.length === 0) return 0;
   const esTU = (s: string) => ['tu', 'unico', 'único', 'u', ''].includes(s.toLowerCase());
   if (keys.every(esTU)) return 0;
-  if (keys.some(k => /^\d/.test(k))) return 1;
+  if (keys.some(k => /^\d+(?:[.,]\d+)?$/.test(k.trim()))) return -2;
   return -1;
 }
 
 // Elige la tabla del producto Converse: primero por el MAESTRO de curvas (código ->
-// tabla oficial), y si no está, adivina por los talles.
+// tabla oficial). Sin código conocido, el calzado queda pendiente de revisión.
 export function autoConverseTable(coditm: string, sizes: Record<string, number>): number {
-  const t = CONVERSE_CODE_TABLE[String(coditm || '').toUpperCase()];
+  const t = CONVERSE_CODE_TABLE[String(coditm || '').trim().toUpperCase()];
   if (t) return t;
   return detectConverseKind(sizes);
 }
 
+export function problemaTablaConverse(prod: MissingProduct, seleccion?: number): string | null {
+  const kind = seleccion ?? autoConverseTable(prod.coditm, prod.sizes);
+  if (kind === 0 || kind === -1) return null;
+  const tabla = TABLA_POR_NUMERO[kind];
+  if (!tabla) return 'Sin tabla de talle identificada. Elegí la tabla correcta antes de crear el producto.';
+  const fuera = Object.keys(prod.sizes).filter(size => tabla[size] === undefined);
+  return fuera.length ? `Talles del proveedor sin equivalencia en esta tabla: ${fuera.join(', ')}. Revisá la tabla antes de crear el producto.` : null;
+}
+
 export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tableSelections: Record<string, number> = {}): MatrixProduct[] {
   const out: MatrixProduct[] = [];
-  const convTables = [convTable1, convTable2, convTable3, convTable4, convTable5];
+
+  if (config.brand === 'converse') {
+    const errores = result.missingProducts.flatMap(prod => {
+      const problema = problemaTablaConverse(prod, tableSelections[prod.coditm]);
+      return problema ? [`${prod.coditm}: ${problema}`] : [];
+    });
+    if (errores.length) throw new Error(errores.join('\n'));
+  }
 
   for (const prod of result.missingProducts) {
     let handle = prod.coditm.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -1612,9 +1631,9 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
         variants.push({ sku: prod.coditm, optionName: 'Title', optionValue: 'Default Title', price, cost, qty: totalQty });
       } else {
         // Zapatilla (kind>=1): aplica la tabla US->ARG. Indumentaria (kind=-1): talle tal cual.
-        const table = kind >= 1 ? (convTables[kind - 1] || convTable1) : null;
+        const table = kind >= 1 ? TABLA_POR_NUMERO[kind] : null;
         for (const [size, qty] of sortSizeEntries(Object.entries(prod.sizes))) {
-          const talleShown = table ? (table[String(size)] || String(size)) : String(size);
+          const talleShown = table ? table[String(size)] : String(size);
           variants.push({ sku: `${prod.coditm}-${talleShown}`, optionName: 'Talle', optionValue: talleShown, price, cost, qty: Number(qty) || 0 });
           hasSizes = true;
         }
@@ -1668,7 +1687,7 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
   return out;
 }
 
-export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _tableSelections?: Record<string, number>) {
+export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, tableSelections?: Record<string, number>) {
   if (result.missingProducts.length === 0) {
     alert("No hay productos faltantes para descargar.");
     return;
@@ -1695,6 +1714,31 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, _table
   ];
 
   let csvContent = headers.join(',') + '\n';
+
+  // Converse usa exactamente las variantes y la tabla elegida para el alta por API.
+  if (config.brand === 'converse') {
+    for (const prod of buildMatrixProducts(result, config, tableSelections)) {
+      prod.variants.forEach((v, index) => {
+        const row: Record<string, string | number> = {
+          'URL handle': prod.handle, SKU: v.sku,
+          'Option1 name': v.optionName, 'Option1 value': v.optionValue,
+          Price: v.price, 'Cost per item': v.cost, 'Charge tax': 'TRUE',
+          'Inventory tracker': 'shopify', 'Inventory quantity': v.qty,
+          'Continue selling when out of stock': 'DENY',
+          'Weight value (grams)': prod.weightGrams, 'Weight unit for display': 'g',
+          'Requires shipping': 'TRUE', 'Fulfillment service': 'manual',
+        };
+        if (index === 0) Object.assign(row, {
+          Title: prod.title, Description: prod.title, Vendor: prod.vendor,
+          Type: prod.productType, Tags: prod.tags.join(', '),
+          'Published on online store': 'FALSE', Status: 'Active',
+        });
+        csvContent += headers.map(h => escapeCSV(row[h] ?? '')).join(',') + '\n';
+      });
+    }
+    triggerDownload(csvContent, `Matriz_Faltantes_${config.brand}_${todayStamp()}.csv`);
+    return;
+  }
 
   result.missingProducts.forEach(prod => {
     let handle = prod.coditm.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -1831,22 +1875,12 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
 
     let handle = data.shopifyHandle || coditm.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     
-    // Auto-detect table for Converse
+    // Converse: misma prioridad de etiqueta/maestro que la simulación.
     let bestTable: Record<string, string> | null = null;
-    if (config.brand === 'converse' && data.shopifyVariants) {
-       const tables = [convTable1, convTable2, convTable3, convTable4, convTable5];
-       const variantTitles = data.shopifyVariants.map((v: any) => String(v.title));
-       let bestScore = -1;
-       for (const table of tables) {
-          let score = 0;
-          for (const size of Object.keys(data.sizes)) {
-             if (table[size] && variantTitles.includes(table[size])) score++;
-          }
-          if (score > bestScore) {
-             bestScore = score;
-             bestTable = table;
-          }
-       }
+    if (config.brand === 'converse') {
+      const info = converseTablaInfo(coditm, data.shopifyTags || '');
+      if (info.origen === 'default') throw new Error(`${coditm}: sin tabla de talle identificada. Revisá la etiqueta antes de exportar stock.`);
+      bestTable = info.tabla;
     }
 
     for (const [size, qty] of sortSizeEntries(Object.entries(data.sizes))) {
@@ -1859,7 +1893,8 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
 
       let option1Value = size;
       if (config.brand === 'converse' && bestTable) {
-         option1Value = bestTable[size] || size;
+         if (bestTable[size] === undefined) throw new Error(`${coditm}: talle US ${size} sin equivalencia en la tabla. Revisá antes de exportar stock.`);
+         option1Value = bestTable[size];
       } else if (config.brand === 'lecoq') {
          const sizeNum = parseInt(size, 10);
          if (!isNaN(sizeNum)) {
@@ -1869,7 +1904,10 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
 
       // Buscar variante exacta en Shopify
       let exactVariant = null;
-      if (data.shopifyVariants) {
+      if (config.brand === 'converse') {
+         exactVariant = data.shopifyVariants?.find((v: any) => talleMatches(option1Value, v.title));
+         if (!exactVariant) throw new Error(`${coditm}: no se encontró el talle AR ${option1Value} en Shopify. Revisá antes de exportar stock.`);
+      } else if (data.shopifyVariants) {
          exactVariant = data.shopifyVariants.find((v: any) => String(v.title) === String(option1Value) || String(v.sku).includes(coditm));
          if (!exactVariant) {
              // Si no coincide por titulo exacto, probamos si contiene

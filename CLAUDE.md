@@ -86,6 +86,32 @@ luxo     → LUXO
 
 ## 3. Reglas de negocio por marca
 
+### Converse — Mujer 2 / curva 7 (12-sep-2026)
+
+- Etiqueta confirmada por la usuaria: **`TABLA DE TALLE CONVERSE MUJER 2`**.
+  Corresponde a la **curva 7**, con identificador interno **6** en el selector.
+  La tabla Mujer anterior sigue siendo curva **8A** (identificador interno 3).
+- No son equivalentes: US 8 → AR 38 en Mujer 2 y AR 39 en Mujer.
+  La curva 7 ya estaba completa en `tallesConverseLecoq.json`; se usa directamente.
+- El maestro asigna curva 7 a `A13016C`, `A13014C`, `A15435C`, `A14160C`.
+  Antes `converseCurvas.ts` las agrupaba erróneamente con Mujer. Ahora propone Mujer 2.
+- Para productos existentes **sigue mandando la etiqueta de Shopify**. Cambiar el
+  código no renombra variantes existentes ni migra productos que aún tengan la
+  etiqueta Mujer anterior. Esos productos deben revisarse con sus datos reales.
+- Sin curva conocida, los productos nuevos con talles numéricos quedan como
+  **Sin tabla identificada** (internamente -2). Se muestra el motivo y se bloquea
+  la creación de los seleccionados hasta elegir tabla o destildar los pendientes.
+  Si un talle no existe en la tabla elegida, también se bloquea: nunca se conserva
+  el US como si fuera AR. Ropa y accesorios mantienen sus opciones sin conversión.
+- El CSV de nuevos Converse usa la misma conversión, selección manual y etiqueta
+  que el alta directa. El CSV de inventario usa etiqueta/maestro, y exige una
+  variante del talle convertido: no elige por coincidencia del código solamente.
+- Pruebas: `converseMujer2.test.ts`, incluyendo creación bloqueada sin llamadas a
+  Shopify, las equivalencias de la curva 7, prioridad de etiqueta, stock y CSV.
+- Al verificar tipos aparecieron dos problemas previos: `inventoryItemId` estaba
+  declarado dos veces y la consulta paginada de `restockLogic.ts` necesitaba una
+  anotación de tipo. Se corrigieron sin cambiar el comportamiento.
+
 ### 3.1 Converse y Le Coq ("iD") — PRECIOS
 
 Todo sale de **un solo archivo**: la `PlantillaPedido.xlsx` de iD (ver 3.1-ter).

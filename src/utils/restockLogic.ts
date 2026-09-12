@@ -115,7 +115,7 @@ export async function analyzeRestock(
 
   while (hasNext && guard < 200) {
     guard++;
-    const data = await shopifyGraphQL<any>(PRODUCTS_QUERY, {
+    const data: any = await shopifyGraphQL<any>(PRODUCTS_QUERY, {
       cursor,
       loc: locId,
       q: 'vendor:Converse OR vendor:"Le Coq Sportif"',

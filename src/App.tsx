@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, downloadInventoryCSV, autoConverseTable } from './utils/syncLogic';
+import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, downloadInventoryCSV, autoConverseTable, problemaTablaConverse } from './utils/syncLogic';
 import type { SyncConfig, SyncResult } from './utils/syncLogic';
 import { planStockWrite, executeStockWrite, activarEnSucursal, enderezarTallesCorridos, crearTallesFaltantes } from './utils/writeStock';
 import type { StockPlan } from './utils/writeStock';
@@ -240,6 +240,9 @@ export default function App() {
     setLoading(true);
     setLoadingText('Analizando archivos y conectando con Shopify...');
     setResult(null);
+    setTableSelections({});
+    setCreateConfirm(false);
+    setCreateDone(null);
     setPreviewReady(false);
 
     try {
@@ -570,6 +573,8 @@ export default function App() {
                cosas sueltas que no quiere publicar). */}
           {result?.missingProducts && result.missingProducts.length > 0 && (() => {
             const elegidos = paraCrear(result);
+            const pendientes = config.brand === 'converse'
+              ? elegidos.filter(p => problemaTablaConverse(p, tableSelections[p.coditm])) : [];
             const total = result.missingProducts.length;
             return (
             <div style={{ marginTop: '2rem', padding: '1rem', border: '1px solid #8b5cf6', borderRadius: '8px', background: 'rgba(139,92,246,0.06)' }}>
@@ -578,6 +583,11 @@ export default function App() {
                 Se crean en <strong>Activo</strong>, publicados <strong>solo en Point of Sale</strong>, con el stock del archivo.
                 Destildá lo que no quieras publicar. Probá primero con 1.
               </p>
+
+              {pendientes.length > 0 && <p role="alert" style={{ color: '#fbbf24' }}>
+                Hay {pendientes.length} productos seleccionados con la tabla de talle pendiente.
+                Revisá la tabla o destildalos para crear los demás.
+              </p>}
 
               <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '0.6rem', fontSize: '0.85rem' }}>
                 <button style={{ padding: '4px 10px', borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.06)', color: 'white', fontSize: '0.8rem' }}
@@ -592,6 +602,7 @@ export default function App() {
               <div style={{ maxHeight: '320px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)', borderRadius: '6px', marginBottom: '0.8rem' }}>
                 {result.missingProducts.map(p => {
                   const off = !!noCrear[p.coditm];
+                  const problema = config.brand === 'converse' ? problemaTablaConverse(p, tableSelections[p.coditm]) : null;
                   const talles = Object.entries(p.sizes);
                   const unidades = talles.reduce((a, [, q]) => a + (Number(q) || 0), 0);
                   return (
@@ -606,19 +617,22 @@ export default function App() {
                           {talles.length} {talles.length === 1 ? 'talle' : 'talles'} · {unidades} unidades
                           {' · '}{talles.slice(0, 8).map(([t, q]) => `${t}:${q}`).join('  ')}{talles.length > 8 ? ' …' : ''}
                         </div>
+                        {problema && <div style={{ fontSize: '0.8rem', color: '#fbbf24', marginTop: 4 }}>{problema}</div>}
                       </div>
                       {config.brand === 'converse' && (
                         <select
                           value={tableSelections[p.coditm] ?? autoConverseTable(p.coditm, p.sizes)}
-                          onChange={e => setTableSelections({ ...tableSelections, [p.coditm]: parseInt(e.target.value) })}
+                          onChange={e => { setTableSelections({ ...tableSelections, [p.coditm]: parseInt(e.target.value) }); setCreateConfirm(false); }}
                           disabled={off}
                           style={{ padding: '0.3rem', borderRadius: '4px', background: 'var(--bg-color)', color: 'white', border: '1px solid var(--glass-border)', fontSize: '0.78rem', maxWidth: '260px' }}
                         >
+                          <option value={-2} disabled>⚠ Sin tabla identificada — elegí una</option>
                           <option value={0}>🎒 Accesorio (sin talle)</option>
                           <option value={-1}>👕 Indumentaria (talle como viene)</option>
                           <option value={1}>👟 Tabla 1 (Empieza en ARG 34 = US 3)</option>
                           <option value={2}>👟 Tabla 2 (Empieza en ARG 35 = US 3)</option>
                           <option value={3}>👟 Tabla Mujer (Empieza en ARG 35 = US 5)</option>
+                          <option value={6}>👟 Tabla Mujer 2 (Curva 7 · ARG 38 = US 8)</option>
                           <option value={4}>👟 Tabla Niño (Empieza en ARG 27 = US 10.5)</option>
                           <option value={5}>👟 Tabla Bebe (Empieza en ARG 20 = US 4)</option>
                         </select>
@@ -629,7 +643,7 @@ export default function App() {
               </div>
 
               <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
-                <button className="btn-primary" style={{ background: '#3b82f6' }} onClick={() => handleCreateProducts(1)} disabled={creating || elegidos.length === 0}>
+                <button className="btn-primary" style={{ background: '#3b82f6' }} onClick={() => handleCreateProducts(1)} disabled={creating || elegidos.length === 0 || pendientes.length > 0}>
                   {creating ? <span className="loader"></span> : '🧪 Crear 1 de prueba (el primero tildado)'}
                 </button>
               </div>
@@ -641,7 +655,7 @@ export default function App() {
                 className="btn-primary"
                 style={{ background: createConfirm && elegidos.length > 0 ? '#8b5cf6' : '#6b7280', marginTop: '0.6rem' }}
                 onClick={() => handleCreateProducts()}
-                disabled={!createConfirm || creating || elegidos.length === 0}
+                disabled={!createConfirm || creating || elegidos.length === 0 || pendientes.length > 0}
               >
                 {creating ? <span className="loader"></span> : `🚀 Crear ${elegidos.length} en Shopify`}
               </button>
