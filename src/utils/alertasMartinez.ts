@@ -90,6 +90,33 @@ function siguiente<T>(conn: Connection<T>, anterior: string | null): string | nu
   return cursor;
 }
 
+export function claveModelo(f: AlertaMartinez): string {
+  return JSON.stringify([f.marca, f.codigo || f.titulo]);
+}
+
+export function ordenarAlertasPorModelo(filas: AlertaMartinez[]): AlertaMartinez[] {
+  const grupos = new Map<string, AlertaMartinez[]>();
+  for (const fila of filas) {
+    const clave = claveModelo(fila);
+    const grupo = grupos.get(clave) || [];
+    grupo.push(fila);
+    grupos.set(clave, grupo);
+  }
+  const talle = (f: AlertaMartinez) => f.tallePedido || f.talleAr || f.variante;
+  const letras = ['XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', '3XL', '4XL', 'TU', 'U'];
+  const compararTalles = (a: AlertaMartinez, b: AlertaMartinez) => {
+    const ta = talle(a).replace(',', '.'), tb = talle(b).replace(',', '.');
+    if (/^\d+(\.\d+)?$/.test(ta) && /^\d+(\.\d+)?$/.test(tb)) return Number(ta) - Number(tb);
+    const ia = letras.indexOf(ta.toUpperCase()), ib = letras.indexOf(tb.toUpperCase());
+    if (ia >= 0 && ib >= 0) return ia - ib;
+    return ta.localeCompare(tb, 'es', { numeric: true });
+  };
+  return [...grupos.values()].sort((a, b) =>
+    Math.min(...a.map(f => f.stockMartinez)) - Math.min(...b.map(f => f.stockMartinez)) ||
+    a[0].titulo.localeCompare(b[0].titulo) || claveModelo(a[0]).localeCompare(claveModelo(b[0]))
+  ).flatMap(grupo => grupo.sort(compararTalles));
+}
+
 export async function consultarAlertasMartinez(onProgress?: (n: number) => void): Promise<ResultadoAlertas> {
   const locations: { id: string; name: string }[] = [];
   let cursor: string | null = null;
@@ -116,8 +143,7 @@ export async function consultarAlertasMartinez(onProgress?: (n: number) => void)
     }
     onProgress?.(escaneadas);
   } while (cursor);
-  filas.sort((a, b) => a.stockMartinez - b.stockMartinez || a.titulo.localeCompare(b.titulo) || a.variante.localeCompare(b.variante, 'es', { numeric: true }));
-  return { filas, escaneadas, generadoEn: new Date().toISOString() };
+  return { filas: ordenarAlertasPorModelo(filas), escaneadas, generadoEn: new Date().toISOString() };
 }
 
 export function descargarAlertasMartinez(filas: AlertaMartinez[]) {

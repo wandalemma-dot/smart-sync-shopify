@@ -293,6 +293,9 @@ Código en `src/utils/ventasCsv.ts` + `src/Reposicion.tsx`.
 - Conservar alertas sin conversión, indicando revisión; respetar etiquetas de talle.
 - Mostrar el estado de borradores/archivados. Exportar las alertas filtradas por separado.
 - Implementación: `alertasMartinez.ts` y `AlertasMartinez.tsx`. Solo lectura.
+- Los talles de cada modelo/código van siempre juntos, ordenados por talle iD,
+  tanto en pantalla como en CSV. Separación visual entre modelos. El menor stock
+  prioriza el modelo completo, nunca separa sus talles (pedido del 16-sep-2026).
 
 ### 2.3 RECUPERAR productos borrados (transferencias viejas)
 

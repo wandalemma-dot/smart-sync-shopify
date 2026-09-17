@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { consultarAlertasMartinez, descargarAlertasMartinez } from './utils/alertasMartinez';
+import { consultarAlertasMartinez, descargarAlertasMartinez, claveModelo } from './utils/alertasMartinez';
 import type { ResultadoAlertas } from './utils/alertasMartinez';
 
 export default function AlertasMartinez({ revision }: { revision: number }) {
@@ -51,12 +51,12 @@ export default function AlertasMartinez({ revision }: { revision: number }) {
         </select>
       </div>
       {filas.length === 0 ? <p>{resultado.filas.length ? 'No hay coincidencias con estos filtros.' : 'No hay variantes con 3 unidades o menos en Martínez y disponibilidad en iD.'}</p> : <>
-        <p style={{ fontSize: '0.85rem' }}>Mostrando {filas.length} alertas, de menor a mayor stock en Martínez.</p>
+        <p style={{ fontSize: '0.85rem' }}>Mostrando {filas.length} alertas, agrupadas por modelo y código. Talles de iD de menor a mayor dentro de cada modelo.</p>
         <div style={{ overflow: 'auto', maxHeight: 500, border: '1px solid #475569', borderRadius: 8 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.85rem' }}>
             <thead><tr>{['Producto / código', 'Talle tienda', 'Talle iD', 'Stock Martínez', 'Disponible iD'].map(t =>
               <th key={t} style={{ ...celda, position: 'sticky', top: 0, background: '#1f2937' }}>{t}</th>)}</tr></thead>
-            <tbody>{filas.map(f => <tr key={f.id} style={{ borderTop: '1px solid #374151' }}>
+            <tbody>{filas.map((f, i) => <tr key={f.id} style={{ borderTop: i === 0 || claveModelo(f) !== claveModelo(filas[i - 1]) ? '3px solid #94a3b8' : '1px solid #374151' }}>
               <td style={celda}><strong>{f.titulo}</strong><div>{f.codigo || 'Sin código'} · {f.marca}</div>
                 {f.estado !== 'ACTIVE' && <div style={{ color: '#fbbf24' }}>{f.estado === 'DRAFT' ? 'Borrador' : 'Archivado'}</div>}
                 {f.variante !== f.talleAr && <div>{f.variante}</div>}

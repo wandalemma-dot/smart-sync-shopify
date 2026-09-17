@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { alertaDeVariante, consultarAlertasMartinez } from '../alertasMartinez';
+import { alertaDeVariante, consultarAlertasMartinez, ordenarAlertasPorModelo } from '../alertasMartinez';
 import type { VarianteAlerta } from '../alertasMartinez';
 import { shopifyGraphQL } from '../shopify';
 vi.mock('../shopify', async importOriginal => ({ ...await importOriginal<typeof import('../shopify')>(), shopifyGraphQL: vi.fn() }));
@@ -53,7 +53,7 @@ describe('alertas de Martínez', () => {
       .mockResolvedValueOnce({ productVariants: conexion([variante(3)], 'v2') })
       .mockResolvedValueOnce({ productVariants: conexion([{ ...variante(0), id: 'v2' }]) });
     const res = await consultarAlertasMartinez();
-    expect(res.filas.map(f => f.stockMartinez)).toEqual([0, 3]);
+    expect(res.filas.map(f => f.stockMartinez)).toEqual([3, 0]);
     expect(res.escaneadas).toBe(2);
     expect(vi.mocked(shopifyGraphQL).mock.calls[3][1]).toEqual({ cursor: 'v2', mar: 'mar', idl: 'id' });
     expect(vi.mocked(shopifyGraphQL).mock.calls.every(([q]) => !q.includes('mutation'))).toBe(true);
@@ -61,6 +61,16 @@ describe('alertas de Martínez', () => {
   it('falla explícitamente si falta la sucursal', async () => {
     vi.mocked(shopifyGraphQL).mockResolvedValueOnce({ locations: conexion([]) });
     await expect(consultarAlertasMartinez()).rejects.toThrow('sucursal');
+  });
+  it('mantiene todos los talles de un código juntos aunque cambie el stock y haya títulos iguales', () => {
+    const base = alertaDeVariante(variante())!;
+    const filas = [
+      { ...base, id: 'a8', codigo: 'A', tallePedido: '8', stockMartinez: 0 },
+      { ...base, id: 'b7', codigo: 'B', tallePedido: '7', stockMartinez: 0 },
+      { ...base, id: 'a6', codigo: 'A', tallePedido: '6', stockMartinez: 3 },
+      { ...base, id: 'a75', codigo: 'A', tallePedido: '7.5', stockMartinez: 1 },
+    ];
+    expect(ordenarAlertasPorModelo(filas).map(f => f.id)).toEqual(['a6', 'a75', 'a8', 'b7']);
   });
   it('no entrega resultados parciales ante fallas de página', async () => {
     vi.mocked(shopifyGraphQL)
