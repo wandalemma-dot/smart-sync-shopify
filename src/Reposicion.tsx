@@ -14,6 +14,7 @@
 import { useState, useRef } from 'react';
 import { leerVentasCsv, armarPedidoDesdeVentas, descargarPedidoCSV } from './utils/ventasCsv';
 import type { ResultadoPedido, FilaPedido } from './utils/ventasCsv';
+import AlertasMartinez from './AlertasMartinez';
 
 export default function Reposicion() {
   const [archivo, setArchivo] = useState<File | null>(null);
@@ -21,6 +22,7 @@ export default function Reposicion() {
   const [leidos, setLeidos] = useState(0);
   const [res, setRes] = useState<ResultadoPedido | null>(null);
   const [buscar, setBuscar] = useState('');
+  const [revisionAlertas, setRevisionAlertas] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const cargar = async (f: File) => {
@@ -37,6 +39,7 @@ export default function Reposicion() {
       const lineas = leerVentasCsv(texto);
       if (!lineas.length) { alert('No encontré ninguna línea de producto en ese archivo. ¿Es el export de Órdenes?'); return; }
       setRes(await armarPedidoDesdeVentas(lineas, setLeidos));
+      setRevisionAlertas(n => n + 1);
     } catch (e: any) {
       alert('Error armando el pedido: ' + e.message);
     } finally {
@@ -165,6 +168,7 @@ export default function Reposicion() {
           )}
         </div>
       )}
+      <AlertasMartinez revision={revisionAlertas} />
     </div>
   );
 }

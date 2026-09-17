@@ -281,6 +281,19 @@ Código en `src/utils/ventasCsv.ts` + `src/Reposicion.tsx`.
 >
 > 🛡 Tests en `src/utils/__tests__/ventasCsv.test.ts` (incluido ese caso exacto).
 
+### Alertas de Martínez (16-sep-2026)
+
+- Reposición suma un apartado independiente para Converse y Le Coq: variantes
+  con disponible en Martínez <= 3 y disponible en iD > 0. Incluye cero y negativos.
+- Wanda elige la cantidad: no calcular sugeridos ni alterar el pedido del CSV.
+- Consulta al terminar de armar las órdenes o con botón propio, sin necesitar CSV.
+- Cruce por la misma variante de Shopify en ambas sucursales. Nivel null no es
+  cero: excluir variantes sin alta en cualquiera de las dos ubicaciones.
+- Paginar todas las variantes y sucursales. Mostrar errores, nunca resultados parciales.
+- Conservar alertas sin conversión, indicando revisión; respetar etiquetas de talle.
+- Mostrar el estado de borradores/archivados. Exportar las alertas filtradas por separado.
+- Implementación: `alertasMartinez.ts` y `AlertasMartinez.tsx`. Solo lectura.
+
 ### 2.3 RECUPERAR productos borrados (transferencias viejas)
 
 Wanda tiene transferencias viejas que apuntan a productos que ya borró, y para
