@@ -9,6 +9,7 @@ import { parseVart, VART_LOCATION, VART_DESCUENTO } from './vartLogic';
 import { esPlantillaPedido, parsePlantillaPedido, tituloPedido } from './plantillaPedido';
 import { parseOrng, costoOrng, precioOrng } from './orngLogic';
 import type { ListaPrecios } from './listaPrecios';
+import { unidadesPorPackId } from './packsId';
 
 export type SyncMode = 'all' | 'stock_only' | 'cost_only' | 'price_only';
 
@@ -666,7 +667,7 @@ export async function processFiles(
   listaPrecios?: ListaPrecios | null,
 ): Promise<SyncResult> {
   const alerts: AlertMessage[] = [];
-  const excelMap: Record<string, { wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyTags?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number, usaListaPrecios?: boolean, skuPorTalle?: Record<string, string>, whslDelArchivo?: boolean }> = {};
+  const excelMap: Record<string, { wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyTags?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number, usaListaPrecios?: boolean, skuPorTalle?: Record<string, string>, whslDelArchivo?: boolean, unidadesPorPack?: number }> = {};
 
   if (config.brand === 'bloque' && /\.xlsx?$/i.test(providerFile.name)) {
     // Bloque en Excel (ej. la preventa de Protec).
@@ -1009,6 +1010,8 @@ export async function processFiles(
           sizes: f.sizes,
           foundInShopify: false,
           title: tituloPedido(f),
+          // Leer el nombre original, antes de agregar el color.
+          unidadesPorPack: unidadesPorPackId(f.nombre),
           // El precio de ESTE archivo le gana a la sábana: es el que baja hoy.
           whslDelArchivo: true,
         };
@@ -1095,6 +1098,31 @@ export async function processFiles(
       data.costFinal = costoId(lista);               // lista - 7%
       data.publicPrice = precioId(cod, lista, p.retail); // sugerido o lista x2.27
       data.usaListaPrecios = true;
+    }
+  }
+
+  // Normalizar UNA sola vez, después de elegir el precio de lista de origen.
+  // No dividir el costo ya redondeado ni el precio de venta ya calculado.
+  if (config.brand === 'converse' || config.brand === 'lecoq') {
+    for (const [cod, data] of Object.entries(excelMap)) {
+      const pack = data.unidadesPorPack ?? unidadesPorPackId(data.title);
+      if (pack <= 1 || !(data.wholesale > 0)) continue;
+      const listaPack = data.wholesale;
+      data.wholesale = listaPack / pack;
+      // Operar en centavos desde el pack evita perder un centavo en X12
+      // por la división periódica (41.390 / 12, menos 7% = 3.207,725).
+      data.costFinal = Math.round(listaPack * (100 - ID_DESCUENTO_GENERAL * 100) / pack) / 100;
+      const retailPack = listaPrecios?.items[cod.toUpperCase()]?.retail || 0;
+      data.publicPrice = precioId(cod, data.wholesale, retailPack / pack);
+      data.usaListaPrecios = true; // Mantener el precio unitario en alta y actualización.
+      data.unidadesPorPack = pack;
+      alerts.push({
+        type: 'info',
+        title: `Costo por par · ${cod.toUpperCase()} · pack de ${pack}`,
+        message: `Lista del pack: $${listaPack.toLocaleString('es-AR')}. ` +
+          `Lista por par: $${data.wholesale.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}. ` +
+          `Costo por par con 7% de descuento: $${data.costFinal.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`,
+      });
     }
   }
 
@@ -1744,7 +1772,9 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, tableS
     let handle = prod.coditm.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     const vendor = prod.vendor || VENDOR_POR_MARCA[config.brand];
 
-    const price = calcSellPrice(config.brand, prod.wholesale, prod.publicPrice || 0);
+    const price = prod.usaListaPrecios && prod.publicPrice
+      ? prod.publicPrice
+      : calcSellPrice(config.brand, prod.wholesale, prod.publicPrice || 0);
     const cost = prod.costFinal ?? calcCost(config.brand, prod.wholesale);
 
     // Orchard: nombre/tag/handle según tipo + descripción (gorro, gorra, remera, etc.)

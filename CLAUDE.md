@@ -114,6 +114,26 @@ luxo     → LUXO
 
 ### 3.1 Converse y Le Coq ("iD") — PRECIOS
 
+#### Packs vendidos por par (17-sep-2026)
+
+- Wanda compra al proveedor por pack y vende por par. El precio de lista que
+  informa iD corresponde al pack completo. Aplica a **Converse y Le Coq**.
+- La cantidad varía: `X6`, `X 6`, `X12`, etc. Puede estar **al final o en medio**
+  del nombre: caso confirmado `LAN0226035P`, `PUMAS HOME SOCKS X 6 CON ANTIDES`.
+  Exigir separadores: `A123X6` o `X2C` no son cantidades de pack.
+  Leer el nombre original antes de agregar el color. No buscar en SKU ni talles.
+- Dividir la lista por esa cantidad **una sola vez**, después de elegir la fuente
+  de precios. Aplicar el 7% de descuento y el markup sobre el valor por par.
+  Redondear el costo final a centavos, sin redondear antes la división.
+- Ejemplo: pack de 6 a $41.390 → lista por par $6.898,333… → costo con 7%
+  $6.415,45 y precio con markup 2,27/terminación 900 de $15.900.
+- La simulación muestra el pack detectado y el costo por par. La misma base
+  alimenta actualización, alta y CSV. Productos sin sufijo conservan su lógica.
+- Este cambio convierte **precios/costos**. No multiplica existencias ni modifica
+  cantidades de reposición: esa conversión de cantidades es un trabajo separado.
+- Pruebas: `packsId.test.ts` (incluye ambos proveedores, X12, color separado,
+  precedencia de plantilla sobre sábana y protección frente a códigos/talles).
+
 Todo sale de **un solo archivo**: la `PlantillaPedido.xlsx` de iD (ver 3.1-ter).
 Su columna `Precio` es el **precio de lista (WHSL)**.
 
