@@ -70,6 +70,28 @@ const cfg = (brand: string) => ({ brand } as any);
 beforeEach(() => graphql.mockReset());
 
 describe('talles que el proveedor ya no tiene', () => {
+  it.each(['converse', 'lecoq'])('indumentaria %s: CTO0226102 agota S/M/L y conserva XL/XXL en iD', async brand => {
+    responder([variante('S', 50), variante('M', 50), variante('L', 49), variante('XL', 27), variante('XXL', 13)], 'cto0226102');
+    const plan = await planStockWrite(resultado({ XL: 27, XXL: 13 }), cfg(brand));
+    expect(plan.changes.map(c => [c.talle, c.current, c.desired])).toEqual([['S', 50, 0], ['M', 50, 0], ['L', 49, 0]]);
+    expect(plan.unchangedRows.map(r => r.talle)).toEqual(['XL', 'XXL']);
+    expect(plan.locationId).toBe(LOC);
+    expect(graphql.mock.calls.filter(([q]) => !q.includes('locations')).every(([, v]) => v.loc === LOC)).toBe(true);
+    expect(graphql.mock.calls.every(([q]) => !q.includes('mutation'))).toBe(true);
+  });
+
+  it.each(['converse', 'lecoq'])('%s: producto presente sin ningún talle disponible baja todo a cero', async brand => {
+    responder([variante('S', 4), variante('M', 6)], '');
+    const plan = await planStockWrite(resultado({}), cfg(brand));
+    expect(plan.changes.map(c => c.desired)).toEqual([0, 0]);
+  });
+
+  it('calzado sin tabla confirmada sigue protegido cuando tiene stock por convertir', async () => {
+    responder([variante('40', 5), variante('42', 7)], '');
+    const plan = await planStockWrite(resultado({ '8': 5 }), cfg('converse'));
+    expect(plan.changes.filter(c => c.desired === 0)).toHaveLength(0);
+  });
+
   it('pone en 0 el talle que tiene stock en Shopify y no viene en el Excel', async () => {
     responder([variante('40', 5), variante('42', 7)]);
     const plan = await planStockWrite(resultado({ '8': 5 }), cfg('converse'));

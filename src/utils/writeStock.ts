@@ -296,7 +296,10 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     // usando la tabla que indica la etiqueta del producto (TABLA DE TALLE CONVERSE X).
     // La tabla sale del CÓDIGO (maestro de curvas del proveedor). La etiqueta
     // solo se usa de respaldo, y únicamente la que dice "TABLA DE TALLE".
-    const info = config.brand === 'converse'
+    // Las letras y el talle único no requieren tabla US -> AR. Sin stock
+    // en ningún talle tampoco hay una conversión pendiente que resolver.
+    const requiereTabla = Object.keys(d.sizes || {}).some(size => /^\d+(?:[.,]\d+)?$/.test(size.trim()));
+    const info = config.brand === 'converse' && requiereTabla
       ? converseTablaInfo(code, tagsByHandle[handle] || '')
       : null;
     const convTable = info ? info.tabla : null;
@@ -304,6 +307,8 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     // producto no se barre a cero.
     if (info && info.origen === 'default') conversionDudosa.add(handle);
     codigoPorHandle.set(handle, code);
+    // También recorrer productos presentes pero completamente agotados.
+    if (!cubiertasPorHandle.has(handle)) cubiertasPorHandle.set(handle, new Set());
     evaluarCorrido(handle, code, d, convTable);
     // Un producto con el talle corrido no se barre a cero: primero hay que
     // enderezarlo, si no apagaríamos talles que en realidad tienen mercadería.

@@ -236,6 +236,8 @@ Código en `src/utils/plantillaPedido.ts`.
 
 ### 3.1-quinquies El talle que ya no viene → VA A CERO (28-ago-2026)
 
+**Corrección CTO0226102:** la protección de tablas Converse solo aplica cuando hay talles numéricos del proveedor que convertir. No exigir tabla de calzado a indumentaria con S/M/L/XL/XXL o talle único. Inicializar el barrido también para productos presentes totalmente agotados (mapa de talles vacío). Caso probado: S=50, M=50, L=49 → cero; XL=27 y XXL=13 se conservan. Wanda reconfirmó: esto aplica a todos los agotados del catálogo iD (Converse/Le Coq), **solo en iD; conservar siempre DEPOSITO MARTINEZ**. Mantener las protecciones de calzado con tabla incierta o stock positivo sin ubicar.
+
 Regla de Wanda, dicha así:
 
 > «Si yo en mi tienda tengo un talle 42 y vos en esta tabla lo ves con un guión,
