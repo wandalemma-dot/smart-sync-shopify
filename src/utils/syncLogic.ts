@@ -10,12 +10,13 @@ import { esPlantillaPedido, parsePlantillaPedido, tituloPedido } from './plantil
 import { parseOrng, costoOrng, precioOrng } from './orngLogic';
 import type { ListaPrecios } from './listaPrecios';
 import { unidadesPorPackId } from './packsId';
+import { parseNtf, tituloNtf, NTF_LOCATION } from './ntfLogic';
 
 export type SyncMode = 'all' | 'stock_only' | 'cost_only' | 'price_only';
 
 export interface SyncConfig {
   sheetName: string;
-  brand: 'lecoq' | 'converse' | 'bloque' | 'orchard' | 'luxo' | 'vart' | 'orng';
+  brand: 'lecoq' | 'converse' | 'bloque' | 'orchard' | 'luxo' | 'vart' | 'orng' | 'ntf';
 }
 
 export interface MissingProduct {
@@ -118,6 +119,7 @@ export const BRAND_PRICING: Record<SyncConfig['brand'], { markup: number; provid
   // accesorios 15%/x2,0), así que el precio se calcula fila por fila en
   // orngLogic.ts y acá se usa el ya calculado.
   orng:     { markup: 0,    providerDiscount: 0,    usePublicPrice: true,  redondear9900: false },
+  ntf:      { markup: 0,    providerDiscount: 0.15, usePublicPrice: true, redondear9900: false },
 };
 
 // ---- NOMBRE DE LA MARCA (campo "Proveedor"/Vendor de Shopify) ----
@@ -135,6 +137,7 @@ export const VENDOR_POR_MARCA: Record<SyncConfig['brand'], string> = {
   luxo: 'Luxo',
   vart: 'Vart',
   orng: 'ORNG',
+  ntf: 'NTF',
 };
 
 // Precio de venta final según la marca.
@@ -265,6 +268,7 @@ export function calcWeightGrams(brand: SyncConfig['brand'], artType?: string): n
   if (brand === 'orchard') return ORCHARD_WEIGHTS[artType || ''] ?? 250; // default remera
   if (brand === 'luxo') return TYPE_WEIGHTS[artType || ''] ?? 300; // por tipo, default 300
   if (brand === 'vart') return TYPE_WEIGHTS[artType || ''] ?? 300; // misma tabla que Luxo
+  if (brand === 'ntf') return TYPE_WEIGHTS[artType || ''] ?? 300;
   if (brand === 'orng') return TYPE_WEIGHTS[artType || ''] ?? 500; // mochilas y gorras
   return 0;
 }
@@ -515,6 +519,7 @@ export const STOCK_LOCATION: Record<SyncConfig['brand'], string> = {
   // Shopify (con emoji, si lo lleva). Hasta entonces la simulación de stock va a
   // avisar "no encontré la sucursal" en vez de escribir en el lugar equivocado.
   vart: VART_LOCATION,
+  ntf: NTF_LOCATION,
   // 🟡 PENDIENTE: Wanda todavía no definió la sucursal de ORNG. Igual su archivo
   // NO trae stock (es una lista de precios), así que por ahora no se usa.
   orng: 'ORNG',
@@ -529,6 +534,7 @@ const VENDOR_QUERY: Partial<Record<SyncConfig['brand'], string>> = {
   orchard: 'vendor:Orchard',
   luxo: 'vendor:Luxo',
   vart: 'vendor:Vart',
+  ntf: 'vendor:NTF',
   orng: 'vendor:Orng OR vendor:"Orng Mochilas"',
 };
 
@@ -872,6 +878,18 @@ export async function processFiles(
         message: 'El mismo CÓDIGO + COLOR aparece más de una vez y solo se tomó el primero: ' + orng.duplicados.join(', ') + '.',
       });
     }
+  } else if (config.brand === 'ntf') {
+    const ntf = parseNtf(await readExcel(providerFile, config.sheetName));
+    for (const [codigo, p] of Object.entries(ntf.productos)) {
+      excelMap[codigo] = {
+        wholesale: p.costoLista, publicPrice: p.precio, costFinal: p.costoFinal,
+        title: p.nombre, vendor: 'NTF', sizes: p.sizes, foundInShopify: false,
+        artType: p.nombre.split(' ')[0].toLowerCase(),
+      };
+    }
+    alerts.push({ type: 'info', title: `NTF: ${Object.keys(ntf.productos).length} productos`,
+      message: 'Precio final: columna E. Costo: precio ÷ 2 menos 15%. Margen bruto: 57,5%. Stock en NTF. Talles sin conversión.' });
+    for (const message of ntf.avisos) alerts.push({ type: 'warning', title: 'Revisar plantilla NTF', message });
   } else if (config.brand === 'vart') {
     // VART — misma plantilla INDY que Luxo, pero con validaciones propias.
     // La lectura y los controles viven en vartLogic.ts (ver ahí las reglas).
@@ -1322,6 +1340,13 @@ export async function processFiles(
            && titleCanon.includes('orchard')
            && (!aType || titleCanon.includes(aType))
            && titleCanon.includes(dCod);
+      } else if (config.brand === 'ntf') {
+         const codigo = cod.toLowerCase();
+         match = tags.split(',').some(t => t.trim() === codigo)
+           || prod.variants.edges.some(v => {
+             const sku = String(v.node.sku || '').toLowerCase();
+             return sku === codigo || sku.startsWith(`${codigo}-`);
+           });
       } else {
          // Converse / Le Coq: matchea por etiqueta (código en tags) O por el SKU
          // de las variantes que EMPIEZA con el código. Ignoramos espacios y guiones
@@ -1678,6 +1703,7 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
         // Vart manda su propio SKU por talle y NO se puede deducir del talle
         // (en ropa el sufijo es un código: 63=S, 64=M...). Usamos el del Excel.
         else if (config.brand === 'vart') variantSku = prod.skuPorTalle?.[String(size).toUpperCase()] || `${prod.coditm}-${String(size).toUpperCase()}`;
+        else if (config.brand === 'ntf') variantSku = `${prod.coditm}-${String(size).toUpperCase()}`;
         const useTitleOption = config.brand === 'luxo' && isUnico;
         if (!useTitleOption) hasSizes = true;
         variants.push({
@@ -1700,6 +1726,9 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
       const cat = lecoqCategoryWord(prod.title, talleEj);
       displayTitle = `${cat} Le Coq Sportif ${niceTitle(prod.title)}`.replace(/\s+/g, ' ').trim();
       productType = cat;
+    } else if (config.brand === 'ntf') {
+      displayTitle = tituloNtf(prod.title);
+      productType = displayTitle.split(' ')[0];
     } else {
       displayTitle = niceTitle(displayTitle);
     }
@@ -1744,7 +1773,7 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, tableS
   let csvContent = headers.join(',') + '\n';
 
   // Converse usa exactamente las variantes y la tabla elegida para el alta por API.
-  if (config.brand === 'converse') {
+  if (config.brand === 'converse' || config.brand === 'ntf') {
     for (const prod of buildMatrixProducts(result, config, tableSelections)) {
       prod.variants.forEach((v, index) => {
         const row: Record<string, string | number> = {
@@ -1934,9 +1963,9 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
 
       // Buscar variante exacta en Shopify
       let exactVariant = null;
-      if (config.brand === 'converse') {
+      if (config.brand === 'converse' || config.brand === 'ntf') {
          exactVariant = data.shopifyVariants?.find((v: any) => talleMatches(option1Value, v.title));
-         if (!exactVariant) throw new Error(`${coditm}: no se encontró el talle AR ${option1Value} en Shopify. Revisá antes de exportar stock.`);
+         if (!exactVariant) throw new Error(`${coditm}: no se encontró el talle ${option1Value} en Shopify. Revisá antes de exportar stock.`);
       } else if (data.shopifyVariants) {
          exactVariant = data.shopifyVariants.find((v: any) => String(v.title) === String(option1Value) || String(v.sku).includes(coditm));
          if (!exactVariant) {

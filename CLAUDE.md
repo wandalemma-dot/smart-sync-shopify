@@ -48,6 +48,19 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ## 1. Qué hace la app
 
+### NTF — regla confirmada por Wanda (21-sep-2026)
+
+- Marca y sucursal de Shopify: **NTF**, nombre exacto confirmado.
+- Plantilla INDY, hoja `Carga Productos`, encabezado `Código SKU` (fila 5 en el archivo original). A: código, B: nombre, E: **precio final de venta**, F: talle, G: cantidad.
+- Precio de venta = E, sin redondeo comercial. Costo de lista = E / 2. Costo final Shopify = (E / 2) × 0,85, redondeado a centavos. El 15% aplica a todos los productos NTF; D e I no reemplazan esta regla.
+- Ejemplo: $72.900 → lista $36.450 → costo $30.982,50; margen bruto sobre venta 57,5%, antes de gastos e impuestos.
+- Título de alta: tipo de prenda + NTF + descripción. `Bemurda Jean Over Negra NTF` → `Bermuda NTF Jean Over Negra`. NTF aparece una sola vez. Se corrigen los errores iniciales `Bemurda` y `ean` de la plantilla.
+- Agrupar por código A, conservar talles F sin conversión y cantidades G. SKU de variante = código-talle; etiqueta = código. Al comparar con Shopify, coincidencia de código completo o prefijo delimitado por guion, nunca prefijo numérico ambiguo.
+- Códigos distintos con el mismo nombre se mantienen separados y generan aviso para revisión. La plantilla original contiene esa situación en Montana Recto y Tamarindo Brown.
+- Fila sin precio, talle y cantidad: omitir con aviso. Datos parciales inválidos, talles duplicados o precios/nombres incompatibles para el mismo código: detener con error antes de cualquier escritura.
+- Alta por API y CSV comparten `buildMatrixProducts`. Inventario CSV busca el talle exacto y usa NTF. No borrar ni poner en cero otros productos por estar ausentes de esta plantilla.
+- Implementación: `ntfLogic.ts`; cobertura: `ntfLogic.test.ts`. Los tests usan Shopify simulado, sin escrituras en la tienda.
+
 App web (React + Vite, deploy automático en Vercel desde `main`) con dos pestañas:
 
 | Pestaña | Para qué sirve |

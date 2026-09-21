@@ -22,7 +22,7 @@ import {
 import type { SyncConfig } from '../syncLogic';
 
 // TODAS las marcas que ofrece el selector de la app.
-const MARCAS: SyncConfig['brand'][] = ['converse', 'lecoq', 'orchard', 'bloque', 'luxo', 'vart', 'orng'];
+const MARCAS: SyncConfig['brand'][] = ['converse', 'lecoq', 'orchard', 'bloque', 'luxo', 'vart', 'orng', 'ntf'];
 
 describe('cada marca está completa en las tablas', () => {
   it.each(MARCAS)('%s tiene nombre de marca (vendor)', (marca) => {

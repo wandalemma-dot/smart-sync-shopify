@@ -342,6 +342,7 @@ export default function App() {
                 <option value="orchard">Orchard</option>
                 <option value="luxo">Luxo</option>
                 <option value="vart">Vart</option>
+                <option value="ntf">NTF</option>
                 <option value="orng">ORNG</option>
                 <option value="bloque">Bloque (PDFs)</option>
               </select>
@@ -352,6 +353,14 @@ export default function App() {
                 🆕 <strong>ORNG</strong> aplica <strong>dos contratos</strong> según la columna ARTICULO:
                 mochilas y bolsos <strong>12,5% y ×2,1</strong>; gorras y accesorios <strong>15% y ×2,0</strong>.
                 El archivo <strong>no trae stock</strong>: solo precios y productos nuevos.
+              </p>
+            )}
+
+            {config.brand === 'ntf' && (
+              <p style={{ fontSize: '0.8rem', marginTop: '0.4rem' }}>
+                <strong>NTF</strong>: precio final de la columna E. Costo: precio ÷ 2 menos 15%.
+                Margen bruto: <strong>57,5%</strong>. Stock en la sucursal <strong>NTF</strong>.
+                Los títulos incluyen NTF después del tipo de prenda.
               </p>
             )}
 
