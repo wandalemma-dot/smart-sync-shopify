@@ -735,6 +735,13 @@ BACKPACK → Mochila  RUNNING/STAR → Zapatillas
 
 ### 3.5 Converse — productos nuevos
 
+- Títulos confirmados (21-sep-2026): TEE → Remera, JACKET → Campera,
+  JOGGER → Pantalón. Para indumentaria/accesorios, usar «Tipo Converse Modelo»;
+  quitar la palabra inglesa traducida y evitar duplicar Converse, conservar el
+  resto del modelo y la traducción habitual de colores. No cambiar calzado.
+- `tituloNuevoConverse()` se comparte entre alta/CSV y la vista previa «Nombre
+  en Shopify». No renombra productos existentes ni cambia stock o talles.
+
 Al crear, cada producto se clasifica (`autoConverseTable()`):
 `0` = Accesorio (sin talle) · `-1` = Indumentaria (talle tal cual) ·
 `1..5` = Zapatilla (aplica tabla US→ARG). Se pre-selecciona por el maestro de

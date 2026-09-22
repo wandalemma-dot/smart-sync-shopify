@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, downloadInventoryCSV, autoConverseTable, problemaTablaConverse } from './utils/syncLogic';
+import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, downloadInventoryCSV, autoConverseTable, problemaTablaConverse, tituloNuevoConverse } from './utils/syncLogic';
 import type { SyncConfig, SyncResult } from './utils/syncLogic';
 import { planStockWrite, executeStockWrite, activarEnSucursal, enderezarTallesCorridos, crearTallesFaltantes } from './utils/writeStock';
 import type { StockPlan } from './utils/writeStock';
@@ -621,6 +621,9 @@ export default function App() {
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: '0.85rem' }}>
                           <strong style={{ fontFamily: 'monospace' }}>{p.coditm.toUpperCase()}</strong> — {p.title}
+                          {config.brand === 'converse' && <div style={{ fontSize: '0.85rem', color: '#a7f3d0', marginTop: 4 }}>
+                            Nombre en Shopify: {tituloNuevoConverse(p.title, tableSelections[p.coditm] ?? autoConverseTable(p.coditm, p.sizes))}
+                          </div>}
                         </div>
                         <div style={{ fontSize: '0.72rem', opacity: 0.7 }}>
                           {talles.length} {talles.length === 1 ? 'talle' : 'talles'} · {unidades} unidades

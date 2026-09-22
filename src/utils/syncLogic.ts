@@ -1624,6 +1624,21 @@ export function problemaTablaConverse(prod: MissingProduct, seleccion?: number):
   return fuera.length ? `Talles del proveedor sin equivalencia en esta tabla: ${fuera.join(', ')}. Revisá la tabla antes de crear el producto.` : null;
 }
 
+export function tituloNuevoConverse(nombre: string, kind: number): string {
+  if (kind >= 1) return 'Zapatillas Converse ' + niceTitle(nombre);
+  const tipos: [RegExp, string][] = [
+    [/\bTEE\b/gi, 'Remera'],
+    [/\bJACKET\b/gi, 'Campera'],
+    [/\bJOGGER\b/gi, 'Pantalón'],
+  ];
+  for (const [patron, tipo] of tipos) {
+    if (!patron.test(nombre)) continue;
+    const modelo = nombre.replace(patron, ' ').replace(/\bCONVERSE\b/gi, ' ').replace(/\s+/g, ' ').trim();
+    return `${tipo} Converse ${niceTitle(modelo)}`.trim();
+  }
+  return 'Converse ' + niceTitle(nombre);
+}
+
 export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tableSelections: Record<string, number> = {}): MatrixProduct[] {
   const out: MatrixProduct[] = [];
 
@@ -1719,7 +1734,7 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
     // Título lindo (Título Normal + colores en español) para TODAS las marcas.
     // Converse lleva el prefijo del estilo de tu tienda ("Zapatillas Converse …").
     if (config.brand === 'converse') {
-      displayTitle = (converseKind && converseKind >= 1 ? 'Zapatillas Converse ' : 'Converse ') + niceTitle(prod.title);
+      displayTitle = tituloNuevoConverse(prod.title, converseKind ?? 0);
     } else if (config.brand === 'lecoq') {
       // Formato de la tienda: "{Categoría} Le Coq Sportif {Nombre}".
       const talleEj = Object.keys(prod.sizes)[0] || '';
