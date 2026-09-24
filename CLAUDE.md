@@ -48,6 +48,19 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ## 1. Qué hace la app
 
+### Armado de pedido iD (24-sep-2026)
+
+- Pestaña nueva `PedidoId.tsx`, colores habituales (Wanda corrigió la transcripción: NO pidió rosado). Reposición anterior se conserva aparte.
+- CSV de órdenes identifica IDs únicos; NO usar su Location ni cantidad vendida para inferir pendientes. Leer en vivo `Order.fulfillmentOrders`, filtrar sucursal normalizada iD y usar `remainingQuantity` de cada línea. Paginar ambos niveles; errores de lectura bloquean descarga.
+- Incluir solo órdenes abiertas, pagadas, no canceladas y sin etiquetas `pedido id` / `solucionar`. Preparaciones OPEN/IN_PROGRESS. Otros estados quedan avisados. No modificar Shopify, enviar al proveedor ni etiquetar automáticamente al descargar.
+- Falta en la conexión de la app el permiso `read_merchant_managed_fulfillment_orders` (verificado el 24-sep). La UI debe pedir ese permiso y detenerse: no sustituir sucursal por marca ni devolver un pedido incompleto.
+- PlantillaPedido .xlsx: conservar ZIP original, imágenes, UUIDs y estilos. Reemplazar todas las cantidades anteriores en la copia; completar fila Cantidad por encabezado del talle. Recalcular cachés de SUM y multiplicación y solicitar recálculo en Excel.
+- Resolver código exacto por etiquetas/SKU delimitado. Múltiples coincidencias: revisar. Converse numérico: invertir la tabla confirmada de sincronización (etiqueta/maestro); sin tabla NO adivinar. Le Coq: invertir talleShopifyLeCoq respetando indumentaria y accesorios. Letras/TU sin conversión.
+- Agregar demanda por código/talle antes de limitar stock. Sin stock o código ausente: pedir 0 y mostrar motivo/órdenes/cantidad faltante. Stock parcial: pedir disponible, informar diferencia. +50 se limita a 50.
+- Packs Xn: sumar pares demandados y pedir ceil(pares/n) packs, sin superar disponibilidad del proveedor en packs. Mostrar excedente y faltante en pares. Una plantilla por ejecución; otra marca/plantilla queda explícita en Revisar.
+- Confirmación visual antes de descargar. Descargar dos veces NO implica dos pedidos nuevos ni marca órdenes: advertir sobre duplicación si se repite el proceso.
+- Tests en `pedidoId.test.ts`; acceso solo queries. Referencia: https://shopify.dev/docs/api/admin-graphql/2026-07/queries/fulfillmentOrder
+
 ### NTF — regla confirmada por Wanda (21-sep-2026)
 
 - Marca y sucursal de Shopify: **NTF**, nombre exacto confirmado.
