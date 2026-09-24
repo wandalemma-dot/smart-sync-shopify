@@ -127,6 +127,10 @@ luxo     → LUXO
 
 ### 3.1 Converse y Le Coq ("iD") — PRECIOS
 
+- Descuento confirmado por Wanda el 24-sep-2026: **10%**, reemplaza el 7% anterior.
+  Aplica a costos de Converse y Le Coq, incluidos básicos y packs. Los precios
+  de venta y sugeridos siguen calculándose sobre lista, sin descontar.
+
 #### Packs vendidos por par (17-sep-2026)
 
 - Wanda compra al proveedor por pack y vende por par. El precio de lista que
@@ -136,10 +140,10 @@ luxo     → LUXO
   Exigir separadores: `A123X6` o `X2C` no son cantidades de pack.
   Leer el nombre original antes de agregar el color. No buscar en SKU ni talles.
 - Dividir la lista por esa cantidad **una sola vez**, después de elegir la fuente
-  de precios. Aplicar el 7% de descuento y el markup sobre el valor por par.
+  de precios. Aplicar el 10% de descuento y el markup sobre el valor por par.
   Redondear el costo final a centavos, sin redondear antes la división.
-- Ejemplo: pack de 6 a $41.390 → lista por par $6.898,333… → costo con 7%
-  $6.415,45 y precio con markup 2,27/terminación 900 de $15.900.
+- Ejemplo: pack de 6 a $41.390 → lista por par $6.898,333… → costo con 10%
+  $6.208,50 y precio con markup 2,27/terminación 900 de $15.900.
 - La simulación muestra el pack detectado y el costo por par. La misma base
   alimenta actualización, alta y CSV. Productos sin sufijo conservan su lógica.
 - Este cambio convierte **precios/costos**. No multiplica existencias ni modifica
@@ -156,7 +160,7 @@ Su columna `Precio` es el **precio de lista (WHSL)**.
 > repo y `processFiles()` todavía acepta una sábana como parámetro opcional, pero
 > la app **ya no la pide**.
 
-- **Costo** = `WHSL PRICE − 7%` (descuento general del proveedor) → `costoId()`
+- **Costo** = `WHSL PRICE − 10%` (descuento general del proveedor) → `costoId()`
 - **Precio** = `WHSL PRICE × 2.27`, redondeado a terminación **…900** → `precioId()`
   - Ese markup da ~**50% de margen** (el sugerido del proveedor da solo 39,8%).
 - **EXCEPCIÓN — productos BÁSICOS**: van **SIEMPRE** al `RETAIL PRICE` (sugerido
@@ -209,7 +213,7 @@ Código en `src/utils/plantillaPedido.ts`.
   (stock por talle), la segunda dice `Cantidad` (vacía, es donde ella escribe
   el pedido) y trae el **nombre** y el **color**.
 - **Trae el precio de lista**, cosa que el formato viejo no tenía.
-  Confirmado por Wanda: la columna `Precio` es **el costo SIN el 7%**, o sea el
+  Confirmado por Wanda: la columna `Precio` es **el costo SIN el 10%**, o sea el
   WHSL. Verificado contra la sábana del 04-08-26: **coincide exacto en 381 de
   386** códigos en común. En los 5 que difieren, la sábana repite el mismo valor
   (53422,4599 / retail 99900) para 5 modelos distintos → la buena es la del
@@ -404,7 +408,7 @@ Código en `src/utils/recrearProductos.ts` + `src/Recuperar.tsx`.
 Regla de Wanda (08-sep-2026): *«siempre agregar los decimales en los costos con
 descuento, ya que todo suma»*.
 
-Un costo bonificado casi nunca da redondo: `48.074,8663 − 7% = 44.709,63`,
+Un costo bonificado casi nunca da redondo: `48.074,8663 − 10% = 43.267,38`,
 `43.999 − 12,5% = 38.499,13`. Redondear al peso se comía centavos en **cada
 variante**, y con miles de variantes deja de ser insignificante.
 
@@ -451,7 +455,7 @@ como variante. Desde el 31-ago-2026 se pueden crear desde la app
 confirmación propia.
 
 - **Precio y costo salen del archivo de iD** (elección de Wanda, 31-ago-2026):
-  costo = lista − 7%, precio = sugerido ×1,87 si es básico o ×2,27 si no.
+  costo = lista − 10%, precio = sugerido ×1,87 si es básico o ×2,27 si no.
   Se calculan en `planStockWrite()` y viajan en la fila de `notFound`.
 - Se agrupa **por producto**: una llamada por producto con todos sus talles.
 

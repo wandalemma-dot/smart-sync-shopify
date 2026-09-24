@@ -39,7 +39,7 @@ export interface StockRow {
   inventoryItemId?: string;
   // Solo lo llevan las filas de `notFound`: hace falta para poder CREAR el
   // talle que falta. Precio y costo salen del archivo de iD (regla de Wanda,
-  // 31-ago-2026): costo = lista − 7%, precio = sugerido si es básico o ×2,27.
+  // 31-ago-2026): costo = lista − 10%, precio = sugerido si es básico o ×2,27.
   handle?: string;
   productId?: string;
   opcion?: string;        // nombre de la opción en Shopify ("Talle")

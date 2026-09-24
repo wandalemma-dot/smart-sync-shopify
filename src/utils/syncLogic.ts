@@ -155,11 +155,11 @@ export function calcSellPrice(brand: SyncConfig['brand'], wholesale: number, pub
 
 // ---- PRECIOS DE iD (Converse y Le Coq) ----
 // Reglas confirmadas con Wanda (agosto 2026):
-//   COSTO  = precio de lista (WHSL) menos 7% de descuento general del proveedor.
+//   COSTO  = precio de lista (WHSL) menos 10% de descuento general del proveedor.
 //   PRECIO = lista x 2.27, redondeado a terminación ...900 (da ~50% de margen).
 //   EXCEPCIÓN: los modelos BÁSICOS de Converse van SIEMPRE al precio sugerido
 //   del proveedor (RETAIL de la sábana). Nunca llevan markup.
-export const ID_DESCUENTO_GENERAL = 0.07;
+export const ID_DESCUENTO_GENERAL = 0.10;
 export const ID_MARKUP = 2.27;
 
 export function redondear900(x: number): number {
@@ -171,8 +171,8 @@ export function redondear900(x: number): number {
 // ---- REDONDEO DE COSTOS: A LOS CENTAVOS, NUNCA AL PESO ----
 // Regla de Wanda (08-sep-2026): «siempre agregar los decimales en los costos
 // con descuento, ya que todo suma».
-// Un costo bonificado casi nunca da un número redondo (48.074,8663 − 7% =
-// 44.709,63). Redondear al peso se comía centavos en CADA variante, y con
+// Un costo bonificado casi nunca da un número redondo (48.074,8663 − 10% =
+// 43.267,38). Redondear al peso se comía centavos en CADA variante, y con
 // miles de variantes eso deja de ser insignificante.
 // Además Shopify guarda el costo CON decimales (en su export figura 27561.63),
 // así que redondear al peso hacía que un costo que ya estaba bien pareciera
@@ -1038,7 +1038,7 @@ export async function processFiles(
         type: 'info',
         title: `Archivo de pedido de iD: ${ped.productos} productos, ${ped.unidades} unidades`,
         message:
-          'Con este archivo alcanza: el costo es el precio de lista menos 7%, los básicos van al sugerido ' +
+          'Con este archivo alcanza: el costo es el precio de lista menos 10%, los básicos van al sugerido ' +
           '(lista × 1,87 a la centena) y el resto lleva el markup 2,27.' +
           (ped.conTope ? ` Además, ${ped.conTope} talles venían como "+50" (el proveedor no publica el número exacto): esos se cargan con 50.` : ''),
       });
@@ -1113,7 +1113,7 @@ export async function processFiles(
       // De la sábana igual necesitamos el RETAIL para los básicos de Converse.
       const lista = data.whslDelArchivo && data.wholesale > 0 ? data.wholesale : p.whsl;
       data.wholesale = lista;                        // precio de LISTA
-      data.costFinal = costoId(lista);               // lista - 7%
+      data.costFinal = costoId(lista);               // lista - 10%
       data.publicPrice = precioId(cod, lista, p.retail); // sugerido o lista x2.27
       data.usaListaPrecios = true;
     }
@@ -1128,7 +1128,7 @@ export async function processFiles(
       const listaPack = data.wholesale;
       data.wholesale = listaPack / pack;
       // Operar en centavos desde el pack evita perder un centavo en X12
-      // por la división periódica (41.390 / 12, menos 7% = 3.207,725).
+      // por la división periódica (41.390 / 12, menos 10% = 3.104,25).
       data.costFinal = Math.round(listaPack * (100 - ID_DESCUENTO_GENERAL * 100) / pack) / 100;
       const retailPack = listaPrecios?.items[cod.toUpperCase()]?.retail || 0;
       data.publicPrice = precioId(cod, data.wholesale, retailPack / pack);
@@ -1139,7 +1139,7 @@ export async function processFiles(
         title: `Costo por par · ${cod.toUpperCase()} · pack de ${pack}`,
         message: `Lista del pack: $${listaPack.toLocaleString('es-AR')}. ` +
           `Lista por par: $${data.wholesale.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}. ` +
-          `Costo por par con 7% de descuento: $${data.costFinal.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`,
+          `Costo por par con 10% de descuento: $${data.costFinal.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}.`,
       });
     }
   }
