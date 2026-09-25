@@ -57,11 +57,11 @@ No es programadora: explicale en castellano simple, sin jerga.
 - Leer encabezados por nombre: SKU, Modelo color, Descripción del artículo, GRUPO, Stock x SKU, Mayorista con descuento.
 - Agrupar por Modelo color quitando guiones finales, usar ese código como etiqueta. Conservar SKU completo de cada variante. Talle al final de descripción, sin conversión; no confundir 2XL con código numérico.
 - Costo = Mayorista con descuento, redondeado a centavos. No aplicar nuevamente 40%/30%, no dividir packs: Wanda entregó archivos ya desglosados.
-- Precio sugerido: terminación 900 más cercana al margen 50% definido como (venta - costo * 1,21) / venta. Mostrar costo, venta y margen antes del alta.
+- Regla actualizada: costo columna L «Mayorista con descuento»; venta columna M «Precio Público», exacta, sin markup ni redondeo comercial. Reemplaza la propuesta anterior de 900/50%. Validar precio público positivo y coherente entre talles. Margen solo informativo: (venta - costo * 1,21) / venta; en el Excel del 24 da 61,29%. Mostrar costo, venta y margen antes del alta.
 - Una lista vigente por análisis: 24 y 25 son snapshots, no sumar. Archivo del 25: 57 modelos, 211 variantes, 8233 unidades. Rechazar SKU/talles repetidos o costos/nombres contradictorios.
 - Vendor Reebok. Stock se cruza por SKU completo; solo variantes incluidas en el archivo, nunca barrer ausentes ni tocar Martínez. Alta exige encontrar sucursal. Talles nuevos de productos existentes quedan para revisión: no usar el creador genérico que omite SKU.
 - Parser reebokLogic.ts, tests reebokLogic.test.ts. Alta API y CSV usan buildMatrixProducts.
-- Sucursal verificada en Shopify por consulta de lectura: DISTRINANDO SA (Reebok - Kappa), ID 96246300915. Terminación 900 elegida como propuesta inicial según los ejemplos de Wanda; vista previa obligatoria antes de carga.
+- Sucursal verificada en Shopify por consulta de lectura: DISTRINANDO SA (Reebok - Kappa), ID 96246300915. Vista previa antes de carga.
 
 ### Armado de pedido iD (24-sep-2026)
 

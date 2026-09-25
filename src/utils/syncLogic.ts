@@ -891,7 +891,7 @@ export async function processFiles(
         artType: p.artType, foundInShopify: false };
     }
     alerts.push({ type: 'info', title: `Reebok: ${Object.keys(reebok.productos).length} modelos de indumentaria`,
-      message: 'Costo: Mayorista con descuento, sin volver a descontar. Precio terminado en 900, margen cercano al 50% según (venta − costo × 1,21) / venta. Usá una sola lista vigente; no combines la del 24 con la del 25. Calzado pendiente.' });
+      message: 'Costo: L, Mayorista con descuento, sin volver a descontar. Venta: M, Precio Público, sin markup ni redondeo. Margen informativo: (venta − costo × 1,21) / venta. Usá una sola lista vigente; no combines la del 24 con la del 25. Calzado pendiente.' });
     for (const message of reebok.avisos) alerts.push({ type: 'warning', title: 'Reebok: fila excluida', message });
   } else if (config.brand === 'ntf') {
     const ntf = parseNtf(await readExcel(providerFile, config.sheetName));

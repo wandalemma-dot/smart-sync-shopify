@@ -369,8 +369,9 @@ export default function App() {
             {config.brand === 'reebok' && (
               <p style={{ fontSize: '0.85rem', marginTop: '0.4rem' }}>
                 <strong>Reebok — Indumentaria</strong>: subí una sola lista vigente (usá la del 25 si también tenés la del 24).
-                Costo de «Mayorista con descuento». Precio terminado en <strong>900</strong>, con margen cercano al 50%
-                según tu planilla, considerando costo × 1,21. Revisá los precios en el resumen antes de cargar.
+                Costo de <strong>L: Mayorista con descuento</strong>. Venta de <strong>M: Precio Público</strong>,
+                tal como aparece en el Excel, sin markup ni redondeo. El margen se muestra como información,
+                considerando costo × 1,21. Revisá los precios en el resumen antes de cargar.
                 Los talles se agrupan por modelo/color y se conservan los SKU del Excel.
                 Stock en <strong>DISTRINANDO SA (Reebok - Kappa)</strong>.
                 El calzado queda pendiente.
