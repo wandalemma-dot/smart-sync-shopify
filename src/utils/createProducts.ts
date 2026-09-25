@@ -115,6 +115,7 @@ export async function createProducts(
   if (limit && limit > 0) products = products.slice(0, limit);
 
   const locId = await getLocationId(STOCK_LOCATION[config.brand]);
+  if (config.brand === 'reebok' && !locId) throw new Error(`No encontré la sucursal ${STOCK_LOCATION.reebok}. No se crearon productos Reebok.`);
   const posId = await getPosPublicationId();
 
   let created = 0;

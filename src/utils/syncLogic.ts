@@ -11,12 +11,13 @@ import { parseOrng, costoOrng, precioOrng } from './orngLogic';
 import type { ListaPrecios } from './listaPrecios';
 import { unidadesPorPackId } from './packsId';
 import { parseNtf, tituloNtf, NTF_LOCATION } from './ntfLogic';
+import { parseReebok, REEBOK_LOCATION } from './reebokLogic';
 
 export type SyncMode = 'all' | 'stock_only' | 'cost_only' | 'price_only';
 
 export interface SyncConfig {
   sheetName: string;
-  brand: 'lecoq' | 'converse' | 'bloque' | 'orchard' | 'luxo' | 'vart' | 'orng' | 'ntf';
+  brand: 'lecoq' | 'converse' | 'bloque' | 'orchard' | 'luxo' | 'vart' | 'orng' | 'ntf' | 'reebok';
 }
 
 export interface MissingProduct {
@@ -120,6 +121,7 @@ export const BRAND_PRICING: Record<SyncConfig['brand'], { markup: number; provid
   // orngLogic.ts y acá se usa el ya calculado.
   orng:     { markup: 0,    providerDiscount: 0,    usePublicPrice: true,  redondear9900: false },
   ntf:      { markup: 0,    providerDiscount: 0.15, usePublicPrice: true, redondear9900: false },
+  reebok:   { markup: 0,    providerDiscount: 0, usePublicPrice: true, redondear9900: false },
 };
 
 // ---- NOMBRE DE LA MARCA (campo "Proveedor"/Vendor de Shopify) ----
@@ -138,6 +140,7 @@ export const VENDOR_POR_MARCA: Record<SyncConfig['brand'], string> = {
   vart: 'Vart',
   orng: 'ORNG',
   ntf: 'NTF',
+  reebok: 'Reebok',
 };
 
 // Precio de venta final según la marca.
@@ -268,7 +271,7 @@ export function calcWeightGrams(brand: SyncConfig['brand'], artType?: string): n
   if (brand === 'orchard') return ORCHARD_WEIGHTS[artType || ''] ?? 250; // default remera
   if (brand === 'luxo') return TYPE_WEIGHTS[artType || ''] ?? 300; // por tipo, default 300
   if (brand === 'vart') return TYPE_WEIGHTS[artType || ''] ?? 300; // misma tabla que Luxo
-  if (brand === 'ntf') return TYPE_WEIGHTS[artType || ''] ?? 300;
+  if (brand === 'ntf' || brand === 'reebok') return TYPE_WEIGHTS[artType || ''] ?? 300;
   if (brand === 'orng') return TYPE_WEIGHTS[artType || ''] ?? 500; // mochilas y gorras
   return 0;
 }
@@ -520,6 +523,7 @@ export const STOCK_LOCATION: Record<SyncConfig['brand'], string> = {
   // avisar "no encontré la sucursal" en vez de escribir en el lugar equivocado.
   vart: VART_LOCATION,
   ntf: NTF_LOCATION,
+  reebok: REEBOK_LOCATION,
   // 🟡 PENDIENTE: Wanda todavía no definió la sucursal de ORNG. Igual su archivo
   // NO trae stock (es una lista de precios), así que por ahora no se usa.
   orng: 'ORNG',
@@ -535,6 +539,7 @@ const VENDOR_QUERY: Partial<Record<SyncConfig['brand'], string>> = {
   luxo: 'vendor:Luxo',
   vart: 'vendor:Vart',
   ntf: 'vendor:NTF',
+  reebok: 'vendor:Reebok',
   orng: 'vendor:Orng OR vendor:"Orng Mochilas"',
 };
 
@@ -878,6 +883,16 @@ export async function processFiles(
         message: 'El mismo CÓDIGO + COLOR aparece más de una vez y solo se tomó el primero: ' + orng.duplicados.join(', ') + '.',
       });
     }
+  } else if (config.brand === 'reebok') {
+    const reebok = parseReebok(await readExcel(providerFile, config.sheetName));
+    for (const [codigo, p] of Object.entries(reebok.productos)) {
+      excelMap[codigo] = { wholesale: p.costo, publicPrice: p.precio, costFinal: p.costo,
+        title: p.nombre, vendor: 'Reebok', sizes: p.sizes, skuPorTalle: p.skuPorTalle,
+        artType: p.artType, foundInShopify: false };
+    }
+    alerts.push({ type: 'info', title: `Reebok: ${Object.keys(reebok.productos).length} modelos de indumentaria`,
+      message: 'Costo: Mayorista con descuento, sin volver a descontar. Precio terminado en 900, margen cercano al 50% según (venta − costo × 1,21) / venta. Usá una sola lista vigente; no combines la del 24 con la del 25. Calzado pendiente.' });
+    for (const message of reebok.avisos) alerts.push({ type: 'warning', title: 'Reebok: fila excluida', message });
   } else if (config.brand === 'ntf') {
     const ntf = parseNtf(await readExcel(providerFile, config.sheetName));
     for (const [codigo, p] of Object.entries(ntf.productos)) {
@@ -1340,7 +1355,7 @@ export async function processFiles(
            && titleCanon.includes('orchard')
            && (!aType || titleCanon.includes(aType))
            && titleCanon.includes(dCod);
-      } else if (config.brand === 'ntf') {
+      } else if (config.brand === 'ntf' || config.brand === 'reebok') {
          const codigo = cod.toLowerCase();
          match = tags.split(',').some(t => t.trim() === codigo)
            || prod.variants.edges.some(v => {
@@ -1392,6 +1407,9 @@ export async function processFiles(
 
         for (const vEdge of prod.variants.edges) {
            const variant = vEdge.node;
+           // Las listas Reebok son parciales: solo tocar las variantes incluidas,
+           // identificadas por su SKU completo del proveedor.
+           if (config.brand === 'reebok' && !Object.values(provData.skuPorTalle || {}).includes(variant.sku)) continue;
            const variantPrice = parseFloat(variant.price);
 
            // ACTUALIZACIÓN DE PRECIO Y COSTO.
@@ -1719,6 +1737,10 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
         // (en ropa el sufijo es un código: 63=S, 64=M...). Usamos el del Excel.
         else if (config.brand === 'vart') variantSku = prod.skuPorTalle?.[String(size).toUpperCase()] || `${prod.coditm}-${String(size).toUpperCase()}`;
         else if (config.brand === 'ntf') variantSku = `${prod.coditm}-${String(size).toUpperCase()}`;
+        else if (config.brand === 'reebok') {
+          variantSku = prod.skuPorTalle?.[String(size)] || '';
+          if (!variantSku) throw new Error(`Reebok: falta el SKU original de ${prod.coditm}, talle ${size}.`);
+        }
         const useTitleOption = config.brand === 'luxo' && isUnico;
         if (!useTitleOption) hasSizes = true;
         variants.push({
@@ -1743,6 +1765,9 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
       productType = cat;
     } else if (config.brand === 'ntf') {
       displayTitle = tituloNtf(prod.title);
+      productType = displayTitle.split(' ')[0];
+    } else if (config.brand === 'reebok') {
+      displayTitle = niceTitle(prod.title);
       productType = displayTitle.split(' ')[0];
     } else {
       displayTitle = niceTitle(displayTitle);
@@ -1788,7 +1813,7 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, tableS
   let csvContent = headers.join(',') + '\n';
 
   // Converse usa exactamente las variantes y la tabla elegida para el alta por API.
-  if (config.brand === 'converse' || config.brand === 'ntf') {
+  if (config.brand === 'converse' || config.brand === 'ntf' || config.brand === 'reebok') {
     for (const prod of buildMatrixProducts(result, config, tableSelections)) {
       prod.variants.forEach((v, index) => {
         const row: Record<string, string | number> = {
@@ -1978,7 +2003,10 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
 
       // Buscar variante exacta en Shopify
       let exactVariant = null;
-      if (config.brand === 'converse' || config.brand === 'ntf') {
+      if (config.brand === 'reebok') {
+         exactVariant = data.shopifyVariants?.find((v: any) => v.sku === data.skuPorTalle?.[size]);
+         if (!exactVariant) throw new Error(`${coditm}: no se encontró el SKU del talle ${size} en Shopify.`);
+      } else if (config.brand === 'converse' || config.brand === 'ntf') {
          exactVariant = data.shopifyVariants?.find((v: any) => talleMatches(option1Value, v.title));
          if (!exactVariant) throw new Error(`${coditm}: no se encontró el talle ${option1Value} en Shopify. Revisá antes de exportar stock.`);
       } else if (data.shopifyVariants) {

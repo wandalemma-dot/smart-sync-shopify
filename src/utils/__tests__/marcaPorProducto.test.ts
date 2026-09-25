@@ -22,7 +22,7 @@ import {
 import type { SyncConfig } from '../syncLogic';
 
 // TODAS las marcas que ofrece el selector de la app.
-const MARCAS: SyncConfig['brand'][] = ['converse', 'lecoq', 'orchard', 'bloque', 'luxo', 'vart', 'orng', 'ntf'];
+const MARCAS: SyncConfig['brand'][] = ['converse', 'lecoq', 'orchard', 'bloque', 'luxo', 'vart', 'orng', 'ntf', 'reebok'];
 
 describe('cada marca está completa en las tablas', () => {
   it.each(MARCAS)('%s tiene nombre de marca (vendor)', (marca) => {
@@ -42,7 +42,7 @@ describe('cada marca está completa en las tablas', () => {
 const producto = (extra: Record<string, unknown> = {}) => ({
   missingProducts: [{
     coditm: 'AA1111', title: 'Un producto', wholesale: 100, publicPrice: 200,
-    costFinal: 93, sizes: { S: 1 }, ...extra,
+    costFinal: 93, sizes: { S: 1 }, skuPorTalle: { S: 'AA1111-S' }, ...extra,
   }],
 } as any);
 
