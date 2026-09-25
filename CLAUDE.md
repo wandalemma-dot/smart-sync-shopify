@@ -65,6 +65,8 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ### Armado de pedido iD (24-sep-2026)
 
+- PlantillaPedido (33) usa etiquetas XML con prefijo `x:` (x:sheet, x:c, x:row, x:f, x:v). Leer y editar ambos formatos con/sin prefijo, conservar namespace al insertar cantidades y calcPr. El fallo «No se pudo ubicar la hoja original» era una búsqueda que solo aceptaba sheet sin prefijo. Cubrir lectura, cantidades previas, celdas omitidas y cachés de fórmulas; verificar preservación de imágenes/estilos con plantilla real.
+
 - Pestaña nueva `PedidoId.tsx`, colores habituales (Wanda corrigió la transcripción: NO pidió rosado). Reposición anterior se conserva aparte.
 - CSV de órdenes identifica IDs únicos; NO usar su Location ni cantidad vendida para inferir pendientes. Leer en vivo `Order.fulfillmentOrders`, filtrar sucursal normalizada iD y usar `remainingQuantity` de cada línea. Paginar ambos niveles; errores de lectura bloquean descarga.
 - Incluir solo órdenes abiertas, pagadas, no canceladas y sin etiquetas `pedido id` / `solucionar`. Preparaciones OPEN/IN_PROGRESS. Otros estados quedan avisados. No modificar Shopify, enviar al proveedor ni etiquetar automáticamente al descargar.

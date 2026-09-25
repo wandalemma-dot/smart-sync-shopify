@@ -114,10 +114,10 @@ export function leerPlantillaId(original: Uint8Array): PlantillaId {
   const sheetIndex = wb.SheetNames.indexOf(nombres[0]);
   const zip = unzipSync(original);
   const workbook = strFromU8(zip['xl/workbook.xml']);
-  const sheet = [...workbook.matchAll(/<sheet\b[^>]*>/g)][sheetIndex]?.[0];
+  const sheet = [...workbook.matchAll(/<(?:[\w.-]+:)?sheet\b[^>]*>/g)][sheetIndex]?.[0];
   const rid = sheet?.match(/r:id="([^"]+)"/)?.[1];
   const rels = strFromU8(zip['xl/_rels/workbook.xml.rels']);
-  const rel = [...rels.matchAll(/<Relationship\b[^>]*>/g)].find(m => m[0].includes(`Id="${rid}"`))?.[0];
+  const rel = [...rels.matchAll(/<(?:[\w.-]+:)?Relationship\b[^>]*>/g)].find(m => m[0].includes(`Id="${rid}"`))?.[0];
   const target = rel?.match(/Target="([^"]+)"/)?.[1];
   const sheetPath = target?.startsWith('/') ? target.slice(1) : `xl/${target}`;
   if (!zip[sheetPath]) throw new Error('No se pudo ubicar la hoja original dentro del Excel.');
@@ -202,24 +202,25 @@ export function cruzarPedido(lineas: PendienteId[], plantilla: PlantillaId, avis
 export function generarExcelPedido(p: PlantillaId, r: ResultadoArmado): Uint8Array {
   const zip = unzipSync(p.original);
   let xml = strFromU8(zip[p.sheetPath]);
+  const prefix = xml.match(/<([\w.-]+:)worksheet\b/)?.[1] || '';
   const valores = new Map(p.limpiar.map(c => [c, 0]));
   for (const f of r.filas) if (f.celda && f.pedir > 0) valores.set(f.celda, f.pedir);
   const encontradas = new Set<string>();
-  xml = xml.replace(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g, (whole, attrs: string) => {
+  xml = xml.replace(/<(?:[\w.-]+:)?c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/(?:[\w.-]+:)?c>)/g, (whole, attrs: string) => {
     const ref = attrs.match(/\br="([^"]+)"/)?.[1];
     if (!ref || !valores.has(ref)) return whole;
     encontradas.add(ref);
     const limpio = attrs.replace(/\s+t="[^"]*"/g, '');
-    return `<c${limpio}><v>${valores.get(ref)}</v></c>`;
+    return `<${prefix}c${limpio}><${prefix}v>${valores.get(ref)}</${prefix}v></${prefix}c>`;
   });
   // En plantillas que omiten celdas vacías, insertar ordenadas dentro de su fila.
   for (const [ref, qty] of valores) if (!encontradas.has(ref) && qty > 0) {
     const row = ref.match(/\d+$/)![0];
-    const re = new RegExp(`(<row\\b[^>]*\\br="${row}"[^>]*>)([\\s\\S]*?)(</row>)`);
+    const re = new RegExp(`(<${prefix}row\\b[^>]*\\br="${row}"[^>]*>)([\\s\\S]*?)(</${prefix}row>)`);
     if (!re.test(xml)) throw new Error(`No se encontró la fila de pedido ${row}.`);
     xml = xml.replace(re, (_m, start, body, end) => {
-      const cells = [...body.matchAll(/<c\b[^>]*(?:\/>|>[\s\S]*?<\/c>)/g)].map((m: RegExpMatchArray) => m[0]);
-      cells.push(`<c r="${ref}"><v>${qty}</v></c>`);
+      const cells = [...body.matchAll(/<(?:[\w.-]+:)?c\b[^>]*(?:\/>|>[\s\S]*?<\/(?:[\w.-]+:)?c>)/g)].map((m: RegExpMatchArray) => m[0]);
+      cells.push(`<${prefix}c r="${ref}"><${prefix}v>${qty}</${prefix}v></${prefix}c>`);
       cells.sort((a, b) => XLSX.utils.decode_cell(a.match(/\br="([^"]+)"/)![1]).c - XLSX.utils.decode_cell(b.match(/\br="([^"]+)"/)![1]).c);
       return start + cells.join('') + end;
     });
@@ -249,17 +250,18 @@ export function generarExcelPedido(p: PlantillaId, r: ResultadoArmado): Uint8Arr
     if (/^[A-Z]+\d+\*[A-Z]+\d+$/i.test(f)) return f.split('*').reduce((n: number, part: string) => n * value(part, visited), 1);
     throw new Error('Fórmula no compatible');
   }
-  xml = xml.replace(/<c\b([^>]*?)>([\s\S]*?)<\/c>/g, (whole, attrs: string, body: string) => {
-    if (!/<f\b/.test(body)) return whole;
+  xml = xml.replace(/<(?:[\w.-]+:)?c\b([^>]*?[^/])>([\s\S]*?)<\/(?:[\w.-]+:)?c>/g, (whole, attrs: string, body: string) => {
+    if (!/<(?:[\w.-]+:)?f\b/.test(body)) return whole;
     const ref = attrs.match(/\br="([^"]+)"/)?.[1];
-    const clean = body.replace(/<v>[^<]*<\/v>/g, '');
-    try { return `<c${attrs}>${clean}<v>${value(ref!)}</v></c>`; }
-    catch { return `<c${attrs}>${clean}</c>`; }
+    const clean = body.replace(/<(?:[\w.-]+:)?v>[^<]*<\/(?:[\w.-]+:)?v>/g, '');
+    try { return `<${prefix}c${attrs}>${clean}<${prefix}v>${value(ref!)}</${prefix}v></${prefix}c>`; }
+    catch { return `<${prefix}c${attrs}>${clean}</${prefix}c>`; }
   });
   zip[p.sheetPath] = strToU8(xml);
   let wb = strFromU8(zip['xl/workbook.xml']);
-  wb = wb.replace(/<calcPr\b[^>]*\/>/g, '');
-  wb = wb.replace('</workbook>', '<calcPr calcId="191029" fullCalcOnLoad="1" forceFullCalc="1"/></workbook>');
+  const wbPrefix = wb.match(/<([\w.-]+:)workbook\b/)?.[1] || '';
+  wb = wb.replace(/<(?:[\w.-]+:)?calcPr\b[^>]*\/>/g, '');
+  wb = wb.replace(`</${wbPrefix}workbook>`, `<${wbPrefix}calcPr calcId="191029" fullCalcOnLoad="1" forceFullCalc="1"/></${wbPrefix}workbook>`);
   zip['xl/workbook.xml'] = strToU8(wb);
   return zipSync(zip);
 }

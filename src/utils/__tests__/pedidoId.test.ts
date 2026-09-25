@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 import * as XLSX from 'xlsx';
-import { unzipSync } from 'fflate';
+import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
 import { idsOrdenes, leerPendientesId, leerPlantillaId, cruzarPedido, generarExcelPedido } from '../pedidoId';
 import type { PendienteId } from '../pedidoId';
 const { api } = vi.hoisted(() => ({ api: vi.fn() }));
@@ -16,6 +16,23 @@ const linea = (extra: Partial<PendienteId> = {}): PendienteId => ({ orden: '#1',
 const conn = (nodes: any[], next: string | null = null) => ({ nodes, pageInfo: { hasNextPage: !!next, endCursor: next } });
 beforeEach(() => { api.mockReset(); });
 describe('pedido iD: plantilla y faltantes', () => {
+  it.each([false, true])('lee y exporta XML con prefijo x, incluso celdas omitidas: %s', omitida => {
+    const source = plantilla(); const zip = unzipSync(source.original);
+    for (const path of ['xl/workbook.xml', source.sheetPath]) {
+      let xml = strFromU8(zip[path]).replace('xmlns="', 'xmlns:x="')
+        .replace(/<(\/?)([A-Za-z][\w]*)(?=[\s/>])/g, '<$1x:$2');
+      if (omitida && path === source.sheetPath) xml = xml.replace(/<x:c\b[^>]*\br="F4"[^>]*>[\s\S]*?<\/x:c>/, '');
+      zip[path] = strToU8(xml);
+    }
+    const p = leerPlantillaId(zipSync(zip));
+    const out = generarExcelPedido(p, cruzarPedido([linea()], p));
+    const s = XLSX.read(out, {type: 'array'}).Sheets.Plantilla;
+    expect(s.F4.v).toBe(1); expect(s.G4.v).toBe(0);
+    expect(s.H4.v).toBe(1); expect(s.I4.v).toBe(100);
+    const after = unzipSync(out);
+    expect(strFromU8(after['xl/workbook.xml'])).toContain('<x:calcPr');
+    for (const path of Object.keys(zip)) if (![p.sheetPath, 'xl/workbook.xml'].includes(path)) expect(after[path]).toEqual(zip[path]);
+  });
   it('deduplica órdenes y conserva IDs como texto', () => {
     expect(idsOrdenes('Name,Id\n#1,123456789012345678\n#1,\n#1,123456789012345678')).toEqual(['gid://shopify/Order/123456789012345678']);
     expect(() => idsOrdenes('Name,SKU\n#1,foo')).toThrow();
