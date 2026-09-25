@@ -19,6 +19,16 @@ beforeEach(() => { graphql.mockReset().mockImplementation(async (q: string) => q
   ? { locations: { edges: [{ node: { id: 'loc', name: REEBOK_LOCATION } }] } }
   : { products: { edges: [], pageInfo: { hasNextPage: false } } }); });
 describe('Reebok indumentaria', () => {
+  it.each(['TOP', 'TRACK TOP'])('nombra %s como Top deportivo y conserva sus talles', async grupo => {
+    const r = row(); r[3] = grupo;
+    const res = await processFiles(file([headers, r]), null, null, config);
+    expect(res.alerts.filter(a => a.title === 'Reebok: fila excluida')).toHaveLength(0);
+    expect(buildMatrixProducts(res, config)[0].title).toMatch(/^Top Deportivo Reebok /);
+  });
+  it('incluye CALZA como indumentaria', () => {
+    const r = row(); r[3] = 'CALZA';
+    expect(parseReebok([headers, r]).productos.RBK2100.nombre).toMatch(/^Calza Reebok /);
+  });
   it('agrupa modelo/color y conserva SKU, talle, costo descontado y cantidades', () => {
     const p = parseReebok([headers, row(), row('M', 0)]).productos.RBK2100;
     expect(p).toMatchObject({ costo: 49586.45, precio: 119900, sizes: { S: 3, M: 0 }, skuPorTalle: { S: 'RBK2100-S', M: 'RBK2100-M' } });
@@ -64,6 +74,18 @@ describe('Reebok indumentaria', () => {
     expect(graphql.mock.calls.every(([q]) => !q.includes('mutation'))).toBe(true);
   });
   const real = 'C:/Users/Wanda/Downloads/RBK Indumentaria 001 40%  - 25-09.xlsx';
+  const anterior = 'C:/Users/Wanda/Downloads/RBK Indumentaria 001 40%  24-09.xlsx';
+  it.skipIf(!existsSync(anterior))('archivo del 24: incluye todas las calzas y track tops sin excluir filas', () => {
+    const wb = XLSX.read(readFileSync(anterior));
+    const result = parseReebok(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header: 1}));
+    const ps = Object.values(result.productos);
+    expect(ps).toHaveLength(63);
+    expect(ps.reduce((n,p) => n + Object.keys(p.sizes).length, 0)).toBe(257);
+    expect(ps.reduce((n,p) => n + Object.values(p.sizes).reduce((a,b) => a+b,0), 0)).toBe(8880);
+    expect(result.avisos).toEqual([]);
+    expect(result.productos.RBK2100254782.nombre).toMatch(/^Top deportivo Reebok /);
+    expect(result.productos.RBK2100254587.nombre).toMatch(/^Calza Reebok /);
+  });
   it.skipIf(!existsSync(real))('archivo real: 57 modelos / 211 variantes / 8233 unidades', () => {
     const wb = XLSX.read(readFileSync(real));
     const result = parseReebok(XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {header: 1}));

@@ -50,6 +50,9 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ### Reebok indumentaria (25-sep-2026)
 
+- Corrección: el Excel del 24 incluye CALZA (7 variantes) y TRACK TOP (4) que no estaban en el del 25. Ambas son indumentaria y deben incluirse. Probar ambos archivos completos: 24 = 63 modelos / 257 variantes / 8880 unidades, 25 = 57 / 211 / 8233.
+- Wanda pidió que toda categoría TOP, incluido TRACK TOP, lleve «Top deportivo Reebok…» en el título de alta. No renombrar productos ya existentes automáticamente.
+
 - Primera etapa solo indumentaria. Calzado pendiente de tablas del proveedor: no convertir ni crear zapatillas.
 - Leer encabezados por nombre: SKU, Modelo color, Descripción del artículo, GRUPO, Stock x SKU, Mayorista con descuento.
 - Agrupar por Modelo color quitando guiones finales, usar ese código como etiqueta. Conservar SKU completo de cada variante. Talle al final de descripción, sin conversión; no confundir 2XL con código numérico.

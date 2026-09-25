@@ -3,7 +3,8 @@ export const REEBOK_LOCATION = 'DISTRINANDO SA (Reebok - Kappa)';
 const tipos: Record<string, string> = {
   PANT: 'Pantalón', JACKET: 'Campera', SET: 'Conjunto', HOODIE: 'Buzo',
   HOODY: 'Buzo', 'ZIP HOODIE': 'Campera', 'T-SHIRT': 'Remera',
-  LEGGING: 'Calza', TOP: 'Top', SHORT: 'Short', SWEATSHIRT: 'Buzo',
+  LEGGING: 'Calza', CALZA: 'Calza', TOP: 'Top deportivo', 'TRACK TOP': 'Top deportivo',
+  SHORT: 'Short', SWEATSHIRT: 'Buzo',
 };
 const norm = (v: unknown) => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
 export function precioReebok(costo: number): number {
@@ -30,7 +31,7 @@ export function parseReebok(rows: unknown[][]): { productos: Record<string, Reeb
     const r = rows[i], sku = String(r[skuCol] ?? '').trim();
     if (!sku) continue;
     const tipo = tipos[norm(r[grupoCol])];
-    if (!tipo) { avisos.push(`Fila ${i + 1}: ${sku}, grupo ${r[grupoCol] || 'sin identificar'}, excluido. Por ahora solo indumentaria.`); continue; }
+    if (!tipo) { avisos.push(`Fila ${i + 1}: ${sku}, grupo ${r[grupoCol] || 'sin identificar'}, excluido porque la categoría aún no está reconocida como indumentaria. Revisar categoría; el calzado sigue pendiente.`); continue; }
     const codigo = String(r[modeloCol] ?? '').trim().replace(/-+$/, '');
     const descripcion = String(r[descCol] ?? '').trim();
     const sizeMatch = descripcion.match(/\s-\s*(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|[2-6]XL|TU|UNICO|ÚNICO)\s*$/i);
