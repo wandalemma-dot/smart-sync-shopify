@@ -7,13 +7,10 @@ import type { ReebokProducto } from './reebokLogic';
 export type SizeConversion = Record<string, { arg: string; us: string; cm: string }>;
 export const REEBOK_TABLAS: Record<string, SizeConversion> = { HOMBRE: hombre, MUJER: mujer, NIÑO: nino };
 export const REEBOK_SIN_TABLA = 'TABLA DE TALLE REEBOK SIN IDENTIFICAR';
-// Precios separados por $5.000 y terminados en 990. Margen sobre venta con costo ×1,21.
-export function precioReebokCalzado(costo: number): number {
-  if (!Number.isFinite(costo) || costo <= 0) throw new Error('Costo Reebok inválido.');
-  const centavos = Math.round(costo * 100);
-  let precio = Math.max(990, Math.round((costo * 2.5 - 990) / 5000) * 5000 + 990);
-  while (precio * 10000 <= centavos * 242) precio += 5000;
-  return precio;
+// Venta sobre el mayorista original, al precio terminado en 999 más cercano.
+export function precioReebokCalzado(mayorista: number): number {
+  if (!Number.isFinite(mayorista) || mayorista <= 0) throw new Error('Mayorista Reebok inválido.');
+  return Math.max(999, Math.round((mayorista * 1.8755 + 1) / 1000) * 1000 - 1);
 }
 const norm = (v: unknown) => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
 const num = (s: string) => String(Number(s.replace(',', '.')));
@@ -71,12 +68,12 @@ export interface ReebokCalzadoProducto extends ReebokProducto {
 
 // Ambos formatos se leen por encabezado. Género comercial no determina la curva US.
 export function parseReebokCalzado(rows: unknown[][]) {
-  const h = rows.findIndex(r => r.some(v => norm(v) === 'MODELO COLOR') && r.some(v => norm(v) === 'MAYORISTA CON DESCUENTO'));
-  if (h < 0) throw new Error('Reebok Calzado: faltan encabezados Modelo color / Mayorista con descuento.');
+  const h = rows.findIndex(r => r.some(v => norm(v) === 'MODELO COLOR') && r.some(v => norm(v) === 'MAYORISTA'));
+  if (h < 0) throw new Error('Reebok Calzado: faltan encabezados Modelo color / Mayorista.');
   const headers = rows[h].map(norm);
   const col = (...names: string[]) => headers.findIndex(v => names.includes(v));
   const skuC = col('SKU', 'NUMERO DE ARTICULO'), modelC = col('MODELO COLOR'), descC = col('DESCRIPCION DEL ARTICULO');
-  const stockC = col('STOCK X SKU', 'STOCK'), costC = col('MAYORISTA CON DESCUENTO');
+  const stockC = col('STOCK X SKU', 'STOCK'), costC = col('MAYORISTA');
   if ([skuC, modelC, descC, stockC, costC].some(c => c < 0)) throw new Error('Reebok Calzado: faltan columnas de SKU, descripción, stock o costo.');
   const productos: Record<string, ReebokCalzadoProducto> = {}, avisos: string[] = [];
   const evidencias: Record<string, { ar: string; us: string }[]> = {};
@@ -106,8 +103,8 @@ export function parseReebokCalzado(rows: unknown[][]) {
     if (uk && (!refUK || refUK.arg !== ar)) incompletos.add(codigo);
     const qty = Number(r[stockC]), rawCost = Number(r[costC]);
     if (r[stockC] == null || r[stockC] === '' || !Number.isInteger(qty) || qty < 0 || !Number.isFinite(rawCost) || rawCost <= 0) throw new Error(`Fila ${i + 1}: revisar stock o costo de ${sku}.`);
-    const costo = Math.round(rawCost * 100) / 100;
-    const precio = precioReebokCalzado(costo);
+    const costo = Math.round(rawCost * 0.60 * 100) / 100;
+    const precio = precioReebokCalzado(rawCost);
     const nombre = `Zapatillas Reebok ${desc.slice(0, ukFinal ? ukFinal.index : match!.index).replace(/\bUK\s*-?\s*\d+(?:[.,]\d+)?\s*[-/]?\s*$/i, '').replace(/\bREEBOK\b/gi, '').replace(/[-\s]+$/, '').trim()}`;
     const old = productos[codigo];
     if (old && (old.nombre !== nombre || old.costo !== costo || old.precio !== precio)) throw new Error(`${codigo}: nombres o precios distintos entre talles; revisar el archivo.`);

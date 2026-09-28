@@ -50,7 +50,7 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ### Reebok Calzado (28-sep-2026)
 
-- Títulos de futuras altas: Zapatillas Reebok + modelo + color principal; quitar código inicial del fabricante (ej CN4107), marca duplicada y colores secundarios tras /. Ejemplo RBK1100000089 → Zapatillas Reebok Royal Bb4500 Hi2 Blanco. Misma vista previa, API y CSV. No renombrar productos existentes ni cambiar precios: Wanda tratará precios por separado.
+- Títulos de futuras altas: Zapatillas Reebok + modelo + color principal; quitar código inicial del fabricante (ej CN4107), marca duplicada y colores secundarios tras /. Ejemplo RBK1100000089 → Zapatillas Reebok Royal Bb4500 Hi2 Blanco. Misma vista previa, API y CSV. No renombrar productos existentes ; precios según la regla actual de abajo.
 
 - Corrección publicada UK/W: nueva tabla de Wanda, Hoja1 A1:F36, incorpora UK. `reebokUK.json` contiene equivalencias explícitas, sin interpolar. UK final se convierte solo si su AR tiene un US compatible con el SKU en alguna tabla; el género comercial no manda.
 - Sufijo W indica USA Mujer para el cruce y se conserva en el SKU. Fila 142: RBK1100BR9320-10W, UK7.5, AR40.5, CM26.5 → tabla MUJER.
@@ -60,7 +60,7 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 - Apartado «Reebok — Calzado» separado de indumentaria; misma marca y sucursal DISTRINANDO SA (Reebok - Kappa). Una lista por análisis (PROMO 30% o Calzado 40%).
 - Leer por encabezados: formato 30% usa Número de artículo B / Modelo color E / Descripción F; 40% usa SKU B / Modelo color C / Descripción D. No asumir columnas iguales.
-- Costo = «Mayorista con descuento» redondeado a centavos, sin otro descuento. Venta para AMBOS archivos = costo ×2,5, al más cercano en la serie 990 + múltiplos de 5.000. Si venta <= costo ×2,42, subir al siguiente: margen (venta − costo ×1,21) / venta estrictamente >50%. Ejemplo confirmado: 59.183,90 → 145.990 (50,95%). No usar Público en calzado; indumentaria conserva su regla.
+- Regla confirmada 28-sep: leer MAYORISTA original por encabezado exacto. Costo = Mayorista ×0,60 a centavos (40% fijo, incluso PROMO). Venta = Mayorista ×1,8755, al precio terminado en 999 más cercano (pasos de 1.000, mínimo 999), sin IVA adicional ni ajuste por margen. Reemplaza costo ×2,5 / terminación 990. Ejemplo 63.982,40 → costo 38.389,44 y venta 119.999. Vista previa, alta, actualización y CSV comparten el cálculo; publicar app no escribe Shopify. Indumentaria conserva Precio Público.
 - Conservar SKU exacto y AR informado en descripción, aun sin tabla comparativa. No reconvertir el AR. Packs/curvas, UK sin equivalencia validada o AR ambiguo quedan excluidos CON aviso para revisión; nunca crear como talles individuales ni sumar inventarios de packs.
 - JSON de referencia: reebokHombre.json, reebokMujer.json, reebokNino.json. Transcripción de tabla de talle reebok.xlsx, Hoja1 A1:E36, recibida de Wanda. Conservar K y huecos, 23.3/23.6 cm tal cual; no interpolar.
 - Comparar TODOS los pares US–AR del modelo contra las tres tablas, sin usar género comercial como regla: UNISEX puede usar USA Mujer (PHASE COURT 6.5/36; ATR CHILL 8/38 y 9.5/40). Única coincidencia → tabla completa; varias/ninguna o filas omitidas del modelo → sin identificar.

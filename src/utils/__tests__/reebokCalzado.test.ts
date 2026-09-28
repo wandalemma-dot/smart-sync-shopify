@@ -7,8 +7,8 @@ import { createProducts } from '../createProducts';
 const { graphql, download } = vi.hoisted(() => ({ graphql: vi.fn(), download: vi.fn() }));
 vi.mock('../shopify', () => ({ shopifyGraphQL: graphql, mismaSucursal: (a: string,b: string) => a===b }));
 vi.mock('../csv', async orig => ({ ...await orig<typeof import('../csv')>(), triggerDownload: download }));
-const headers = ['SKU','Modelo color','Descripción del artículo','GÉNERO','Stock x SKU','Mayorista con descuento','Público'];
-const row = (us='6.5', ar='36', code='RBK1100201449') => [`${code}-${us}`,`${code}--`,`PHASE COURT - WHITE - ${ar}`,'UNISEX',1,123.456,200];
+const headers = ['SKU','Modelo color','Descripción del artículo','GÉNERO','Stock x SKU','Mayorista con descuento','Público','Mayorista'];
+const row = (us='6.5', ar='36', code='RBK1100201449') => [`${code}-${us}`,`${code}--`,`PHASE COURT - WHITE - ${ar}`,'UNISEX',1,123.456,200,63982.40];
 const config = { brand:'reebok', reebokCalzado:true, sheetName:'Calzado' } as const;
 const file = (rows: unknown[][]) => { const w=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(w,XLSX.utils.aoa_to_sheet(rows),'Calzado'); return {name:'Calzado.xlsx',arrayBuffer:async()=>XLSX.write(w,{type:'array',bookType:'xlsx'})} as File; };
 beforeEach(()=>{ graphql.mockReset().mockImplementation(async(q:string)=>q.includes('locations(')?{locations:{edges:[{node:{id:'loc',name:'DISTRINANDO SA (Reebok - Kappa)'}}]}}:q.includes('mutation CrearProducto')?{productSet:{product:{id:'p'},userErrors:[]}}:q.includes('mutation GuardarTabla')?{metafieldsSet:{metafields:[{key:'size_conversion'}],userErrors:[]}}:{products:{edges:[],pageInfo:{hasNextPage:false}}}); });
@@ -21,7 +21,7 @@ describe('Reebok Calzado',()=>{
   expect(result.missingProducts[0].title).toBe(title);
   const p=buildMatrixProducts(result,config)[0];
   expect(p.title).toBe(title);
-  expect(p.variants[0]).toMatchObject({sku:'RBK1100000089-10',optionValue:'43',cost:123.46,price:990});
+  expect(p.variants[0]).toMatchObject({sku:'RBK1100000089-10',optionValue:'43',cost:38389.44,price:119999});
   downloadMatrixCSV(result,config);expect(download.mock.calls.at(-1)?.[0]).toContain(title);
  });
  it('mantiene el modelo y simplifica colores conocidos sin guiones',()=>{
@@ -60,7 +60,7 @@ describe('Reebok Calzado',()=>{
   const r=await processFiles(file([headers,row()]),null,null,config);
   const [p]=buildMatrixProducts(r,config);
   expect(p.tags).toContain('TABLA DE TALLE REEBOK MUJER');
-  expect(p.variants[0]).toMatchObject({sku:'RBK1100201449-6.5',optionValue:'36',cost:123.46,price:990});
+  expect(p.variants[0]).toMatchObject({sku:'RBK1100201449-6.5',optionValue:'36',cost:38389.44,price:119999});
   expect(p.sizeConversion?.['36']).toEqual({arg:'36',us:'6.5',cm:'23.5'});
   downloadMatrixCSV(r,config);expect(download.mock.calls.at(-1)?.[0]).toContain('custom.size_conversion');
   await createProducts(r,config);
@@ -78,23 +78,24 @@ describe('Reebok Calzado',()=>{
   expect(p.avisos).toHaveLength(2);expect(p.productos.RBK1100201449.tablaTalle).toBe(REEBOK_SIN_TABLA);
   expect(Object.keys(p.productos.RBK1100201449.sizes)).toEqual(['36']);
  });
- it('precios de ambos formatos: ejemplo confirmado y margen estrictamente mayor al 50%',()=>{
-  expect(precioReebokCalzado(59183.9)).toBe(145990);
-  const rs=[headers.slice(0,-1),row().slice(0,-1)];
-  expect(parseReebokCalzado(rs).productos.RBK1100201449.precio).toBe(990);
-  for (const costo of [1, 400, 5999.99, 12000, 38389.44, 59183.9, 100000, 999999]) {
-    const price=precioReebokCalzado(costo);
-    expect((price-costo*1.21)/price).toBeGreaterThan(.5);
-    expect(price%5000).toBe(990);
-  }
+ it('usa mayorista original y descuento fijo sin tomar costo descontado ni público',()=>{
+  expect(precioReebokCalzado(63982.4)).toBe(119999);
+  expect(precioReebokCalzado(47986.67)).toBe(89999);
+  expect(parseReebokCalzado([headers,row()]).productos.RBK1100201449).toMatchObject({costo:38389.44,precio:119999});
+  const promo=[...headers];promo[0]='Número de artículo';promo[4]='STOCK';
+  expect(parseReebokCalzado([promo,row()]).productos.RBK1100201449).toMatchObject({costo:38389.44,precio:119999});
+  expect(()=>parseReebokCalzado([headers.slice(0,-1),row().slice(0,-1)])).toThrow('Mayorista');
+  for(const v of [0,-1,NaN,Infinity]) expect(()=>precioReebokCalzado(v)).toThrow();
+  expect(precioReebokCalzado(120400/1.8755)).toBe(119999);
+  expect(precioReebokCalzado(120600/1.8755)).toBe(120999);
  });
  it('si falla el JSON informa que ya se creó para evitar duplicar',async()=>{
   const r=await processFiles(file([headers,row()]),null,null,config);
   graphql.mockImplementation(async(q:string)=>q.includes('locations(')?{locations:{edges:[{node:{id:'loc',name:'DISTRINANDO SA (Reebok - Kappa)'}}]}}:q.includes('mutation CrearProducto')?{productSet:{product:{id:'p'},userErrors:[]}}:{metafieldsSet:{userErrors:[{message:'denegado'}]}});
   const result=await createProducts(r,config);expect(result.created).toBe(1);expect(result.errors[0]).toContain('no volver a crearlo');
  });
- for (const name of ['Reebok Calzado 006 40%  22-09.xlsx','Reebok PROMO  001 30%  22-09.xlsx']) {
-  const path=`C:/Users/maxim/Downloads/${name}`;
+ for (const name of ['Reebok Calzado 006 40%  22-09 (1).xlsx','Reebok PROMO  001 30%  22-09 (2).xlsx']) {
+  const path=`C:/Users/Wanda/Downloads/${name}`;
   it.skipIf(!existsSync(path))(`archivo real ${name}`,()=>{
    const w=XLSX.read(readFileSync(path));const rs=XLSX.utils.sheet_to_json<unknown[]>(w.Sheets[w.SheetNames[0]],{header:1});
    const r=parseReebokCalzado(rs); const ps=Object.values(r.productos);

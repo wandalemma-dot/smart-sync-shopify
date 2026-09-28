@@ -385,9 +385,8 @@ export default function App() {
               Se conserva el talle AR y el SKU del proveedor. La tabla se identifica comparando todos los talles disponibles,
               sin asumir que Unisex usa Hombre. Si no se identifica, se crea con etiqueta «TABLA DE TALLE REEBOK SIN IDENTIFICAR» y JSON vacío.
               UK se convierte a AR cuando coincide con la referencia y el US del SKU. Se reconocen sufijos W de mujer. Ropa, packs y talles sin equivalencia quedan para revisión.</p>
-              <p>Costo: «Mayorista con descuento», sin descontar otra vez. Venta: costo ×2,5,
-              redondeada al precio más cercano en pasos de $5.000 terminados en 990.
-              Si el margen no supera el 50% considerando costo ×1,21, sube al siguiente precio.</p>
+              <p>Costo: Mayorista original menos 40%, redondeado a centavos. Venta: Mayorista original ×1,8755,
+              ajustada al precio terminado en 999 más cercano. Sin IVA adicional. También aplica a PROMO.</p>
             </div>}
             {config.brand === 'vart' && (
               <p style={{ fontSize: '0.8rem', color: '#fbbf24', marginTop: '0.4rem' }}>
