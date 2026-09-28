@@ -384,7 +384,7 @@ export default function App() {
               <p><strong>Reebok — Calzado</strong>: subí el archivo del 30% o del 40%, uno por análisis.
               Se conserva el talle AR y el SKU del proveedor. La tabla se identifica comparando todos los talles disponibles,
               sin asumir que Unisex usa Hombre. Si no se identifica, se crea con etiqueta «TABLA DE TALLE REEBOK SIN IDENTIFICAR» y JSON vacío.
-              Las filas de packs, UK o AR ambiguo quedan en los avisos para revisión manual.</p>
+              UK se convierte a AR cuando coincide con la referencia y el US del SKU. Se reconocen sufijos W de mujer. Ropa, packs y talles sin equivalencia quedan para revisión.</p>
               <p>Costo: «Mayorista con descuento», sin descontar otra vez. Venta: costo ×2,5,
               redondeada al precio más cercano en pasos de $5.000 terminados en 990.
               Si el margen no supera el 50% considerando costo ×1,21, sube al siguiente precio.</p>
@@ -1122,3 +1122,4 @@ export default function App() {
     </div>
   );
 }
+
