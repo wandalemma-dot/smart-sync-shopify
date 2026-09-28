@@ -17,6 +17,37 @@ export function precioReebokCalzado(costo: number): number {
 }
 const norm = (v: unknown) => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
 const num = (s: string) => String(Number(s.replace(',', '.')));
+/** Nombre comercial para nuevas cargas. El SKU y el modelo/color no se alteran. */
+export function tituloReebokCalzado(nombre: string): string {
+  let texto = nombre.replace(/^Zapatillas\s+Reebok\s+/i, '')
+    .replace(/^[A-Z]{1,4}\d{3,}\s*-\s*/i, '')
+    .replace(/\bREEBOK\b/gi, '').trim();
+  const colores: Record<string, string> = {
+    WHITE: 'Blanco', FTWWHT: 'Blanco', 'FTWR WHITE': 'Blanco', 'CLASSIC WHITE': 'Blanco',
+    BLACK: 'Negro', CBLACK: 'Negro', 'CORE BLACK': 'Negro', 'NIGHT BLACK': 'Negro',
+    CHALK: 'Tiza', GREY: 'Gris', GRAY: 'Gris', PUGRY3: 'Gris', 'PURE GREY': 'Gris',
+    'VECTOR NAVY': 'Azul Marino', VECNAV: 'Azul Marino', NAVY: 'Azul Marino',
+    BLUE: 'Azul', 'VECTOR BLUE': 'Azul', GREEN: 'Verde', 'DARK GREEN': 'Verde',
+    RED: 'Rojo', VECRED: 'Rojo', 'VECTOR RED': 'Rojo', PINK: 'Rosa',
+    PURPLE: 'Violeta', BEIGE: 'Beige', YELLOW: 'Amarillo', ORANGE: 'Naranja',
+  };
+  // Formato con separadores: MODELO - COLOR PRINCIPAL/DETALLES.
+  const partes = texto.split(/\s+-\s+/);
+  let color = '';
+  if (partes.length > 1) {
+    color = partes.pop()!.split('/')[0].trim();
+    texto = partes.join(' ');
+  } else {
+    // Formato sin guiones: detectar el comienzo del bloque de colores conocido.
+    const keys = Object.keys(colores).sort((a,b) => b.length - a.length);
+    const match = texto.match(new RegExp(`\\s+(${keys.join('|')})(?=\\s|/|$)`, 'i'));
+    if (match) { color = texto.slice(match.index! + 1).split('/')[0].trim(); texto = texto.slice(0, match.index); }
+  }
+  const baseColor = color.toUpperCase().replace(/\s+\d+$/, '');
+  color = colores[baseColor] || color;
+  return `Zapatillas Reebok ${texto} ${color}`.replace(/\s+/g, ' ').trim()
+    .toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+}
 function coincideUS(key: string, ar: string, us: string) {
   const dual = us.match(/^M(\d+(?:\.\d+)?)\/W(\d+(?:\.\d+)?)$/);
   const mujer = us.match(/^(\d+(?:\.\d+)?)W$/);
@@ -85,7 +116,10 @@ export function parseReebokCalzado(rows: unknown[][]) {
     p.sizes[ar] = qty; p.skuPorTalle[ar] = sku;
     (evidencias[codigo] ??= []).push({ ar, us });
   }
-  for (const [code, p] of Object.entries(productos)) Object.assign(p, tablaReebok(evidencias[code], incompletos.has(code)));
+  for (const [code, p] of Object.entries(productos)) {
+    Object.assign(p, tablaReebok(evidencias[code], incompletos.has(code)));
+    p.nombre = tituloReebokCalzado(p.nombre);
+  }
   return { productos, avisos };
 }
 

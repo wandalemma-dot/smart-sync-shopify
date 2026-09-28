@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as XLSX from 'xlsx';
 import { readFileSync, existsSync } from 'node:fs';
-import { parseReebokCalzado, precioReebokCalzado, tablaReebok, REEBOK_SIN_TABLA } from '../reebokCalzado';
+import { parseReebokCalzado, precioReebokCalzado, tablaReebok, REEBOK_SIN_TABLA, tituloReebokCalzado } from '../reebokCalzado';
 import { buildMatrixProducts, processFiles, downloadMatrixCSV } from '../syncLogic';
 import { createProducts } from '../createProducts';
 const { graphql, download } = vi.hoisted(() => ({ graphql: vi.fn(), download: vi.fn() }));
@@ -13,6 +13,22 @@ const config = { brand:'reebok', reebokCalzado:true, sheetName:'Calzado' } as co
 const file = (rows: unknown[][]) => { const w=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(w,XLSX.utils.aoa_to_sheet(rows),'Calzado'); return {name:'Calzado.xlsx',arrayBuffer:async()=>XLSX.write(w,{type:'array',bookType:'xlsx'})} as File; };
 beforeEach(()=>{ graphql.mockReset().mockImplementation(async(q:string)=>q.includes('locations(')?{locations:{edges:[{node:{id:'loc',name:'DISTRINANDO SA (Reebok - Kappa)'}}]}}:q.includes('mutation CrearProducto')?{productSet:{product:{id:'p'},userErrors:[]}}:q.includes('mutation GuardarTabla')?{metafieldsSet:{metafields:[{key:'size_conversion'}],userErrors:[]}}:{products:{edges:[],pageInfo:{hasNextPage:false}}}); });
 describe('Reebok Calzado',()=>{
+ it('simplifica el ejemplo confirmado en resumen, alta y CSV sin cambiar sus datos',async()=>{
+  const r=row('10','43','RBK1100000089');
+  r[2]='CN4107 - REEBOK ROYAL BB4500 HI2 - WHITE/LGH SOLID GREY - 43';
+  const result=await processFiles(file([headers,r]),null,null,config);
+  const title='Zapatillas Reebok Royal Bb4500 Hi2 Blanco';
+  expect(result.missingProducts[0].title).toBe(title);
+  const p=buildMatrixProducts(result,config)[0];
+  expect(p.title).toBe(title);
+  expect(p.variants[0]).toMatchObject({sku:'RBK1100000089-10',optionValue:'43',cost:123.46,price:990});
+  downloadMatrixCSV(result,config);expect(download.mock.calls.at(-1)?.[0]).toContain(title);
+ });
+ it('mantiene el modelo y simplifica colores conocidos sin guiones',()=>{
+  expect(tituloReebokCalzado('Zapatillas Reebok CLUB C EXTRA - CHALK/CHALK/GLEN GREEN')).toBe('Zapatillas Reebok Club C Extra Tiza');
+  expect(tituloReebokCalzado('Zapatillas Reebok NANO X3 CBLACK/FTWWHT')).toBe('Zapatillas Reebok Nano X3 Negro');
+  expect(tituloReebokCalzado('Zapatillas Reebok ROYAL BB4500 HI2')).toBe('Zapatillas Reebok Royal Bb4500 Hi2');
+ });
  it('fila 142: W es USA Mujer, conserva SKU y reconoce AR 40.5',()=>{
   const r=row('10W','40.5','RBK1100BR9320');r[2]='ENERGEN LITE PLUS 3 UK-7.5/AR-40.5';
   const p=parseReebokCalzado([headers,r]).productos.RBK1100BR9320;

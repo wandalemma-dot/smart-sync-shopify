@@ -50,6 +50,8 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ### Reebok Calzado (28-sep-2026)
 
+- Títulos de futuras altas: Zapatillas Reebok + modelo + color principal; quitar código inicial del fabricante (ej CN4107), marca duplicada y colores secundarios tras /. Ejemplo RBK1100000089 → Zapatillas Reebok Royal Bb4500 Hi2 Blanco. Misma vista previa, API y CSV. No renombrar productos existentes ni cambiar precios: Wanda tratará precios por separado.
+
 - Corrección publicada UK/W: nueva tabla de Wanda, Hoja1 A1:F36, incorpora UK. `reebokUK.json` contiene equivalencias explícitas, sin interpolar. UK final se convierte solo si su AR tiene un US compatible con el SKU en alguna tabla; el género comercial no manda.
 - Sufijo W indica USA Mujer para el cruce y se conserva en el SKU. Fila 142: RBK1100BR9320-10W, UK7.5, AR40.5, CM26.5 → tabla MUJER.
 - Si una descripción tiene AR explícito, se conserva. Si su UK contradice ese AR, no asignar JSON automáticamente (casos filas 274 y 289); etiqueta SIN IDENTIFICAR.
