@@ -10,6 +10,7 @@
 
 const ALLOWED_MUTATIONS = [
   'inventorySetQuantities', // escribir stock (cantidades)
+  'metafieldsSet',             // guardar Size Conversion de productos nuevos
   'productSet',                // crear productos nuevos
   'publishablePublish',        // publicar productos en un canal (Point of Sale)
   // Actualiza precio y costo de variantes y, desde el 29-ago-2026, también

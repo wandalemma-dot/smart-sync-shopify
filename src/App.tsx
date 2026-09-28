@@ -332,9 +332,10 @@ export default function App() {
             <div className="form-group">
               <label>Marca a procesar</label>
               <select
-                value={config.brand}
+                value={config.reebokCalzado ? 'reebok-calzado' : config.brand}
                 onChange={e => {
-                  setConfig({...config, brand: e.target.value as any});
+                  setConfig({...config, brand: (e.target.value === 'reebok-calzado' ? 'reebok' : e.target.value) as any, reebokCalzado: e.target.value === 'reebok-calzado'});
+                  setResult(null);
                   setProviderFile(null);
                 }}
               >
@@ -345,6 +346,7 @@ export default function App() {
                 <option value="vart">Vart</option>
                 <option value="ntf">NTF</option>
                 <option value="reebok">Reebok — Indumentaria</option>
+                <option value="reebok-calzado">Reebok — Calzado</option>
                 <option value="orng">ORNG</option>
                 <option value="bloque">Bloque (PDFs)</option>
               </select>
@@ -366,7 +368,7 @@ export default function App() {
               </p>
             )}
 
-            {config.brand === 'reebok' && (
+            {config.brand === 'reebok' && !config.reebokCalzado && (
               <p style={{ fontSize: '0.85rem', marginTop: '0.4rem' }}>
                 <strong>Reebok — Indumentaria</strong>: subí una sola lista vigente (usá la del 25 si también tenés la del 24).
                 Costo de <strong>L: Mayorista con descuento</strong>. Venta de <strong>M: Precio Público</strong>,
@@ -374,10 +376,19 @@ export default function App() {
                 considerando costo × 1,21. Revisá los precios en el resumen antes de cargar.
                 Los talles se agrupan por modelo/color y se conservan los SKU del Excel.
                 Stock en <strong>DISTRINANDO SA (Reebok - Kappa)</strong>.
-                El calzado queda pendiente.
+                Para calzado, elegí Reebok — Calzado.
               </p>
             )}
 
+            {config.reebokCalzado && <div style={{ marginTop: 12 }}>
+              <p><strong>Reebok — Calzado</strong>: subí el archivo del 30% o del 40%, uno por análisis.
+              Se conserva el talle AR y el SKU del proveedor. La tabla se identifica comparando todos los talles disponibles,
+              sin asumir que Unisex usa Hombre. Si no se identifica, se crea con etiqueta «TABLA DE TALLE REEBOK SIN IDENTIFICAR» y JSON vacío.
+              Las filas de packs, UK o AR ambiguo quedan en los avisos para revisión manual.</p>
+              <p>Costo: «Mayorista con descuento», sin descontar otra vez. Venta: costo ×2,5,
+              redondeada al precio más cercano en pasos de $5.000 terminados en 990.
+              Si el margen no supera el 50% considerando costo ×1,21, sube al siguiente precio.</p>
+            </div>}
             {config.brand === 'vart' && (
               <p style={{ fontSize: '0.8rem', color: '#fbbf24', marginTop: '0.4rem' }}>
                 🆕 <strong>Vart</strong> usa la <strong>plantilla de carga de INDY</strong> (hoja «Carga Productos»).
@@ -644,6 +655,9 @@ export default function App() {
                           {' · '}{talles.slice(0, 8).map(([t, q]) => `${t}:${q}`).join('  ')}{talles.length > 8 ? ' …' : ''}
                         </div>
                         {problema && <div style={{ fontSize: '0.8rem', color: '#fbbf24', marginTop: 4 }}>{problema}</div>}
+                        {config.reebokCalzado && <div style={{ color: p.sizeConversion ? '#a7f3d0' : '#fbbf24', marginTop: 4 }}>
+                          {p.tablaTalle} · {p.sizeConversion ? 'JSON de equivalencias incluido' : 'Size Conversion vacío: revisión manual'}
+                        </div>}
                         {config.brand === 'reebok' && <div style={{ fontSize: '0.8rem', color: '#a7f3d0', marginTop: 4 }}>
                           Costo: ${p.costFinal?.toLocaleString('es-AR')} · Venta: ${p.publicPrice?.toLocaleString('es-AR')}
                           {' · '}Margen de la planilla: {((1 - (p.costFinal || 0) * 1.21 / (p.publicPrice || 1)) * 100).toFixed(2)}%

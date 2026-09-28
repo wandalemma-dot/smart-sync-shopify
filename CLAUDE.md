@@ -48,12 +48,26 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ## 1. Qué hace la app
 
+### Reebok Calzado (28-sep-2026)
+
+- Apartado «Reebok — Calzado» separado de indumentaria; misma marca y sucursal DISTRINANDO SA (Reebok - Kappa). Una lista por análisis (PROMO 30% o Calzado 40%).
+- Leer por encabezados: formato 30% usa Número de artículo B / Modelo color E / Descripción F; 40% usa SKU B / Modelo color C / Descripción D. No asumir columnas iguales.
+- Costo = «Mayorista con descuento» redondeado a centavos, sin otro descuento. Venta para AMBOS archivos = costo ×2,5, al más cercano en la serie 990 + múltiplos de 5.000. Si venta <= costo ×2,42, subir al siguiente: margen (venta − costo ×1,21) / venta estrictamente >50%. Ejemplo confirmado: 59.183,90 → 145.990 (50,95%). No usar Público en calzado; indumentaria conserva su regla.
+- Conservar SKU exacto y AR informado en descripción, aun sin tabla comparativa. No reconvertir el AR. Packs/curvas, descripción terminada en UK o AR ambiguo quedan excluidos CON aviso para revisión; nunca crear como talles individuales ni sumar inventarios de packs.
+- JSON de referencia: reebokHombre.json, reebokMujer.json, reebokNino.json. Transcripción de tabla de talle reebok.xlsx, Hoja1 A1:E36, recibida de Wanda. Conservar K y huecos, 23.3/23.6 cm tal cual; no interpolar.
+- Comparar TODOS los pares US–AR del modelo contra las tres tablas, sin usar género comercial como regla: UNISEX puede usar USA Mujer (PHASE COURT 6.5/36; ATR CHILL 8/38 y 9.5/40). Única coincidencia → tabla completa; varias/ninguna o filas omitidas del modelo → sin identificar.
+- Etiquetas: código + TABLA DE TALLE REEBOK HOMBRE / MUJER / NIÑO; alternativa TABLA DE TALLE REEBOK SIN IDENTIFICAR. Identificación se limita a los talles disponibles en el análisis; no demuestra talles ausentes ni resuelve otro archivo automáticamente.
+- Metacampo EXISTENTE confirmado por captura: custom.size_conversion, tipo json. Solo en altas, guardar tabla mediante metafieldsSet; desconocido → no enviar valor. CSV de altas comparte JSON/etiqueta. No crear definición, no vaciar campos existentes ni renombrar productos existentes.
+- Si Shopify crea el producto pero falla el metacampo, informar producto creado y reparación manual, sin indicar repetir creación. Reutilizar protecciones Reebok: SKU exacto, sin barrer ausentes, nunca tocar Martínez, sucursal obligatoria; variantes nuevas de existentes pendientes.
+- Tests: reebokCalzado.test.ts, casos de UNISEX/mujer, ambigüedad, discrepancia, UK/packs, JSON, fallo parcial y precios. Archivos reales usados localmente, no incorporados al repositorio.
+- Documentación Shopify consultada: https://shopify.dev/docs/api/admin-graphql/2026-07/mutations/metafieldsSet
+
 ### Reebok indumentaria (25-sep-2026)
 
 - Corrección: el Excel del 24 incluye CALZA (7 variantes) y TRACK TOP (4) que no estaban en el del 25. Ambas son indumentaria y deben incluirse. Probar ambos archivos completos: 24 = 63 modelos / 257 variantes / 8880 unidades, 25 = 57 / 211 / 8233.
 - Wanda pidió que toda categoría TOP, incluido TRACK TOP, lleve «Top deportivo Reebok…» en el título de alta. No renombrar productos ya existentes automáticamente.
 
-- Primera etapa solo indumentaria. Calzado pendiente de tablas del proveedor: no convertir ni crear zapatillas.
+- Esta opción procesa solo indumentaria. Para zapatillas, usar el apartado Reebok — Calzado.
 - Leer encabezados por nombre: SKU, Modelo color, Descripción del artículo, GRUPO, Stock x SKU, Mayorista con descuento.
 - Agrupar por Modelo color quitando guiones finales, usar ese código como etiqueta. Conservar SKU completo de cada variante. Talle al final de descripción, sin conversión; no confundir 2XL con código numérico.
 - Costo = Mayorista con descuento, redondeado a centavos. No aplicar nuevamente 40%/30%, no dividir packs: Wanda entregó archivos ya desglosados.

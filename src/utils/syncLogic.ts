@@ -12,15 +12,20 @@ import type { ListaPrecios } from './listaPrecios';
 import { unidadesPorPackId } from './packsId';
 import { parseNtf, tituloNtf, NTF_LOCATION } from './ntfLogic';
 import { parseReebok, REEBOK_LOCATION } from './reebokLogic';
+import { parseReebokCalzado } from './reebokCalzado';
+import type { SizeConversion } from './reebokCalzado';
 
 export type SyncMode = 'all' | 'stock_only' | 'cost_only' | 'price_only';
 
 export interface SyncConfig {
   sheetName: string;
+  reebokCalzado?: boolean;
   brand: 'lecoq' | 'converse' | 'bloque' | 'orchard' | 'luxo' | 'vart' | 'orng' | 'ntf' | 'reebok';
 }
 
 export interface MissingProduct {
+  tablaTalle?: string;
+  sizeConversion?: SizeConversion;
   coditm: string;
   title: string;
   wholesale: number;
@@ -678,7 +683,7 @@ export async function processFiles(
   listaPrecios?: ListaPrecios | null,
 ): Promise<SyncResult> {
   const alerts: AlertMessage[] = [];
-  const excelMap: Record<string, { wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyTags?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number, usaListaPrecios?: boolean, skuPorTalle?: Record<string, string>, whslDelArchivo?: boolean, unidadesPorPack?: number }> = {};
+  const excelMap: Record<string, { tablaTalle?: string, sizeConversion?: SizeConversion, wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyTags?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number, usaListaPrecios?: boolean, skuPorTalle?: Record<string, string>, whslDelArchivo?: boolean, unidadesPorPack?: number }> = {};
 
   if (config.brand === 'bloque' && /\.xlsx?$/i.test(providerFile.name)) {
     // Bloque en Excel (ej. la preventa de Protec).
@@ -884,14 +889,15 @@ export async function processFiles(
       });
     }
   } else if (config.brand === 'reebok') {
-    const reebok = parseReebok(await readExcel(providerFile, config.sheetName));
+    const reebok = config.reebokCalzado ? parseReebokCalzado(await readExcel(providerFile, config.sheetName)) : parseReebok(await readExcel(providerFile, config.sheetName));
     for (const [codigo, p] of Object.entries(reebok.productos)) {
       excelMap[codigo] = { wholesale: p.costo, publicPrice: p.precio, costFinal: p.costo,
         title: p.nombre, vendor: 'Reebok', sizes: p.sizes, skuPorTalle: p.skuPorTalle,
-        artType: p.artType, foundInShopify: false };
+        artType: p.artType, foundInShopify: false,
+        ...(config.reebokCalzado ? { tablaTalle: (p as any).tablaTalle, sizeConversion: (p as any).sizeConversion } : {}) };
     }
-    alerts.push({ type: 'info', title: `Reebok: ${Object.keys(reebok.productos).length} modelos de indumentaria`,
-      message: 'Costo: L, Mayorista con descuento, sin volver a descontar. Venta: M, Precio Público, sin markup ni redondeo. Margen informativo: (venta − costo × 1,21) / venta. Usá una sola lista vigente; no combines la del 24 con la del 25. Calzado pendiente.' });
+    alerts.push({ type: 'info', title: `Reebok: ${Object.keys(reebok.productos).length} modelos de ${config.reebokCalzado ? "calzado" : "indumentaria"}`, 
+      message: config.reebokCalzado ? 'Se conserva el AR informado y el SKU original. Tabla por coincidencia completa US–AR; sin coincidencia única, JSON vacío. Costo de Mayorista con descuento ×2,5; venta redondeada a pasos de $5.000 terminados en 990, con margen mayor al 50% considerando costo ×1,21. Revisá filas pendientes antes del alta.' : 'Costo: L, Mayorista con descuento, sin volver a descontar. Venta: M, Precio Público, sin markup ni redondeo. Margen informativo: (venta − costo × 1,21) / venta. Usá una sola lista vigente; no combines la del 24 con la del 25. Para calzado, usar Reebok — Calzado.' });
     for (const message of reebok.avisos) alerts.push({ type: 'warning', title: 'Reebok: fila excluida', message });
   } else if (config.brand === 'ntf') {
     const ntf = parseNtf(await readExcel(providerFile, config.sheetName));
@@ -1536,6 +1542,7 @@ export async function processFiles(
         costFinal: data.costFinal,
         usaListaPrecios: data.usaListaPrecios,
         skuPorTalle: data.skuPorTalle,
+        tablaTalle: data.tablaTalle, sizeConversion: data.sizeConversion,
       });
     }
   }
@@ -1601,7 +1608,7 @@ export function downloadUpdateCSV(result: SyncResult, config: SyncConfig) {
 // Versión estructurada de la matriz (misma lógica que el CSV) para poder crear
 // los productos directo por la API además de exportarlos.
 export interface MatrixVariant { sku: string; optionName: string; optionValue: string; price: number; cost: number; qty: number; }
-export interface MatrixProduct { handle: string; title: string; vendor: string; productType: string; tags: string[]; weightGrams: number; hasSizes: boolean; variants: MatrixVariant[]; }
+export interface MatrixProduct { sizeConversion?: SizeConversion; handle: string; title: string; vendor: string; productType: string; tags: string[]; weightGrams: number; hasSizes: boolean; variants: MatrixVariant[]; }
 
 const CONVERSE_TABLE_TAG: Record<number, string> = {
   1: 'TABLA DE TALLE CONVERSE 1',
@@ -1779,7 +1786,8 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
     if (config.brand === 'converse' && converseKind && converseKind >= 1 && CONVERSE_TABLE_TAG[converseKind]) {
       tags.push(CONVERSE_TABLE_TAG[converseKind]);
     }
-    out.push({ handle, title: displayTitle, vendor, productType, tags, weightGrams: calcWeightGrams(config.brand, prod.artType), hasSizes, variants });
+    if (config.reebokCalzado && prod.tablaTalle) tags.push(prod.tablaTalle);
+    out.push({ sizeConversion: config.reebokCalzado ? prod.sizeConversion : undefined, handle, title: displayTitle, vendor, productType, tags, weightGrams: calcWeightGrams(config.brand, prod.artType), hasSizes, variants });
   }
   return out;
 }
@@ -1810,6 +1818,7 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, tableS
     'Google Shopping / Custom label 3', 'Google Shopping / Custom label 4'
   ];
 
+  if (config.reebokCalzado) headers.push('Size Conversion (product.metafields.custom.size_conversion)');
   let csvContent = headers.join(',') + '\n';
 
   // Converse usa exactamente las variantes y la tabla elegida para el alta por API.
@@ -1828,6 +1837,7 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, tableS
         if (index === 0) Object.assign(row, {
           Title: prod.title, Description: prod.title, Vendor: prod.vendor,
           Type: prod.productType, Tags: prod.tags.join(', '),
+          ...(config.reebokCalzado && prod.sizeConversion ? { 'Size Conversion (product.metafields.custom.size_conversion)': JSON.stringify(prod.sizeConversion) } : {}),
           'Published on online store': 'FALSE', Status: 'Active',
         });
         csvContent += headers.map(h => escapeCSV(row[h] ?? '')).join(',') + '\n';

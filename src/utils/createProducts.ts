@@ -23,6 +23,10 @@ const PRODUCT_SET = `
   }
 `;
 
+const SET_SIZE_CONVERSION = `mutation GuardarTabla($metafields: [MetafieldsSetInput!]!) {
+  metafieldsSet(metafields: $metafields) { metafields { key namespace value } userErrors { field message } }
+}`;
+
 const PUBLISH = `
   mutation Publicar($id: ID!, $input: [PublicationInput!]!) {
     publishablePublish(id: $id, input: $input) {
@@ -132,6 +136,18 @@ export async function createProducts(
         created++;
         // Publicar SOLO en Point of Sale (no en la tienda online).
         const productId = data?.productSet?.product?.id;
+        if (p.sizeConversion) {
+          try {
+            if (!productId) throw new Error('Shopify no devolvió el identificador del producto');
+            const meta = await shopifyGraphQL<any>(SET_SIZE_CONVERSION, { metafields: [{
+              ownerId: productId, namespace: 'custom', key: 'size_conversion', type: 'json', value: JSON.stringify(p.sizeConversion),
+            }] });
+            const metaErrors = meta?.metafieldsSet?.userErrors;
+            if (!meta?.metafieldsSet || metaErrors?.length) throw new Error(metaErrors?.map((e: any) => e.message).join('; ') || 'Sin respuesta de Shopify');
+          } catch (e: any) {
+            errors.push(`${p.title}: producto creado (${productId}), pero falta guardar Size Conversion: ${e.message}. Completar manualmente; no volver a crearlo.`);
+          }
+        }
         if (productId && posId) {
           try {
             await shopifyGraphQL<any>(PUBLISH, { id: productId, input: [{ publicationId: posId }] });
