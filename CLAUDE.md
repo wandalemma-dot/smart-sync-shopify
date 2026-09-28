@@ -50,13 +50,15 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ### Reebok Calzado (28-sep-2026)
 
+- Ampliación confirmada por Wanda: Hombre conserva US13 → AR47 / 31cm y agrega US14 → AR48 / 32cm y US15 → AR49 / 33cm. UK13 del SKU RBK1100033912-14 corresponde a AR48; se agrega solo esa referencia UK, sin inferir otras. Se descartó Tabla_de_Talles_Reebok_Unisex.xlsx por incompatibilidad. Mujer y talles anteriores sin cambios. El modelo ahora se identifica como Hombre. No modifica productos existentes en Shopify.
+
 - Títulos de futuras altas: Zapatillas Reebok + modelo + color principal; quitar código inicial del fabricante (ej CN4107), marca duplicada y colores secundarios tras /. Ejemplo RBK1100000089 → Zapatillas Reebok Royal Bb4500 Hi2 Blanco. Misma vista previa, API y CSV. No renombrar productos existentes ; precios según la regla actual de abajo.
 
 - Corrección publicada UK/W: nueva tabla de Wanda, Hoja1 A1:F36, incorpora UK. `reebokUK.json` contiene equivalencias explícitas, sin interpolar. UK final se convierte solo si su AR tiene un US compatible con el SKU en alguna tabla; el género comercial no manda.
 - Sufijo W indica USA Mujer para el cruce y se conserva en el SKU. Fila 142: RBK1100BR9320-10W, UK7.5, AR40.5, CM26.5 → tabla MUJER.
 - Si una descripción tiene AR explícito, se conserva. Si su UK contradice ese AR, no asignar JSON automáticamente (casos filas 274 y 289); etiqueta SIN IDENTIFICAR.
-- Archivos locales actuales: Calzado 40% tiene 452 filas, 449 utilizables y 3 excluidas: fila 41 RBK1100033912-14 (UK13 ausente); fila 224 RBK17533-RBKGJ6103-S (remera); fila 249 RBK1LSC89-RBKGY7182-8 (AR ambiguo). PROMO 30%: 152 filas utilizables. Total 601. No llamar packs a las variantes W: ese fue un error del análisis anterior.
-- Pendiente operativo: revisar esos 2 talles de calzado con proveedor; procesar la remera como indumentaria. La actualización de la app no crea productos por sí sola. En otra PC, descargar main fresco antes de trabajar, leer este archivo; no sobreescribir con copias antiguas.
+- Archivos locales actuales: Calzado 40% tiene 452 filas, 450 utilizables y 2 excluidas: fila 224 RBK17533-RBKGJ6103-S (remera); fila 249 RBK1LSC89-RBKGY7182-8 (AR ambiguo). PROMO 30%: 152 filas utilizables. Total 602. No llamar packs a las variantes W: ese fue un error del análisis anterior.
+- Pendiente operativo: revisar el talle ambiguo de calzado con proveedor; procesar la remera como indumentaria. La actualización de la app no crea productos por sí sola. En otra PC, descargar main fresco antes de trabajar, leer este archivo; no sobreescribir con copias antiguas.
 
 - Apartado «Reebok — Calzado» separado de indumentaria; misma marca y sucursal DISTRINANDO SA (Reebok - Kappa). Una lista por análisis (PROMO 30% o Calzado 40%).
 - Leer por encabezados: formato 30% usa Número de artículo B / Modelo color E / Descripción F; 40% usa SKU B / Modelo color C / Descripción D. No asumir columnas iguales.

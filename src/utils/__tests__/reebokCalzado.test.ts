@@ -13,6 +13,20 @@ const config = { brand:'reebok', reebokCalzado:true, sheetName:'Calzado' } as co
 const file = (rows: unknown[][]) => { const w=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(w,XLSX.utils.aoa_to_sheet(rows),'Calzado'); return {name:'Calzado.xlsx',arrayBuffer:async()=>XLSX.write(w,{type:'array',bookType:'xlsx'})} as File; };
 beforeEach(()=>{ graphql.mockReset().mockImplementation(async(q:string)=>q.includes('locations(')?{locations:{edges:[{node:{id:'loc',name:'DISTRINANDO SA (Reebok - Kappa)'}}]}}:q.includes('mutation CrearProducto')?{productSet:{product:{id:'p'},userErrors:[]}}:q.includes('mutation GuardarTabla')?{metafieldsSet:{metafields:[{key:'size_conversion'}],userErrors:[]}}:{products:{edges:[],pageInfo:{hasNextPage:false}}}); });
 describe('Reebok Calzado',()=>{
+ it('agrega US14/48 y US15/49 sin cambiar US13/47 y admite el UK13 del SKU14',()=>{
+  const pares=[{us:'13',ar:'47'},{us:'14',ar:'48'},{us:'15',ar:'49'}];
+  const tabla=tablaReebok(pares);
+  expect(tabla.tablaTalle).toBe('TABLA DE TALLE REEBOK HOMBRE');
+  for(const [ar,us,cm] of [['47','13','31'],['48','14','32'],['49','15','33']])
+   expect(tabla.sizeConversion?.[ar]).toEqual({arg:ar,us,cm});
+  const rs=[['14','13'],['8','7'],['8.5','7.5']].map(([us,uk])=>{
+   const r=row(us,'48','RBK1100033912');r[2]=`ROYAL BB4590 UK ${uk}`;return r;
+  });
+  const result=parseReebokCalzado([headers,...rs]);
+  expect(result.avisos).toEqual([]);
+  expect(result.productos.RBK1100033912.sizes).toEqual({'48':1,'40':1,'40.5':1});
+  expect(result.productos.RBK1100033912.tablaTalle).toBe('TABLA DE TALLE REEBOK HOMBRE');
+ });
  it('simplifica el ejemplo confirmado en resumen, alta y CSV sin cambiar sus datos',async()=>{
   const r=row('10','43','RBK1100000089');
   r[2]='CN4107 - REEBOK ROYAL BB4500 HI2 - WHITE/LGH SOLID GREY - 43';
@@ -100,8 +114,8 @@ describe('Reebok Calzado',()=>{
    const w=XLSX.read(readFileSync(path));const rs=XLSX.utils.sheet_to_json<unknown[]>(w.Sheets[w.SheetNames[0]],{header:1});
    const r=parseReebokCalzado(rs); const ps=Object.values(r.productos);
    expect(ps.length).toBeGreaterThan(0);
-   expect(ps.reduce((n,p)=>n+Object.keys(p.sizes).length,0)).toBe(name.includes('40%') ? 449 : 152);
-   expect(r.avisos).toHaveLength(name.includes('40%') ? 3 : 0);
+   expect(ps.reduce((n,p)=>n+Object.keys(p.sizes).length,0)).toBe(name.includes('40%') ? 450 : 152);
+   expect(r.avisos).toHaveLength(name.includes('40%') ? 2 : 0);
    expect(ps.every(p=>Object.keys(p.sizes).every(ar=>Number(ar)>=20))).toBe(true);
   });
  }
