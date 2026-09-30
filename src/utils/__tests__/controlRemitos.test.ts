@@ -16,7 +16,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   normalizarTalle, normalizarCodigo, talleDeVariante, netoPorVariante, compararRemito,
-  chequeosRemito, filasAMovimientos, consultaHistorial, sumarDias, personasDe,
+  chequeosRemito, filasAMovimientos, consultaHistorial, sumarDias, personasDe, remitoDesdeFilas,
 } from '../controlRemitos';
 import type { Movimiento, VarianteInfo, Remito } from '../controlRemitos';
 import fabrique from './remitoFabrique.json';
@@ -213,5 +213,35 @@ describe('Shopify', () => {
   });
   it('sumar días', () => {
     expect(sumarDias('2026-09-28', 7)).toBe('2026-10-05');
+  });
+});
+
+describe('remito desde Excel (camino gratis)', () => {
+  it('lee el Excel que arma Claude: encabezado, renglones y totales', () => {
+    const filas: unknown[][] = [
+      ['Fabrique SRL — Factura A 0003-00008299 — 22/09/2026 — 79 renglones / 87 unidades'],
+      [],
+      ['Renglón', 'Código', 'Descripción', 'Color', 'Talle', 'Cantidad', 'Precio unit.'],
+      ...remitoReal.renglones.map((r, i) => [i + 1, r.codigo, r.descripcion, r.color, r.talle || '—', r.cantidad, r.precio_unitario]),
+      ['', '', '', '', 'TOTAL', '', ''],
+    ];
+    const r = remitoDesdeFilas(filas);
+    expect(r.proveedor).toBe('Fabrique SRL');
+    expect(r.numero).toBe('0003-00008299');
+    expect(r.fecha).toBe('2026-09-22');
+    expect(r.renglones.length).toBe(79);
+    expect(r.renglones.find((x) => x.codigo === 'P70P210')!.talle).toBe(''); // gorra sin talle
+    expect(chequeosRemito(r)).toEqual([]);
+  });
+  it('acepta otros encabezados («Artículo» como código + «Descripción»)', () => {
+    const r = remitoDesdeFilas([
+      ['Articulo', 'Descripcion', 'Talle', 'Cant'],
+      ['P52SA210', 'Remera Kronos', 'M', '2'],
+      ['', '', '', ''],
+    ]);
+    expect(r.renglones).toEqual([expect.objectContaining({ codigo: 'P52SA210', descripcion: 'Remera Kronos', talle: 'M', cantidad: 2 })]);
+  });
+  it('sin Talle/Cantidad avisa en vez de inventar', () => {
+    expect(() => remitoDesdeFilas([['Codigo', 'Precio'], ['X', 1]])).toThrow(/Talle/);
   });
 });
