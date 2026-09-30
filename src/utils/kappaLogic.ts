@@ -19,6 +19,7 @@ export function parseKappa(rows: unknown[][], calzado: boolean, sistema: 'EU'|'A
  const skuC=c('SKU'),modeloC=c('MODELO COLOR'),descC=c('DESCRIPCION DEL ARTICULO'),eanC=c('EAN'),udmC=c('UDM');
  const stockC=c(calzado?'DISPONIBLE (INMEDIATO)':'DISPONIBLE'),costC=c('MAYORISTA CON DESCUENTO'),priceC=c('PUBLICO'),listaC=c('MAYORISTA UNITARIO'),dtoC=c('DESCUENTO'),generoC=c('GENERO');
  const productos:Record<string,KappaProducto>={},avisos:string[]=[];
+ const incompletos=new Set<string>();
  const vistos=new Map<string,string>(),eans=new Map<string,string>();
  for(let i=h+1;i<rows.length;i++) {
   const r=rows[i],sku=String(r[skuC]??'').trim();if(!sku)continue;
@@ -29,11 +30,15 @@ export function parseKappa(rows: unknown[][], calzado: boolean, sistema: 'EU'|'A
   if(!desc.toUpperCase().endsWith(' '+original))throw new Error(`Kappa ${sku}: talle del SKU y descripción no coinciden.`);
   let talle=original,tabla:TablaKappa|undefined;
   if(calzado) {
-   if(!/^\d+(\.\d+)?$/.test(original)) {avisos.push(`${sku}: no es talle individual de calzado.`);continue;}
+   if(!/^\d+(\.\d+)?$/.test(original) || Number(original)<20 || Number(original)>55) {avisos.push(`${sku}: no es talle individual de calzado.`);continue;}
    tabla=/KIDS|CHILD|NINO|JUNIOR/.test(norm(r[generoC]))?'NINO':'UNISEX';
    const equivalencia=sistema==='EU'?convertirTalleKappa(original,tabla):Object.values(KAPPA_TABLAS[tabla]).find(t=>t.arg===original);
-   if(!equivalencia){avisos.push(`${sku}: talle ${original} ${sistema} fuera de tabla ${tabla}; revisar.`);continue;}
-   talle=equivalencia.arg;
+   if(!equivalencia){
+    avisos.push(`${sku}: talle ${original} ${sistema} fuera de tabla ${tabla}; ${sistema==='AR'?'se conserva AR, sin JSON automático para este modelo':'fila excluida'}.`);
+    if(sistema==='EU')continue;
+    incompletos.add(codigo);
+   }
+   talle=equivalencia?.arg ?? original;
   } else if(!/^(X{0,4}[SML]|[2-6]XL|TU|UNICO)$/.test(original)) {avisos.push(`${sku}: talle de indumentaria sin identificar.`);continue;}
   const qty=Number(String(r[stockC]??'').replace(/^\+\s*/,'')),costo=Math.round(Number(r[costC])*100)/100,precio=Number(r[priceC]),lista=Number(r[listaC]),dto=Number(r[dtoC]);
   if(r[stockC]==null || r[stockC]==='' || !Number.isInteger(qty)||qty<0||!Number.isFinite(costo)||costo<=0||!Number.isFinite(precio)||precio<=0||!Number.isFinite(lista)||lista<=0||r[dtoC]==null||r[dtoC]===''||!Number.isFinite(dto)||dto<0||dto>=100) throw new Error(`Kappa ${sku}: stock o precios inválidos.`);
@@ -55,6 +60,7 @@ export function parseKappa(rows: unknown[][], calzado: boolean, sistema: 'EU'|'A
   p.sizes[talle]=qty;p.skuPorTalle[talle]=ean||sku;p.skuProveedorPorTalle![talle]=sku;
  }
  if(!Object.keys(productos).length)throw new Error('Kappa: no hay filas compatibles. '+avisos.join(' '));
+ for(const codigo of incompletos) if(productos[codigo]) {productos[codigo].tablaTalle='TABLA DE TALLE KAPPA SIN IDENTIFICAR';delete productos[codigo].sizeConversion;}
  return {productos,avisos};
 }
 export function coincideVarianteKappa(data: {skuPorTalle?:Record<string,string>;skuProveedorPorTalle?:Record<string,string>},size:string,v:{sku?:string}) {

@@ -348,7 +348,7 @@ export default function App() {
                 <option value="reebok">Reebok — Indumentaria</option>
                 <option value="reebok-calzado">Reebok — Calzado</option>
                 <option value="kappa">Kappa — Indumentaria</option>
-                <option value="kappa-calzado" disabled>Kappa — Calzado (pendiente del proveedor)</option>
+                <option value="kappa-calzado">Kappa — Calzado</option>
                 <option value="orng">ORNG</option>
                 <option value="bloque">Bloque (PDFs)</option>
               </select>
@@ -392,9 +392,7 @@ export default function App() {
             </div>}
             {config.brand === 'kappa' && <div>
               <p>Kappa: stock en DISTRINANDO SA (Reebok - Kappa). Venta Público exacto, costo Mayorista con descuento. EAN en SKU y código de barras. Packs excluidos; filas repetidas idénticas se toman una vez.</p>
-              {config.kappaCalzado && <label>Talles del Excel: <select value={config.kappaSistema || ''} onChange={e=>{setConfig({...config,kappaSistema:e.target.value as 'EU'|'AR'});setResult(null);}}>
-                <option value="">Elegir sistema de talles</option><option value="EU">Europeos: convertir a AR</option><option value="AR">Argentinos: conservar</option>
-              </select></label>}
+              {config.kappaCalzado && <p>El talle del Excel ya es argentino: se conserva. La tabla agrega las equivalencias EU y centímetros disponibles.</p>}
             </div>}
             {config.brand === 'vart' && (
               <p style={{ fontSize: '0.8rem', color: '#fbbf24', marginTop: '0.4rem' }}>

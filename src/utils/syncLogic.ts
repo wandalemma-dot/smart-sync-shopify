@@ -23,7 +23,6 @@ export interface SyncConfig {
   sheetName: string;
   reebokCalzado?: boolean;
   kappaCalzado?: boolean;
-  kappaSistema?: 'EU' | 'AR';
   brand: 'lecoq' | 'converse' | 'bloque' | 'orchard' | 'luxo' | 'vart' | 'orng' | 'ntf' | 'reebok' | 'kappa';
 }
 
@@ -910,8 +909,7 @@ export async function processFiles(
       message: config.reebokCalzado ? 'Se conserva el AR informado. EAN como SKU y código de barras; SKU del proveedor en etiquetas. Sin EAN: SKU del proveedor y código de barras vacío. Packs UDM excluidos en ambas plantillas. Tabla por coincidencia completa US–AR; sin coincidencia única, JSON vacío. Costo: Mayorista original (Mayorista Unitario en Inmediato) menos 40%, también en PROMO. Venta: Mayorista original ×1,8755, al precio terminado en 999 más cercano, sin IVA adicional. Revisá filas pendientes antes del alta.' : 'Costo: L, Mayorista con descuento, sin volver a descontar. Venta: M, Precio Público, sin markup ni redondeo. Margen informativo: (venta − costo × 1,21) / venta. Usá una sola lista vigente; no combines la del 24 con la del 25. Para calzado, usar Reebok — Calzado.' });
     for (const message of reebok.avisos) alerts.push({ type: 'warning', title: 'Reebok: fila excluida', message });
   } else if (config.brand === 'kappa') {
-    if(config.kappaCalzado && !config.kappaSistema) throw new Error('Kappa: elegí si los talles del archivo son EU o AR.');
-    const kappa=parseKappa(await leerKappa(providerFile,!!config.kappaCalzado),!!config.kappaCalzado,config.kappaSistema||'AR');
+    const kappa=parseKappa(await leerKappa(providerFile,!!config.kappaCalzado),!!config.kappaCalzado,'AR');
     for(const [codigo,p] of Object.entries(kappa.productos)) excelMap[codigo]={wholesale:p.costo,publicPrice:p.precio,costFinal:p.costo,costoMargen:p.costoMargen,title:p.nombre,vendor:'Kappa',sizes:p.sizes,skuPorTalle:p.skuPorTalle,skuProveedorPorTalle:p.skuProveedorPorTalle,artType:p.artType,foundInShopify:false,tablaTalle:p.tablaTalle,sizeConversion:p.sizeConversion};
     alerts.push({type:'info',title:`Kappa: ${Object.keys(kappa.productos).length} modelos`,message:'EAN en SKU y código de barras; códigos originales en etiquetas. Precio Público exacto y costo Mayorista con descuento. Stock disponible en Distrinando. Se excluyen packs y hojas ocultas.'});
     for(const message of kappa.avisos) alerts.push({type:'warning',title:'Kappa: revisar',message});

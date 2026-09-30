@@ -11,7 +11,7 @@ vi.mock('../shopify',()=>({shopifyGraphQL:graphql,mismaSucursal:(a:string,b:stri
 vi.mock('../csv',async orig=>({...await orig<typeof import('../csv')>(),triggerDownload:download}));
 const h=['SKU','Modelo Color','Descripción del artículo','EAN','UDM','DISPONIBLE (inmediato)','Mayorista con descuento','Público','Mayorista Unitario','Descuento','GÉNERO'];
 const r=['K1-B-40','K1-B','CLASSIC BLACK 40','07799087201358','Pares',2,600,1875.5,1000,40,'MEN'];
-const config={brand:'kappa',kappaCalzado:true,kappaSistema:'EU',sheetName:'CALZADO'} as const;
+const config={brand:'kappa',kappaCalzado:true,sheetName:'CALZADO'} as const;
 const file=(rows:unknown[][])=>{const w=XLSX.utils.book_new();XLSX.utils.book_append_sheet(w,XLSX.utils.aoa_to_sheet(rows),'CALZADO');return {name:'Kappa.xlsx',arrayBuffer:async()=>XLSX.write(w,{type:'array',bookType:'xlsx'})} as File;};
 beforeEach(()=>{graphql.mockReset().mockImplementation(async(q:string)=>q.includes('locations(')?{locations:{edges:[{node:{id:'loc',name:'DISTRINANDO SA (Reebok - Kappa)'}}]}}:{products:{edges:[],pageInfo:{hasNextPage:false}}});});
 describe('Kappa carga',()=>{
@@ -25,7 +25,7 @@ describe('Kappa carga',()=>{
  it('comparte EAN, AR y tabla en vista previa, altas y CSV',async()=>{
   const result=await processFiles(file([h,r]),null,null,config);
   const p=buildMatrixProducts(result,config)[0];
-  expect(p.vendor).toBe('Kappa');expect(p.variants[0]).toMatchObject({sku:'07799087201358',barcode:'07799087201358',optionValue:'39',cost:600,price:1875.5,qty:2});
+  expect(p.vendor).toBe('Kappa');expect(p.variants[0]).toMatchObject({sku:'07799087201358',barcode:'07799087201358',optionValue:'40',cost:600,price:1875.5,qty:2});
   expect(p.tags).toEqual(expect.arrayContaining(['K1-B','K1-B-40','TABLA DE TALLE KAPPA UNISEX']));
   expect(p.sizeConversion?.['39']).toEqual({arg:'39',us:null,eu:'40',cm:'25.7'});
   downloadMatrixCSV(result,config);expect(download.mock.calls.at(-1)?.[0]).toContain('07799087201358');
@@ -43,6 +43,11 @@ describe('Kappa carga',()=>{
  it('indumentaria conserva talle y usa descuento propio, no 40% fijo',()=>{
   const hs=[...h];hs[5]='DISPONIBLE';const row=[...r];row[0]='K1-B-XXL';row[2]='CLASSIC BLACK XXL';row[4]='Unidades';row[6]=700;row[9]=30;
   const p=parseKappa([hs,row],false,'AR').productos['K1-B'];expect(p.costoMargen).toBe(700);expect(p.sizes).toEqual({XXL:2});expect(p.sizeConversion).toBeUndefined();
+ });
+ it('AR fuera de tabla se conserva sin inventar su equivalencia',()=>{
+  const row=[...r];row[0]='K1-B-46';row[2]='CLASSIC BLACK 46';
+  const p=parseKappa([h,row],true,'AR').productos['K1-B'];
+  expect(p.sizes).toEqual({'46':2});expect(p.sizeConversion).toBeUndefined();
  });
  it('EAN vacío usa SKU; no cruza por talle solamente',()=>{
   const row=[...r];row[3]='';const p=parseKappa([h,row],true,'EU').productos['K1-B'];expect(p.skuPorTalle['39']).toBe('K1-B-40');
@@ -74,10 +79,10 @@ describe('Kappa carga',()=>{
  const path='C:/Users/Wanda/Downloads/'+name;
  it.skipIf(!existsSync(path))('archivo real '+name,async()=>{
   const f={name,arrayBuffer:async()=>{const b=readFileSync(path);return b.buffer.slice(b.byteOffset,b.byteOffset+b.byteLength)}} as File;
-  const rows=await leerKappa(f,calzado);const result=parseKappa(rows,calzado,'EU');
+  const rows=await leerKappa(f,calzado);const result=parseKappa(rows,calzado,'AR');
   const ps=Object.values(result.productos);expect(ps.length).toBeGreaterThan(0);
-  expect(ps.length).toBe(calzado?366:198);
-  expect(ps.reduce((n,p)=>n+Object.keys(p.sizes).length,0)).toBe(calzado?707:419);
+  expect(ps.length).toBe(calzado?376:198);
+  expect(ps.reduce((n,p)=>n+Object.keys(p.sizes).length,0)).toBe(calzado?740:419);
   expect(result.avisos.filter(a=>a.includes('pack excluido'))).toHaveLength(calzado?87:14);
  });}
 });
