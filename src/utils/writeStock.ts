@@ -1,3 +1,4 @@
+import { coincideVarianteKappa } from './kappaLogic';
 // ============================================================================
 // ESCRITURA DE STOCK EN SHOPIFY (con simulación / dry-run)
 // ----------------------------------------------------------------------------
@@ -349,6 +350,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
       // cargarle el stock al talle equivocado.
       const hayConversion = !!convTable || (config.brand === 'lecoq' && argSize !== String(size));
       const v = live.find((n: any) =>
+        config.brand === 'kappa' ? coincideVarianteKappa(d,size,n) :
         config.brand === 'reebok' ? coincideVarianteReebok(d, size, n, !!config.reebokCalzado) :
         hayConversion ? talleMatches(argSize, n.title) : talleMatches(size, n.title));
       if (!v || !v.inventoryItem?.id) {
@@ -368,7 +370,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
           handle,
           // El alta de variantes existente no conserva SKU del proveedor.
           // Reebok queda para revisión hasta incorporar ese flujo por SKU.
-          productId: config.brand === 'reebok' ? '' : idByHandle[handle] || '',
+          productId: (config.brand === 'reebok' || config.brand === 'kappa') ? '' : idByHandle[handle] || '',
           opcion: opcionByHandle[handle] || 'Talle',
           precio: Number(d.publicPrice) || 0,
           costo: Number(d.costFinal) || 0,

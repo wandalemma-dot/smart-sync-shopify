@@ -4,7 +4,7 @@ import nino from './reebokNino.json';
 import ukTabla from './reebokUK.json';
 import type { ReebokProducto } from './reebokLogic';
 
-export type SizeConversion = Record<string, { arg: string; us: string; cm: string }>;
+export type SizeConversion = Record<string, { arg: string; us: string | null; eu?: string | null; cm: string }>;
 export const REEBOK_TABLAS: Record<string, SizeConversion> = { HOMBRE: hombre, MUJER: mujer, NIÑO: nino };
 export const REEBOK_SIN_TABLA = 'TABLA DE TALLE REEBOK SIN IDENTIFICAR';
 // Venta sobre el mayorista original, al precio terminado en 999 más cercano.
@@ -76,7 +76,7 @@ export function parseReebokCalzado(rows: unknown[][]) {
   const inmediato = col('MAYORISTA UNITARIO') >= 0;
   const stockC = inmediato ? col('DISPONIBLE (INMEDIATO)') : col('STOCK X SKU', 'STOCK');
   const costC = inmediato ? col('MAYORISTA UNITARIO') : col('MAYORISTA');
-  const eanC = col('EAN'), udmC = col('UDM');
+  const eanC = col('EAN'), udmC = col('UDM', 'UNI. MEDIDA', 'UNIDAD DE MEDIDA');
   if ([skuC, modelC, descC, stockC, costC].some(c => c < 0)) throw new Error('Reebok Calzado: faltan columnas de SKU, descripción, stock o costo.');
   const productos: Record<string, ReebokCalzadoProducto> = {}, avisos: string[] = [];
   const evidencias: Record<string, { ar: string; us: string }[]> = {};
@@ -84,7 +84,7 @@ export function parseReebokCalzado(rows: unknown[][]) {
   for (let i = h + 1; i < rows.length; i++) {
     const r = rows[i], sku = String(r[skuC] ?? '').trim();
     if (!sku) continue;
-    if (/\bPACK\b/.test(norm(r[udmC]))) {
+    if (/PACK|CURVA/.test(norm(r[udmC]))) {
       avisos.push(`Fila ${i + 1}: ${sku} — ${r[udmC]}; pack excluido, no se carga.`);
       continue;
     }

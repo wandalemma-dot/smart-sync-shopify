@@ -25,6 +25,11 @@ export function parseReebok(rows: unknown[][]): { productos: Record<string, Reeb
   for (let i = h + 1; i < rows.length; i++) {
     const r = rows[i], sku = String(r[skuCol] ?? '').trim();
     if (!sku) continue;
+    const udmCol = headers.findIndex(v => ['UDM','UNI. MEDIDA','UNIDAD DE MEDIDA'].includes(v));
+    if (/PACK|CURVA/.test(norm(r[udmCol])) || /(?:^|[\s-])(?:PACK|CURVA|M\d+U?)(?:[\s-]|$)/.test(norm(sku)+' '+norm(r[descCol]))) {
+      avisos.push(`Fila ${i + 1}: ${sku}; pack/curva excluido, no se carga.`);
+      continue;
+    }
     const tipo = tipos[norm(r[grupoCol])];
     if (!tipo) { avisos.push(`Fila ${i + 1}: ${sku}, grupo ${r[grupoCol] || 'sin identificar'}, excluido porque la categoría aún no está reconocida como indumentaria. Revisar categoría; el calzado sigue pendiente.`); continue; }
     const codigo = String(r[modeloCol] ?? '').trim().replace(/-+$/, '');

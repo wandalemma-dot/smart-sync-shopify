@@ -332,9 +332,9 @@ export default function App() {
             <div className="form-group">
               <label>Marca a procesar</label>
               <select
-                value={config.reebokCalzado ? 'reebok-calzado' : config.brand}
+                value={config.kappaCalzado ? 'kappa-calzado' : config.reebokCalzado ? 'reebok-calzado' : config.brand}
                 onChange={e => {
-                  setConfig({...config, brand: (e.target.value === 'reebok-calzado' ? 'reebok' : e.target.value) as any, reebokCalzado: e.target.value === 'reebok-calzado'});
+                  setConfig({...config, brand: (e.target.value === 'kappa-calzado' ? 'kappa' : e.target.value === 'reebok-calzado' ? 'reebok' : e.target.value) as any, reebokCalzado: e.target.value === 'reebok-calzado', kappaCalzado: e.target.value === 'kappa-calzado'});
                   setResult(null);
                   setProviderFile(null);
                 }}
@@ -347,6 +347,8 @@ export default function App() {
                 <option value="ntf">NTF</option>
                 <option value="reebok">Reebok — Indumentaria</option>
                 <option value="reebok-calzado">Reebok — Calzado</option>
+                <option value="kappa">Kappa — Indumentaria</option>
+                <option value="kappa-calzado" disabled>Kappa — Calzado (pendiente del proveedor)</option>
                 <option value="orng">ORNG</option>
                 <option value="bloque">Bloque (PDFs)</option>
               </select>
@@ -387,6 +389,12 @@ export default function App() {
               UK se convierte a AR cuando coincide con la referencia y el US del SKU. Se reconocen sufijos W de mujer. Ropa, packs y talles sin equivalencia quedan para revisión.</p>
               <p>Costo: Mayorista original (Mayorista Unitario en Inmediato) menos 40%, redondeado a centavos. Venta: Mayorista original ×1,8755,
               ajustada al precio terminado en 999 más cercano. Sin IVA adicional. También aplica a PROMO.</p>
+            </div>}
+            {config.brand === 'kappa' && <div>
+              <p>Kappa: stock en DISTRINANDO SA (Reebok - Kappa). Venta Público exacto, costo Mayorista con descuento. EAN en SKU y código de barras. Packs excluidos; filas repetidas idénticas se toman una vez.</p>
+              {config.kappaCalzado && <label>Talles del Excel: <select value={config.kappaSistema || ''} onChange={e=>{setConfig({...config,kappaSistema:e.target.value as 'EU'|'AR'});setResult(null);}}>
+                <option value="">Elegir sistema de talles</option><option value="EU">Europeos: convertir a AR</option><option value="AR">Argentinos: conservar</option>
+              </select></label>}
             </div>}
             {config.brand === 'vart' && (
               <p style={{ fontSize: '0.8rem', color: '#fbbf24', marginTop: '0.4rem' }}>
@@ -654,12 +662,12 @@ export default function App() {
                           {' · '}{talles.slice(0, 8).map(([t, q]) => `${t}:${q}`).join('  ')}{talles.length > 8 ? ' …' : ''}
                         </div>
                         {problema && <div style={{ fontSize: '0.8rem', color: '#fbbf24', marginTop: 4 }}>{problema}</div>}
-                        {config.reebokCalzado && <div style={{ color: p.sizeConversion ? '#a7f3d0' : '#fbbf24', marginTop: 4 }}>
+                        {(config.reebokCalzado || config.kappaCalzado) && <div style={{ color: p.sizeConversion ? '#a7f3d0' : '#fbbf24', marginTop: 4 }}>
                           {p.tablaTalle} · {p.sizeConversion ? 'JSON de equivalencias incluido' : 'Size Conversion vacío: revisión manual'}
                         </div>}
-                        {config.brand === 'reebok' && <div style={{ fontSize: '0.8rem', color: '#a7f3d0', marginTop: 4 }}>
+                        {(config.brand === 'reebok' || config.brand === 'kappa') && <div style={{ fontSize: '0.8rem', color: '#a7f3d0', marginTop: 4 }}>
                           Costo: ${p.costFinal?.toLocaleString('es-AR')} · Venta: ${p.publicPrice?.toLocaleString('es-AR')}
-                          {' · '}Margen de la planilla: {((1 - (p.costFinal || 0) * 1.21 / (p.publicPrice || 1)) * 100).toFixed(2)}%
+                          {' · '}Margen de la planilla: {((1 - (p.costoMargen ?? p.costFinal ?? 0) * 1.21 / (p.publicPrice || 1)) * 100).toFixed(2)}%
                         </div>}
                       </div>
                       {config.brand === 'converse' && (

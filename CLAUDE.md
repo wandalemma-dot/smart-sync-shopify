@@ -988,3 +988,17 @@ Y **probá la lógica con los archivos reales** de la carpeta de la usuaria ante
 dar algo por bueno. Varios bugs (precios en $9.900, talles corridos, 3XL→2) se
 encontraron así y no se habrían visto de otra forma.
 
+
+### Kappa — indumentaria habilitada (30-sep-2026)
+
+- Regla general confirmada por Wanda: excluir packs/curvas en TODO Reebok y Kappa, tanto calzado como indumentaria. No desglosar ni dividir precios/stock; avisar filas omitidas.
+
+- Wanda autorizó avanzar SOLO indumentaria; calzado permanece deshabilitado en el selector mientras espera confirmación del proveedor sobre talles. Confirmó excluir TODOS los packs. Las tablas y el parser de calzado quedan preparados, no habilitar esa opción sin resolver el sistema de talles.
+
+- Fuente: tabla de talle kappa.xlsx de Wanda. kappaUnisex.json tiene 17 talles; kappaNino.json, 19. Clave AR, campos arg/eu/cm textuales y us null (no informado). Cuatro talles compartidos coinciden. No usar tablas Reebok ni extrapolar talles ausentes.
+- kappaTalles.ts exporta ambas tablas y conversión explícita EU → AR por tabla elegida; devuelve null fuera de tabla. No presume que el talle de un Excel comercial sea EU sin confirmar su sistema.
+- Apartados Kappa Calzado e Indumentaria: parser kappaLogic.ts por encabezados y hoja visible exacta. Ignora hoja oculta. Agrupa Modelo Color. EAN en SKU/barcode; sin EAN conserva SKU del proveedor y avisa. Código modelo y SKU proveedor en etiquetas. No modifica SKU/barcode existentes. Stock parcial por identificador exacto, sin barrer ausentes ni tocar Martínez. Alta exige sucursal. Variantes faltantes de existentes para revisión (no usar alta genérica sin SKU).
+- Calzado exige elegir sistema EU o AR; tablas por KIDS/CHILD/NINO/JUNIOR → Niño, resto Unisex. EU se convierte solo si figura en tabla; AR se valida. Desconocidos excluidos con aviso, no extrapolar. JSON en nuevas altas/CSV usa el campo existente; no escribe al desplegar.
+- Packs excluidos con aviso. Filas repetidas idénticas se toman una vez; contradicciones o EAN compartido por distintos SKU bloquean análisis. Fila 392 del archivo de calzado tiene SKU K137152LW-KA0BD-35 y Modelo Color K137152LW-K952D: excluir y avisar. Ropa sin categoría informada usa título Indumentaria Kappa + descripción sin talle; revisar nombre en vista previa.
+- Pruebas con archivos reales 29-09 bajo modo EU: calzado 366 modelos/707 variantes, indumentaria 198/419. 87 y 14 packs omitidos. Talles fuera de tabla, duplicados y EAN ausentes aparecen en avisos.
+- Reglas confirmadas: sucursal DISTRINANDO SA (Reebok - Kappa); EAN en SKU y barcode; venta Público exacto; costo Mayorista con descuento; margen (Público - Mayorista Unitario * (1 - descuento/100) * 1,21) / Público. Descuento por encabezado (R calzado / N indumentaria).  Ignorar hoja oculta KAPPA CALZADO (2) de ambas listas del 29-09.
