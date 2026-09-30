@@ -48,6 +48,39 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ## 1. Qué hace la app
 
+### Control de remitos (30-sep-2026)
+
+Pedido de Wanda: controlar que lo que llega del proveedor se cargue bien en
+Shopify, y **quién** lo carga (hubo inconsistencias con cargas de Miguel Galván).
+El personal **carga a mano** (ajuste de stock en Shopify), no por transferencia.
+Tiene que servir para **todos** los proveedores.
+
+- Pestaña `ControlRemitos.tsx`, lógica `utils/controlRemitos.ts`, tests
+  `controlRemitos.test.ts` (con la factura REAL de Fabrique SRL 0003-00008299
+  del 22-09-2026: 79 renglones, 87 unidades, en `remitoFabrique.json`).
+- **Lectura de la foto:** `api/remito.js` llama a la API de Anthropic con la
+  clave `ANTHROPIC_API_KEY` (Vercel). Modelo por defecto `claude-sonnet-5-5`,
+  se cambia con `ANTHROPIC_MODEL` sin tocar código. El navegador achica las fotos
+  (2000 px, JPG). Límite: 8 fotos por remito. Se valida contra «Cantidad total» y
+  «Filas» impresas; lo dudoso queda en amarillo y **todo es editable** antes de comparar.
+  Prueba real: la foto de Fabrique (papel torcido y resaltado) se leyó sin errores.
+- **Quién cargó:** ShopifyQL `inventory_adjustment_history` vía `shopifyqlQuery`.
+  Necesita el permiso **`read_reports`** en la app de Shopify y API **≥ 2025-10**:
+  `api/shopify.js` manda SOLO esas lecturas a `2026-07`; todo lo demás sigue en 2024-04.
+- Reglas: se cuenta solo stock **Available**; se **excluyen ventas/pedidos/
+  devoluciones** (motivos en `MOTIVOS_EXCLUIDOS`); se toma el **neto** por persona
+  (cargó 3 y corrigió −1 = 2). Ventana por defecto: fecha del remito → +7 días.
+- Asociación artículo del remito → producto cargado: primero **código** en SKU /
+  código de barras / etiquetas / título (la O y el 0 se consideran iguales); si no,
+  **nombre + color**. Si hay empate, **no se adivina**: queda «sin asociar» con los candidatos.
+- Resultados: ✅ coincide · ⚠️ cantidad distinta · 🔁 talle cambiado (falta un
+  talle y sobra otro del mismo producto) · ❌ no se cargó · ❓ cargado y no está en
+  el remito. Las cargas de otros productos van aparte. Se exporta a Excel.
+- Limitación conocida: si en la misma ventana entra otro remito con el mismo
+  artículo, se suman (aparece «cantidad distinta»). Achicar fechas o filtrar persona.
+- Pendiente: guardar el historial de controles (hoy no hay base de datos) para
+  armar el resumen por persona de varios remitos.
+
 ### Reebok Calzado (28-sep-2026)
 
 - 30-sep-2026, SOLO Reebok — Calzado: aceptar plantillas anteriores PROMO/40% y nueva Inmediato (.xlsb). Detectar encabezados; Inmediato usa «Mayorista Unitario» (NO «Mayorista unit. + PP») y «DISPONIBLE (inmediato)» (NO TOTAL PARES). Mantener costo ×0,60 y venta ×1,8755 terminada en 999, sin IVA adicional. Cantidad «+ 240» se toma como 240, sin extrapolar.
@@ -129,6 +162,7 @@ App web (React + Vite, deploy automático en Vercel desde `main`) con dos pesta�
 | **Sincronización** | Subís el archivo del proveedor → compara contra Shopify → actualiza stock, precios y crea productos nuevos. |
 | **Reposición** | Wanda sube el **export de Órdenes de Shopify** y la app le dice **en qué talle pedir** cada cosa que se vendió. **Solo lectura.** |
 | **Recuperar** | Recrea productos borrados a partir del texto de una transferencia vieja, **con el mismo SKU**, para que la transferencia vuelva a engancharse. |
+| **Control de remitos** | Foto del remito/factura del proveedor → la IA lo pasa a tabla → compara contra **quién cargó stock** en Shopify en esas fechas. **Solo lectura.** |
 
 La app **lee Shopify en vivo**: no hace falta subir el CSV de productos.
 
@@ -915,6 +949,8 @@ Solo lectura. No escribe en Shopify ni carga la web externa.
   una **lista blanca**: deja pasar lecturas y **solo estas** escrituras:
   `inventorySetQuantities`, `productSet`, `publishablePublish`,
   `productVariantsBulkUpdate`. **No agregues mutaciones sin pensarlo.**
+- `api/remito.js` también es **público**: gasta la cuenta de Anthropic. Por eso
+  limita cantidad (8) y tamaño de fotos. La clave va SOLO en Vercel.
 - Antecedente: hubo un token y un client secret hardcodeados en el repo público.
   Se rotaron. **Nunca vuelvas a poner un secreto en el código.**
 
@@ -969,6 +1005,9 @@ src/utils/
   createProducts.ts         Crea productos nuevos
   shopify.ts / csv.ts       Utilidades compartidas
   restockLogic.ts           (viejo, ya no se usa desde la UI)
+  controlRemitos.ts         Control de remitos: historial de ajustes + comparación
+src/ControlRemitos.tsx      UI de la pestaña Control de remitos
+api/remito.js               Lee la foto del remito con IA (ANTHROPIC_API_KEY)
 ```
 
 ## 9. Cómo verificar antes de deployar
