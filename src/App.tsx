@@ -307,7 +307,7 @@ export default function App() {
             <input
               ref={providerInputRef}
               type="file"
-              accept={config.brand === 'bloque' ? '.pdf,.xlsx,.xls' : '.xlsx,.xls'}
+              accept={config.brand === 'bloque' ? '.pdf,.xlsx,.xls' : config.reebokCalzado ? '.xlsx,.xls,.xlsb' : '.xlsx,.xls'}
               style={{ display: 'none' }}
               onChange={e => { const f = e.target.files?.[0]; if (f) processProviderFile(f); e.target.value = ''; }}
             />
@@ -381,11 +381,11 @@ export default function App() {
             )}
 
             {config.reebokCalzado && <div style={{ marginTop: 12 }}>
-              <p><strong>Reebok — Calzado</strong>: subí el archivo del 30% o del 40%, uno por análisis.
-              Se conserva el talle AR y el SKU del proveedor. La tabla se identifica comparando todos los talles disponibles,
+              <p><strong>Reebok — Calzado</strong>: subí la lista PROMO, Calzado o Inmediato (.xlsx/.xlsb), una por análisis.
+              Se conserva el talle AR. El EAN va en SKU y Código de barras de cada talle; el SKU del proveedor va en etiquetas. Si falta EAN, se usa el SKU del proveedor y el código de barras queda vacío. Se excluyen los packs de UDM en ambos formatos. La tabla se identifica comparando todos los talles disponibles,
               sin asumir que Unisex usa Hombre. Si no se identifica, se crea con etiqueta «TABLA DE TALLE REEBOK SIN IDENTIFICAR» y JSON vacío.
               UK se convierte a AR cuando coincide con la referencia y el US del SKU. Se reconocen sufijos W de mujer. Ropa, packs y talles sin equivalencia quedan para revisión.</p>
-              <p>Costo: Mayorista original menos 40%, redondeado a centavos. Venta: Mayorista original ×1,8755,
+              <p>Costo: Mayorista original (Mayorista Unitario en Inmediato) menos 40%, redondeado a centavos. Venta: Mayorista original ×1,8755,
               ajustada al precio terminado en 999 más cercano. Sin IVA adicional. También aplica a PROMO.</p>
             </div>}
             {config.brand === 'vart' && (

@@ -10,6 +10,7 @@ const norm = (v: unknown) => String(v ?? '').normalize('NFD').replace(/[\u0300-\
 export interface ReebokProducto {
   codigo: string; nombre: string; artType: string; costo: number; precio: number;
   sizes: Record<string, number>; skuPorTalle: Record<string, string>;
+  skuProveedorPorTalle?: Record<string, string>;
 }
 export function parseReebok(rows: unknown[][]): { productos: Record<string, ReebokProducto>; avisos: string[] } {
   const h = rows.findIndex(r => r.some(v => norm(v) === 'MODELO COLOR') && r.some(v => norm(v) === 'MAYORISTA CON DESCUENTO'));

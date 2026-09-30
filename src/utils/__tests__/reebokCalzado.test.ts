@@ -4,6 +4,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { parseReebokCalzado, precioReebokCalzado, tablaReebok, REEBOK_SIN_TABLA, tituloReebokCalzado } from '../reebokCalzado';
 import { buildMatrixProducts, processFiles, downloadMatrixCSV } from '../syncLogic';
 import { createProducts } from '../createProducts';
+import { planStockWrite } from '../writeStock';
 const { graphql, download } = vi.hoisted(() => ({ graphql: vi.fn(), download: vi.fn() }));
 vi.mock('../shopify', () => ({ shopifyGraphQL: graphql, mismaSucursal: (a: string,b: string) => a===b }));
 vi.mock('../csv', async orig => ({ ...await orig<typeof import('../csv')>(), triggerDownload: download }));
@@ -13,6 +14,33 @@ const config = { brand:'reebok', reebokCalzado:true, sheetName:'Calzado' } as co
 const file = (rows: unknown[][]) => { const w=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(w,XLSX.utils.aoa_to_sheet(rows),'Calzado'); return {name:'Calzado.xlsx',arrayBuffer:async()=>XLSX.write(w,{type:'array',bookType:'xlsx'})} as File; };
 beforeEach(()=>{ graphql.mockReset().mockImplementation(async(q:string)=>q.includes('locations(')?{locations:{edges:[{node:{id:'loc',name:'DISTRINANDO SA (Reebok - Kappa)'}}]}}:q.includes('mutation CrearProducto')?{productSet:{product:{id:'p'},userErrors:[]}}:q.includes('mutation GuardarTabla')?{metafieldsSet:{metafields:[{key:'size_conversion'}],userErrors:[]}}:{products:{edges:[],pageInfo:{hasNextPage:false}}}); });
 describe('Reebok Calzado',()=>{
+ const immediateHeaders=['Número de artículo','Modelo Color','Descripción del artículo','EAN','UDM','DISPONIBLE (inmediato)','Mayorista Unitario'];
+ const immediateRow=['RBK1100201449-6.5','RBK1100201449--','PHASE COURT - WHITE - 36','04065419284966','Pares','+ 240',63982.4];
+ it('EAN en SKU y barcode de alta/API/CSV, proveedor en etiquetas; sin EAN deja barcode vacío',async()=>{
+  const res=await processFiles(file([immediateHeaders,immediateRow]),null,null,config);
+  const p=buildMatrixProducts(res,config)[0];
+  expect(p.tags).toContain('RBK1100201449-6.5');expect(p.tags).toContain('RBK1100201449');
+  expect(p.variants[0]).toMatchObject({sku:'04065419284966',barcode:'04065419284966',qty:240,optionValue:'36'});
+  downloadMatrixCSV(res,config);expect(download.mock.calls.at(-1)?.[0]).toContain('04065419284966,04065419284966');
+  await createProducts(res,config);
+  const input=graphql.mock.calls.find(([q])=>q.includes('mutation CrearProducto'))![1].input;
+  expect(input.variants[0]).toMatchObject({barcode:'04065419284966',inventoryItem:{sku:'04065419284966'}});
+  expect(input.tags).toContain('RBK1100201449-6.5');
+  const without=[...immediateRow];without[3]='';
+  const res2=await processFiles(file([immediateHeaders,without]),null,null,config);
+  expect(buildMatrixProducts(res2,config)[0].variants[0]).toMatchObject({sku:'RBK1100201449-6.5'});
+  expect(buildMatrixProducts(res2,config)[0].variants[0].barcode).toBeUndefined();
+ });
+ it.each(['RBK1100201449-6.5','04065419284966'])('sin duplicar producto existente ni cambiar SKU %s',async sku=>{
+  const product={id:'p',handle:'r',title:'Zapatillas Reebok',tags:[],options:[{name:'Talle'}],variants:{edges:[{node:{id:'v',title:'36',sku,price:'100',inventoryItem:{id:'i',unitCost:{amount:'50'},inventoryLevel:{quantities:[{name:'available',quantity:10}]}}}}]}};
+  graphql.mockImplementation(async(q:string)=>q.includes('locations(')?{locations:{edges:[{node:{id:'loc',name:'DISTRINANDO SA (Reebok - Kappa)'}}]}}:{products:{edges:[{node:product}],pageInfo:{hasNextPage:false}}});
+  const res=await processFiles(file([immediateHeaders,immediateRow]),null,null,config);
+  expect(res.missingProducts).toHaveLength(0);expect(res.updatesToApply).toHaveLength(1);
+  expect(res.updatesToApply[0].sku).toBe(sku);
+  const plan=await planStockWrite(res,config);expect(plan.changes).toHaveLength(1);
+  expect(plan.changes[0]).toMatchObject({sku,desired:240});
+  expect(graphql.mock.calls.every(([q])=>!q.includes('mutation'))).toBe(true);
+ });
  it('agrega US14/48 y US15/49 sin cambiar US13/47 y admite el UK13 del SKU14',()=>{
   const pares=[{us:'13',ar:'47'},{us:'14',ar:'48'},{us:'15',ar:'49'}];
   const tabla=tablaReebok(pares);

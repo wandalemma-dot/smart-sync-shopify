@@ -50,6 +50,13 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ### Reebok Calzado (28-sep-2026)
 
+- 30-sep-2026, SOLO Reebok — Calzado: aceptar plantillas anteriores PROMO/40% y nueva Inmediato (.xlsb). Detectar encabezados; Inmediato usa «Mayorista Unitario» (NO «Mayorista unit. + PP») y «DISPONIBLE (inmediato)» (NO TOTAL PARES). Mantener costo ×0,60 y venta ×1,8755 terminada en 999, sin IVA adicional. Cantidad «+ 240» se toma como 240, sin extrapolar.
+- EAN del Excel va idéntico en SKU y Código de barras de cada variante nueva. SKU completo del proveedor va en etiquetas, además del código modelo/color y etiqueta de tabla. Conservar ceros iniciales de EAN textual; no inventar ni redondear EAN. Sin EAN (vacío/0), Wanda confirmó usar SKU del proveedor y código de barras vacío. API y CSV comparten estos valores. No migrar automáticamente SKU/barcode de productos existentes.
+- Excluir por UDM los packs en ambos formatos (Wanda confirmó packs de 12; conservar exclusión de otros packs/curvas, incluyendo los de 9 del archivo nuevo). No dividir stock ni precios de packs. No aplicar este cambio a indumentaria u otras marcas.
+- Cruce de existentes: EAN o SKU original; con listas anteriores sin EAN, modelo ya identificado por código/etiqueta + talle AR exacto para SKU numérico EAN. Duplicados de productos/variantes bloquean el análisis. No barrer ausentes ni tocar Martínez.
+- Archivo real Reebok inmediato 29-09 (1).xlsb: 1043 filas, 382 modelos / 1001 variantes utilizables (992 con EAN, 9 sin EAN), 41 packs excluidos, fila 838 RBKKXM36-RBKFV3204-11 pendiente por AR no identificado. Listas anteriores conservan 450/152 variantes. Tests: reebokInmediato.test.ts y reebokCalzado.test.ts; Shopify simulado, sin altas reales durante desarrollo.
+- Campo barcode verificado en https://shopify.dev/docs/api/admin-graphql/latest/input-objects/ProductVariantSetInput y operación validada contra esquema 2026-07.
+
 - Ampliación confirmada por Wanda: Hombre conserva US13 → AR47 / 31cm y agrega US14 → AR48 / 32cm y US15 → AR49 / 33cm. UK13 del SKU RBK1100033912-14 corresponde a AR48; se agrega solo esa referencia UK, sin inferir otras. Se descartó Tabla_de_Talles_Reebok_Unisex.xlsx por incompatibilidad. Mujer y talles anteriores sin cambios. El modelo ahora se identifica como Hombre. No modifica productos existentes en Shopify.
 
 - Títulos de futuras altas: Zapatillas Reebok + modelo + color principal; quitar código inicial del fabricante (ej CN4107), marca duplicada y colores secundarios tras /. Ejemplo RBK1100000089 → Zapatillas Reebok Royal Bb4500 Hi2 Blanco. Misma vista previa, API y CSV. No renombrar productos existentes ; precios según la regla actual de abajo.

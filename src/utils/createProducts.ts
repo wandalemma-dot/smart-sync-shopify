@@ -63,6 +63,7 @@ function buildProductSetInput(p: MatrixProduct, locationId: string | null): any 
   const variants = p.variants.map((v) => {
     const variant: any = {
       price: String(v.price),
+      ...(v.barcode ? { barcode: v.barcode } : {}),
       inventoryItem: {
         sku: v.sku,
         cost: String(v.cost),

@@ -12,6 +12,7 @@ import type { ListaPrecios } from './listaPrecios';
 import { unidadesPorPackId } from './packsId';
 import { parseNtf, tituloNtf, NTF_LOCATION } from './ntfLogic';
 import { parseReebok, REEBOK_LOCATION } from './reebokLogic';
+import { coincideVarianteReebok } from './reebokMatching';
 import { parseReebokCalzado } from './reebokCalzado';
 import type { SizeConversion } from './reebokCalzado';
 
@@ -38,6 +39,7 @@ export interface MissingProduct {
   usaListaPrecios?: boolean; // precio ya calculado desde la sábana
   // Vart: SKU real del proveedor por talle (ver vartLogic.ts).
   skuPorTalle?: Record<string, string>;
+  skuProveedorPorTalle?: Record<string, string>;
 }
 
 export interface UpdateAction {
@@ -683,7 +685,7 @@ export async function processFiles(
   listaPrecios?: ListaPrecios | null,
 ): Promise<SyncResult> {
   const alerts: AlertMessage[] = [];
-  const excelMap: Record<string, { tablaTalle?: string, sizeConversion?: SizeConversion, wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyTags?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number, usaListaPrecios?: boolean, skuPorTalle?: Record<string, string>, whslDelArchivo?: boolean, unidadesPorPack?: number }> = {};
+  const excelMap: Record<string, { tablaTalle?: string, sizeConversion?: SizeConversion, wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyTags?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number, usaListaPrecios?: boolean, skuPorTalle?: Record<string, string>, skuProveedorPorTalle?: Record<string, string>, whslDelArchivo?: boolean, unidadesPorPack?: number }> = {};
 
   if (config.brand === 'bloque' && /\.xlsx?$/i.test(providerFile.name)) {
     // Bloque en Excel (ej. la preventa de Protec).
@@ -892,12 +894,12 @@ export async function processFiles(
     const reebok = config.reebokCalzado ? parseReebokCalzado(await readExcel(providerFile, config.sheetName)) : parseReebok(await readExcel(providerFile, config.sheetName));
     for (const [codigo, p] of Object.entries(reebok.productos)) {
       excelMap[codigo] = { wholesale: p.costo, publicPrice: p.precio, costFinal: p.costo,
-        title: p.nombre, vendor: 'Reebok', sizes: p.sizes, skuPorTalle: p.skuPorTalle,
+        title: p.nombre, vendor: 'Reebok', sizes: p.sizes, skuPorTalle: p.skuPorTalle, skuProveedorPorTalle: p.skuProveedorPorTalle,
         artType: p.artType, foundInShopify: false,
         ...(config.reebokCalzado ? { tablaTalle: (p as any).tablaTalle, sizeConversion: (p as any).sizeConversion } : {}) };
     }
     alerts.push({ type: 'info', title: `Reebok: ${Object.keys(reebok.productos).length} modelos de ${config.reebokCalzado ? "calzado" : "indumentaria"}`, 
-      message: config.reebokCalzado ? 'Se conserva el AR informado y el SKU original. Tabla por coincidencia completa US–AR; sin coincidencia única, JSON vacío. Costo: Mayorista original menos 40%, también en PROMO. Venta: Mayorista original ×1,8755, al precio terminado en 999 más cercano, sin IVA adicional. Revisá filas pendientes antes del alta.' : 'Costo: L, Mayorista con descuento, sin volver a descontar. Venta: M, Precio Público, sin markup ni redondeo. Margen informativo: (venta − costo × 1,21) / venta. Usá una sola lista vigente; no combines la del 24 con la del 25. Para calzado, usar Reebok — Calzado.' });
+      message: config.reebokCalzado ? 'Se conserva el AR informado. EAN como SKU y código de barras; SKU del proveedor en etiquetas. Sin EAN: SKU del proveedor y código de barras vacío. Packs UDM excluidos en ambas plantillas. Tabla por coincidencia completa US–AR; sin coincidencia única, JSON vacío. Costo: Mayorista original (Mayorista Unitario en Inmediato) menos 40%, también en PROMO. Venta: Mayorista original ×1,8755, al precio terminado en 999 más cercano, sin IVA adicional. Revisá filas pendientes antes del alta.' : 'Costo: L, Mayorista con descuento, sin volver a descontar. Venta: M, Precio Público, sin markup ni redondeo. Margen informativo: (venta − costo × 1,21) / venta. Usá una sola lista vigente; no combines la del 24 con la del 25. Para calzado, usar Reebok — Calzado.' });
     for (const message of reebok.avisos) alerts.push({ type: 'warning', title: 'Reebok: fila excluida', message });
   } else if (config.brand === 'ntf') {
     const ntf = parseNtf(await readExcel(providerFile, config.sheetName));
@@ -1366,7 +1368,7 @@ export async function processFiles(
          match = tags.split(',').some(t => t.trim() === codigo)
            || prod.variants.edges.some(v => {
              const sku = String(v.node.sku || '').toLowerCase();
-             return sku === codigo || sku.startsWith(`${codigo}-`);
+             return sku === codigo || sku.startsWith(`${codigo}-`) || (config.brand === 'reebok' && config.reebokCalzado && Object.values(provData.skuPorTalle || {}).includes(String(v.node.sku || '')));
            });
       } else {
          // Converse / Le Coq: matchea por etiqueta (código en tags) O por el SKU
@@ -1383,6 +1385,12 @@ export async function processFiles(
       }
 
       if (match) {
+        if (config.brand === 'reebok' && config.reebokCalzado) {
+          if (provData.foundInShopify && provData.shopifyHandle !== prod.handle) throw new Error(`Reebok ${cod}: más de un producto coincide; revisar duplicados antes de cargar.`);
+          for (const size of Object.keys(provData.sizes)) {
+            if (prod.variants.edges.filter(v => coincideVarianteReebok(provData, size, v.node, true)).length > 1) throw new Error(`Reebok ${cod}: más de una variante coincide con AR ${size}; revisar antes de cargar.`);
+          }
+        }
         // ⚠ ORNG: EL CONTRATO LO DECIDE EL PROVEEDOR (vendor) DE SHOPIFY.
         // Wanda separa las dos familias con dos vendors: "Orng Mochilas" y
         // "Orng". Esa es SU clasificación, así que manda sobre lo que diga la
@@ -1415,7 +1423,7 @@ export async function processFiles(
            const variant = vEdge.node;
            // Las listas Reebok son parciales: solo tocar las variantes incluidas,
            // identificadas por su SKU completo del proveedor.
-           if (config.brand === 'reebok' && !Object.values(provData.skuPorTalle || {}).includes(variant.sku)) continue;
+           if (config.brand === 'reebok' && !Object.keys(provData.sizes).some(size => coincideVarianteReebok(provData, size, variant, !!config.reebokCalzado))) continue;
            const variantPrice = parseFloat(variant.price);
 
            // ACTUALIZACIÓN DE PRECIO Y COSTO.
@@ -1541,7 +1549,7 @@ export async function processFiles(
         artType: data.artType,
         costFinal: data.costFinal,
         usaListaPrecios: data.usaListaPrecios,
-        skuPorTalle: data.skuPorTalle,
+        skuPorTalle: data.skuPorTalle, skuProveedorPorTalle: data.skuProveedorPorTalle,
         tablaTalle: data.tablaTalle, sizeConversion: data.sizeConversion,
       });
     }
@@ -1607,7 +1615,7 @@ export function downloadUpdateCSV(result: SyncResult, config: SyncConfig) {
 
 // Versión estructurada de la matriz (misma lógica que el CSV) para poder crear
 // los productos directo por la API además de exportarlos.
-export interface MatrixVariant { sku: string; optionName: string; optionValue: string; price: number; cost: number; qty: number; }
+export interface MatrixVariant { sku: string; barcode?: string; optionName: string; optionValue: string; price: number; cost: number; qty: number; }
 export interface MatrixProduct { sizeConversion?: SizeConversion; handle: string; title: string; vendor: string; productType: string; tags: string[]; weightGrams: number; hasSizes: boolean; variants: MatrixVariant[]; }
 
 const CONVERSE_TABLE_TAG: Record<number, string> = {
@@ -1752,6 +1760,7 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
         if (!useTitleOption) hasSizes = true;
         variants.push({
           sku: variantSku,
+          ...(config.brand === 'reebok' && config.reebokCalzado && /^\d{8,14}$/.test(variantSku) ? { barcode: variantSku } : {}),
           optionName: useTitleOption ? 'Title' : 'Talle',
           optionValue: useTitleOption ? 'Default Title' : String(size),
           price,
@@ -1783,6 +1792,7 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
     // Etiquetas: el código (o tag de la marca) + la etiqueta de la tabla de talle
     // para las zapatillas Converse, así la próxima sync la lee sola.
     const tags: string[] = [tagValue];
+    if (config.brand === 'reebok' && config.reebokCalzado) tags.push(...new Set(Object.values(prod.skuProveedorPorTalle || prod.skuPorTalle || {})));
     if (config.brand === 'converse' && converseKind && converseKind >= 1 && CONVERSE_TABLE_TAG[converseKind]) {
       tags.push(CONVERSE_TABLE_TAG[converseKind]);
     }
@@ -1826,7 +1836,7 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, tableS
     for (const prod of buildMatrixProducts(result, config, tableSelections)) {
       prod.variants.forEach((v, index) => {
         const row: Record<string, string | number> = {
-          'URL handle': prod.handle, SKU: v.sku,
+          'URL handle': prod.handle, SKU: v.sku, Barcode: v.barcode || '',
           'Option1 name': v.optionName, 'Option1 value': v.optionValue,
           Price: v.price, 'Cost per item': v.cost, 'Charge tax': 'TRUE',
           'Inventory tracker': 'shopify', 'Inventory quantity': v.qty,
@@ -2014,7 +2024,7 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
       // Buscar variante exacta en Shopify
       let exactVariant = null;
       if (config.brand === 'reebok') {
-         exactVariant = data.shopifyVariants?.find((v: any) => v.sku === data.skuPorTalle?.[size]);
+         exactVariant = data.shopifyVariants?.find((v: any) => coincideVarianteReebok(data, size, v, !!config.reebokCalzado));
          if (!exactVariant) throw new Error(`${coditm}: no se encontró el SKU del talle ${size} en Shopify.`);
       } else if (config.brand === 'converse' || config.brand === 'ntf') {
          exactVariant = data.shopifyVariants?.find((v: any) => talleMatches(option1Value, v.title));

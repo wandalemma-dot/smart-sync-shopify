@@ -9,6 +9,7 @@
 // Nunca crea, borra ni cambia precios.
 // ============================================================================
 
+import { coincideVarianteReebok } from './reebokMatching';
 import { shopifyGraphQL, mismaSucursal } from './shopify';
 import { talleMatches, STOCK_LOCATION, converseTablaInfo, talleShopifyLeCoq } from './syncLogic';
 import type { SyncResult, SyncConfig } from './syncLogic';
@@ -348,7 +349,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
       // cargarle el stock al talle equivocado.
       const hayConversion = !!convTable || (config.brand === 'lecoq' && argSize !== String(size));
       const v = live.find((n: any) =>
-        config.brand === 'reebok' ? n.sku === d.skuPorTalle?.[size] :
+        config.brand === 'reebok' ? coincideVarianteReebok(d, size, n, !!config.reebokCalzado) :
         hayConversion ? talleMatches(argSize, n.title) : talleMatches(size, n.title));
       if (!v || !v.inventoryItem?.id) {
         // ⚠ No pudimos ubicar en Shopify un talle que el proveedor SÍ tiene.

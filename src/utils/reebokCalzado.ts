@@ -12,7 +12,7 @@ export function precioReebokCalzado(mayorista: number): number {
   if (!Number.isFinite(mayorista) || mayorista <= 0) throw new Error('Mayorista Reebok inválido.');
   return Math.max(999, Math.round((mayorista * 1.8755 + 1) / 1000) * 1000 - 1);
 }
-const norm = (v: unknown) => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().toUpperCase();
+const norm = (v: unknown) => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim().replace(/\s+/g, ' ').toUpperCase();
 const num = (s: string) => String(Number(s.replace(',', '.')));
 /** Nombre comercial para nuevas cargas. El SKU y el modelo/color no se alteran. */
 export function tituloReebokCalzado(nombre: string): string {
@@ -68,19 +68,26 @@ export interface ReebokCalzadoProducto extends ReebokProducto {
 
 // Ambos formatos se leen por encabezado. Género comercial no determina la curva US.
 export function parseReebokCalzado(rows: unknown[][]) {
-  const h = rows.findIndex(r => r.some(v => norm(v) === 'MODELO COLOR') && r.some(v => norm(v) === 'MAYORISTA'));
-  if (h < 0) throw new Error('Reebok Calzado: faltan encabezados Modelo color / Mayorista.');
+  const h = rows.findIndex(r => r.some(v => norm(v) === 'MODELO COLOR') && r.some(v => ['MAYORISTA', 'MAYORISTA UNITARIO'].includes(norm(v))));
+  if (h < 0) throw new Error('Reebok Calzado: faltan encabezados Modelo color / Mayorista o Mayorista Unitario.');
   const headers = rows[h].map(norm);
   const col = (...names: string[]) => headers.findIndex(v => names.includes(v));
   const skuC = col('SKU', 'NUMERO DE ARTICULO'), modelC = col('MODELO COLOR'), descC = col('DESCRIPCION DEL ARTICULO');
-  const stockC = col('STOCK X SKU', 'STOCK'), costC = col('MAYORISTA');
+  const inmediato = col('MAYORISTA UNITARIO') >= 0;
+  const stockC = inmediato ? col('DISPONIBLE (INMEDIATO)') : col('STOCK X SKU', 'STOCK');
+  const costC = inmediato ? col('MAYORISTA UNITARIO') : col('MAYORISTA');
+  const eanC = col('EAN'), udmC = col('UDM');
   if ([skuC, modelC, descC, stockC, costC].some(c => c < 0)) throw new Error('Reebok Calzado: faltan columnas de SKU, descripción, stock o costo.');
   const productos: Record<string, ReebokCalzadoProducto> = {}, avisos: string[] = [];
   const evidencias: Record<string, { ar: string; us: string }[]> = {};
-  const incompletos = new Set<string>(), vistos = new Set<string>();
+  const incompletos = new Set<string>(), vistos = new Set<string>(), eans = new Set<string>();
   for (let i = h + 1; i < rows.length; i++) {
     const r = rows[i], sku = String(r[skuC] ?? '').trim();
     if (!sku) continue;
+    if (/\bPACK\b/.test(norm(r[udmC]))) {
+      avisos.push(`Fila ${i + 1}: ${sku} — ${r[udmC]}; pack excluido, no se carga.`);
+      continue;
+    }
     const codigo = String(r[modelC] ?? '').trim().replace(/-+$/, '');
     if (!codigo || !sku.startsWith(codigo + '-')) throw new Error(`Fila ${i + 1}: código y SKU incompatibles (${sku}).`);
     if (vistos.has(sku)) throw new Error(`SKU repetido: ${sku}.`);
@@ -101,16 +108,22 @@ export function parseReebokCalzado(rows: unknown[][]) {
     }
     // AR explícito manda; si UK lo contradice, conservar AR pero no certificar el JSON.
     if (uk && (!refUK || refUK.arg !== ar)) incompletos.add(codigo);
-    const qty = Number(r[stockC]), rawCost = Number(r[costC]);
+    const rawEAN = eanC >= 0 ? r[eanC] : undefined;
+    const ean = /^0+$/.test(String(rawEAN ?? '').trim()) ? '' : String(rawEAN ?? '').trim();
+    if (ean && (!/^\d{8,14}$/.test(ean) || (typeof rawEAN === 'number' && !Number.isSafeInteger(rawEAN)))) throw new Error(`Fila ${i + 1}: EAN inválido (${ean}); revisar sin redondear ni inventar dígitos.`);
+    if (ean && eans.has(ean)) throw new Error(`Fila ${i + 1}: EAN repetido (${ean}); revisar antes de cargar.`);
+    if (ean) eans.add(ean);
+    const qty = Number(String(r[stockC] ?? '').replace(/^\+\s*(?=\d+$)/, '')), rawCost = Number(r[costC]);
     if (r[stockC] == null || r[stockC] === '' || !Number.isInteger(qty) || qty < 0 || !Number.isFinite(rawCost) || rawCost <= 0) throw new Error(`Fila ${i + 1}: revisar stock o costo de ${sku}.`);
     const costo = Math.round(rawCost * 0.60 * 100) / 100;
     const precio = precioReebokCalzado(rawCost);
     const nombre = `Zapatillas Reebok ${desc.slice(0, ukFinal ? ukFinal.index : match!.index).replace(/\bUK\s*-?\s*\d+(?:[.,]\d+)?\s*[-/]?\s*$/i, '').replace(/\bREEBOK\b/gi, '').replace(/[-\s]+$/, '').trim()}`;
     const old = productos[codigo];
     if (old && (old.nombre !== nombre || old.costo !== costo || old.precio !== precio)) throw new Error(`${codigo}: nombres o precios distintos entre talles; revisar el archivo.`);
-    const p = productos[codigo] ??= { codigo, nombre, artType: 'zapatillas', costo, precio, sizes: {}, skuPorTalle: {} };
+    const p = productos[codigo] ??= { codigo, nombre, artType: 'zapatillas', costo, precio, sizes: {}, skuPorTalle: {}, skuProveedorPorTalle: {} };
     if (ar in p.sizes) throw new Error(`${codigo}: dos SKU para AR ${ar}; revisar manualmente.`);
-    p.sizes[ar] = qty; p.skuPorTalle[ar] = sku;
+    p.sizes[ar] = qty; p.skuPorTalle[ar] = ean || sku;
+    p.skuProveedorPorTalle![ar] = sku;
     (evidencias[codigo] ??= []).push({ ar, us });
   }
   for (const [code, p] of Object.entries(productos)) {
