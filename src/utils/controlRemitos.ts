@@ -401,6 +401,77 @@ export function compararRemito(
   return { filas, modelos, otrasCargas, totales, porPersona };
 }
 
+// ---------- Remito desde EXCEL (camino gratis) ----------
+// Wanda le pasa las fotos a Claude en el chat, Claude le devuelve un Excel y
+// ella lo sube acá. Formato de ese Excel (el que arma Claude):
+//   Fila 1: «Proveedor — Tipo Número — dd/mm/aaaa — 79 renglones / 87 unidades»
+//   Después, una fila de encabezados con al menos Talle y Cantidad, y el código
+//   (Código / Artículo / SKU) y/o la descripción. Color es opcional.
+// Se acepta cualquier Excel con esos encabezados; lo que no esté se completa a mano.
+function norm(s: unknown): string {
+  return sinAcentos(String(s ?? '')).toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+export function remitoDesdeFilas(filas: unknown[][]): Remito {
+  const iEnc = filas.findIndex((f) => {
+    const c = (f || []).map(norm);
+    return c.some((x) => x === 'talle' || x === 'talles') && c.some((x) => /^(cantidad|cant|unidades|cant remito)$/.test(x));
+  });
+  if (iEnc < 0) throw new Error('No encontré la fila de encabezados (tiene que tener «Talle» y «Cantidad»).');
+  const enc = filas[iEnc].map(norm);
+  const col = (re: RegExp, salvo: number[] = []) => enc.findIndex((x, i) => re.test(x) && !salvo.includes(i));
+  const cTalle = col(/^talles?$/);
+  const cCant = col(/^(cantidad|cant|unidades|cant remito)$/);
+  const cColor = col(/^colou?r$/);
+  let cDesc = col(/^(descripcion|detalle|producto|nombre)$/);
+  let cCod = col(/^(codigo|cod|sku|codigo articulo|cod articulo)$/);
+  const cArt = col(/^articulo$/);
+  if (cCod < 0 && cArt >= 0 && cDesc >= 0) cCod = cArt;
+  else if (cDesc < 0 && cArt >= 0 && cArt !== cCod) cDesc = cArt;
+  if (cCod < 0 && cDesc < 0) throw new Error('Falta la columna del código o de la descripción del artículo.');
+  const cPrecio = col(/^(precio|precio unit|precio unitario)$/);
+
+  const txt = (f: unknown[], c: number) => (c >= 0 && f[c] != null ? String(f[c]).trim() : '');
+  const renglones: RenglonRemito[] = [];
+  for (const f of filas.slice(iEnc + 1)) {
+    if (!f) continue;
+    const codigo = txt(f, cCod);
+    const descripcion = txt(f, cDesc);
+    if (!codigo && !descripcion) continue;
+    if (/^total/i.test(codigo) || /^total/i.test(descripcion)) continue;
+    const cantidad = Number(String(f[cCant] ?? '').replace(',', '.'));
+    if (!Number.isFinite(cantidad) || cantidad === 0) continue;
+    const talle = txt(f, cTalle);
+    renglones.push({
+      codigo, descripcion, color: txt(f, cColor), talle: talle === '—' ? '' : talle, cantidad,
+      precio_unitario: cPrecio >= 0 ? Number(f[cPrecio]) || 0 : undefined,
+    });
+  }
+  if (!renglones.length) throw new Error('El Excel no tiene renglones con cantidad.');
+
+  // Encabezado: lo que haya arriba de la tabla
+  const arriba = filas.slice(0, iEnc).map((f) => (f || []).map((x) => String(x ?? '')).join(' ')).join(' — ');
+  const partes = String(filas[0]?.[0] ?? '').split(/\s+[—–-]\s+/);
+  let fecha = '';
+  const f1 = arriba.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  const f2 = arriba.match(/(\d{4})-(\d{2})-(\d{2})/);
+  if (f2) fecha = f2[0];
+  else if (f1) fecha = `${f1[3].length === 2 ? '20' + f1[3] : f1[3]}-${f1[2].padStart(2, '0')}-${f1[1].padStart(2, '0')}`;
+  const nro = arriba.match(/\b(\d{4,5}-\d{6,8})\b/);
+  const tipo = arriba.match(/\b(Remito|Factura\s*[ABCM]?|Nota de cr[eé]dito)\b/i);
+  const filasImp = arriba.match(/(\d+)\s*renglones/i);
+  const unidImp = arriba.match(/(\d+)\s*unidades/i);
+  return {
+    proveedor: partes.length > 1 ? partes[0].replace(/^proveedor:\s*/i, '').trim() : '',
+    tipo_comprobante: tipo ? tipo[1] : '',
+    numero: nro ? nro[1] : '',
+    fecha,
+    filas_impresas: filasImp ? Number(filasImp[1]) : 0,
+    cantidad_total_impresa: unidImp ? Number(unidImp[1]) : 0,
+    renglones,
+  };
+}
+
 // ---------- Chequeos del remito leído ----------
 export function chequeosRemito(r: Remito): string[] {
   const avisos: string[] = [];
