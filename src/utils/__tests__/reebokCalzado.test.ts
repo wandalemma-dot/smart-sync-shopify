@@ -10,6 +10,7 @@ vi.mock('../shopify', () => ({ shopifyGraphQL: graphql, mismaSucursal: (a: strin
 vi.mock('../csv', async orig => ({ ...await orig<typeof import('../csv')>(), triggerDownload: download }));
 const headers = ['SKU','Modelo color','Descripción del artículo','GÉNERO','Stock x SKU','Mayorista con descuento','Público','Mayorista'];
 const row = (us='6.5', ar='36', code='RBK1100201449') => [`${code}-${us}`,`${code}--`,`PHASE COURT - WHITE - ${ar}`,'UNISEX',1,123.456,200,63982.40];
+const altaRow = (us='6.5', ar='36', code='RBK1100201449') => { const r=row(us,ar,code); r[4]=4; return r; };
 const config = { brand:'reebok', reebokCalzado:true, sheetName:'Calzado' } as const;
 const file = (rows: unknown[][]) => { const w=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(w,XLSX.utils.aoa_to_sheet(rows),'Calzado'); return {name:'Calzado.xlsx',arrayBuffer:async()=>XLSX.write(w,{type:'array',bookType:'xlsx'})} as File; };
 beforeEach(()=>{ graphql.mockReset().mockImplementation(async(q:string)=>q.includes('locations(')?{locations:{edges:[{node:{id:'loc',name:'DISTRINANDO SA (Reebok - Kappa)'}}]}}:q.includes('mutation CrearProducto')?{productSet:{product:{id:'p'},userErrors:[]}}:q.includes('mutation GuardarTabla')?{metafieldsSet:{metafields:[{key:'size_conversion'}],userErrors:[]}}:{products:{edges:[],pageInfo:{hasNextPage:false}}}); });
@@ -56,7 +57,7 @@ describe('Reebok Calzado',()=>{
   expect(result.productos.RBK1100033912.tablaTalle).toBe('TABLA DE TALLE REEBOK HOMBRE');
  });
  it('simplifica el ejemplo confirmado en resumen, alta y CSV sin cambiar sus datos',async()=>{
-  const r=row('10','43','RBK1100000089');
+  const r=altaRow('10','43','RBK1100000089');
   r[2]='CN4107 - REEBOK ROYAL BB4500 HI2 - WHITE/LGH SOLID GREY - 43';
   const result=await processFiles(file([headers,r]),null,null,config);
   const title='Zapatillas Reebok Royal Bb4500 Hi2 Blanco Gris';
@@ -99,7 +100,7 @@ describe('Reebok Calzado',()=>{
   expect(tablaReebok([{us:'M8/W9.5',ar:'40'}]).tablaTalle).toBe(REEBOK_SIN_TABLA);
  });
  it('conserva AR, SKU, costo con centavos y JSON en alta y CSV',async()=>{
-  const r=await processFiles(file([headers,row()]),null,null,config);
+  const r=await processFiles(file([headers,altaRow()]),null,null,config);
   const [p]=buildMatrixProducts(r,config);
   expect(p.tags).toContain('TABLA DE TALLE REEBOK MUJER');
   expect(p.variants[0]).toMatchObject({sku:'RBK1100201449-6.5',optionValue:'36',cost:38389.44,price:119999});
@@ -110,7 +111,7 @@ describe('Reebok Calzado',()=>{
   expect(call[1].metafields[0]).toMatchObject({ownerId:'p',namespace:'custom',key:'size_conversion',type:'json'});
  });
  it('crea AR claro sin tabla, sin escribir un JSON vacío ni convertir',async()=>{
-  const r=await processFiles(file([headers,row('10.5','42')]),null,null,config);
+  const r=await processFiles(file([headers,altaRow('10.5','42')]),null,null,config);
   const [p]=buildMatrixProducts(r,config);expect(p.tags).toContain(REEBOK_SIN_TABLA);expect(p.sizeConversion).toBeUndefined();
   await createProducts(r,config);expect(graphql.mock.calls.some(([q])=>q.includes('mutation GuardarTabla'))).toBe(false);
  });
@@ -132,7 +133,7 @@ describe('Reebok Calzado',()=>{
   expect(precioReebokCalzado(120600/1.8755)).toBe(120999);
  });
  it('si falla el JSON informa que ya se creó para evitar duplicar',async()=>{
-  const r=await processFiles(file([headers,row()]),null,null,config);
+  const r=await processFiles(file([headers,altaRow()]),null,null,config);
   graphql.mockImplementation(async(q:string)=>q.includes('locations(')?{locations:{edges:[{node:{id:'loc',name:'DISTRINANDO SA (Reebok - Kappa)'}}]}}:q.includes('mutation CrearProducto')?{productSet:{product:{id:'p'},userErrors:[]}}:{metafieldsSet:{userErrors:[{message:'denegado'}]}});
   const result=await createProducts(r,config);expect(result.created).toBe(1);expect(result.errors[0]).toContain('no volver a crearlo');
  });

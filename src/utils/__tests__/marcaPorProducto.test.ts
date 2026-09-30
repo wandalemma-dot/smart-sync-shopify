@@ -42,7 +42,7 @@ describe('cada marca está completa en las tablas', () => {
 const producto = (extra: Record<string, unknown> = {}) => ({
   missingProducts: [{
     coditm: 'AA1111', title: 'Un producto', wholesale: 100, publicPrice: 200,
-    costFinal: 93, sizes: { S: 1 }, skuPorTalle: { S: 'AA1111-S' }, ...extra,
+    costFinal: 93, sizes: { S: 4 }, skuPorTalle: { S: 'AA1111-S' }, ...extra,
   }],
 } as any);
 

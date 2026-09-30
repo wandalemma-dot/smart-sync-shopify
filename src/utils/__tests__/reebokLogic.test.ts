@@ -20,7 +20,7 @@ beforeEach(() => { graphql.mockReset().mockImplementation(async (q: string) => q
   : { products: { edges: [], pageInfo: { hasNextPage: false } } }); });
 describe('Reebok indumentaria', () => {
   it.each(['TOP', 'TRACK TOP'])('nombra %s como Top deportivo y conserva sus talles', async grupo => {
-    const r = row(); r[3] = grupo;
+    const r = row('S', 4); r[3] = grupo;
     const res = await processFiles(file([headers, r]), null, null, config);
     expect(res.alerts.filter(a => a.title === 'Reebok: fila excluida')).toHaveLength(0);
     expect(buildMatrixProducts(res, config)[0].title).toMatch(/^Top Deportivo Reebok /);
@@ -69,7 +69,7 @@ describe('Reebok indumentaria', () => {
     expect(plan.changes[0]).toMatchObject({ sku: 'RBK2100-S', desired: 3 });
   });
   it('no crea en otra sucursal ni sin stock cuando falta la sucursal Reebok', async () => {
-    const res = await processFiles(file([headers, row()]), null, null, config);
+    const res = await processFiles(file([headers, row('S', 4)]), null, null, config);
     graphql.mockReset().mockResolvedValue({ locations: { edges: [{ node: { id: 'martinez', name: 'DEPOSITO MARTINEZ' } }] } });
     await expect(createProducts(res, config)).rejects.toThrow('No encontré la sucursal');
     expect(graphql.mock.calls.every(([q]) => !q.includes('mutation'))).toBe(true);

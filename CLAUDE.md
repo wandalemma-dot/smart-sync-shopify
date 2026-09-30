@@ -1058,3 +1058,6 @@ encontraron así y no se habrían visto de otra forma.
 
 ### Colores Reebok y Kappa (30-sep-2026)
 - Títulos de futuras cargas, ropa y calzado: simplificar colores con coloresComerciales.ts, preservar modelo y agrupar/validar antes de normalizar nombres. LILGLW/PROPNK/CBLACK → Lila Rosa Negro; WHITE/BLACK → Blanco Negro. Conservar colores distintos, eliminar repetidos. Reemplaza la regla anterior de solo color principal Reebok. Desconocidos se conservan y se avisan para revisión, sin adivinar por foto. Misma salida en vista previa/API/CSV; no renombrar productos existentes.
+
+### Exclusión de nuevas altas por stock — Reebok y Kappa
+- Excluir modelos con exactamente UN talle con stock positivo y un total de 1 a 3 unidades. Dos talles con stock (aunque sumen 2 o 3) se mantienen; un talle con 4+ también. Talles en cero no cuentan como disponibles. Aplica ropa/calzado de ambas marcas, a vista previa, alta API y CSV nuevos. No excluir de excelMap ni de sincronización de productos existentes; no tocar otras marcas.

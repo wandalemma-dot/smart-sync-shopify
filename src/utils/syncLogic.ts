@@ -26,6 +26,13 @@ export interface SyncConfig {
   brand: 'lecoq' | 'converse' | 'bloque' | 'orchard' | 'luxo' | 'vart' | 'orng' | 'ntf' | 'reebok' | 'kappa';
 }
 
+/** Solo altas: un único talle con stock y entre una y tres unidades. */
+export function excluirAltaPorStock(brand: SyncConfig['brand'], sizes: Record<string, number>): boolean {
+  if (brand !== 'reebok' && brand !== 'kappa') return false;
+  const disponibles = Object.values(sizes).filter(qty => qty > 0);
+  return disponibles.length === 1 && disponibles[0] <= 3;
+}
+
 export interface MissingProduct {
   tablaTalle?: string;
   sizeConversion?: SizeConversion;
@@ -1551,6 +1558,10 @@ export async function processFiles(
   const missingProducts: MissingProduct[] = [];
   for (const [cod, data] of Object.entries(excelMap)) {
     if (!data.foundInShopify && Object.keys(data.sizes).length > 0) {
+      if (excluirAltaPorStock(config.brand, data.sizes)) {
+        alerts.push({ type: 'info', title: 'Modelo excluido de nuevas cargas', message: `${cod}: un solo talle con stock y hasta 3 unidades. No se crea ni se exporta como nuevo.` });
+        continue;
+      }
       missingProducts.push({
         coditm: cod,
         title: data.title,
@@ -1697,6 +1708,7 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
   }
 
   for (const prod of result.missingProducts) {
+    if (excluirAltaPorStock(config.brand, prod.sizes)) continue;
     let handle = prod.coditm.toLowerCase().replace(/[^a-z0-9]+/g, '-');
     const vendor = prod.vendor || VENDOR_POR_MARCA[config.brand];
     // Converse / Le Coq: si el archivo no trae precio (solo stock), el producto se

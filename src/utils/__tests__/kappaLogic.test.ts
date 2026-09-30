@@ -11,6 +11,7 @@ vi.mock('../shopify',()=>({shopifyGraphQL:graphql,mismaSucursal:(a:string,b:stri
 vi.mock('../csv',async orig=>({...await orig<typeof import('../csv')>(),triggerDownload:download}));
 const h=['SKU','Modelo Color','Descripción del artículo','EAN','UDM','DISPONIBLE (inmediato)','Mayorista con descuento','Público','Mayorista Unitario','Descuento','GÉNERO'];
 const r=['K1-B-40','K1-B','CLASSIC BLACK 40','07799087201358','Pares',2,600,1875.5,1000,40,'MEN'];
+const altaRow=[...r]; altaRow[5]=4;
 const config={brand:'kappa',kappaCalzado:true,sheetName:'CALZADO'} as const;
 const file=(rows:unknown[][])=>{const w=XLSX.utils.book_new();XLSX.utils.book_append_sheet(w,XLSX.utils.aoa_to_sheet(rows),'CALZADO');return {name:'Kappa.xlsx',arrayBuffer:async()=>XLSX.write(w,{type:'array',bookType:'xlsx'})} as File;};
 beforeEach(()=>{graphql.mockReset().mockImplementation(async(q:string)=>q.includes('locations(')?{locations:{edges:[{node:{id:'loc',name:'DISTRINANDO SA (Reebok - Kappa)'}}]}}:{products:{edges:[],pageInfo:{hasNextPage:false}}});});
@@ -23,9 +24,9 @@ describe('Kappa carga',()=>{
   expect(result.productos.R.sizes).toEqual({S:1});expect(result.avisos[0]).toContain('pack/curva excluido');
  });
  it('comparte EAN, AR y tabla en vista previa, altas y CSV',async()=>{
-  const result=await processFiles(file([h,r]),null,null,config);
+  const result=await processFiles(file([h,altaRow]),null,null,config);
   const p=buildMatrixProducts(result,config)[0];
-  expect(p.vendor).toBe('Kappa');expect(p.variants[0]).toMatchObject({sku:'07799087201358',barcode:'07799087201358',optionValue:'40',cost:600,price:1875.5,qty:2});
+  expect(p.vendor).toBe('Kappa');expect(p.variants[0]).toMatchObject({sku:'07799087201358',barcode:'07799087201358',optionValue:'40',cost:600,price:1875.5,qty:4});
   expect(p.tags).toEqual(expect.arrayContaining(['K1-B','K1-B-40','TABLA DE TALLE KAPPA UNISEX']));
   expect(p.sizeConversion?.['39']).toEqual({arg:'39',us:null,eu:'40',cm:'25.7'});
   downloadMatrixCSV(result,config);expect(download.mock.calls.at(-1)?.[0]).toContain('07799087201358');
@@ -55,12 +56,12 @@ describe('Kappa carga',()=>{
   expect(coincideVarianteKappa(p,'39',{sku:'K1-B-40'})).toBe(true);
  });
  it('alta usa Distrinando, EAN y JSON; no crea si falta sucursal',async()=>{
-  const result=await processFiles(file([h,r]),null,null,config);
+  const result=await processFiles(file([h,altaRow]),null,null,config);
   graphql.mockImplementation(async(q:string)=>q.includes('locations(')?{locations:{edges:[{node:{id:'loc',name:'DISTRINANDO SA (Reebok - Kappa)'}}]}}:q.includes('mutation CrearProducto')?{productSet:{product:{id:'p'},userErrors:[]}}:q.includes('mutation GuardarTabla')?{metafieldsSet:{userErrors:[]}}:{});
   expect((await createProducts(result,config)).created).toBe(1);
   const calls=graphql.mock.calls;
   const input=calls.find(([q])=>q.includes('mutation CrearProducto'))![1].input;
-  expect(input.variants[0]).toMatchObject({barcode:'07799087201358',inventoryItem:{sku:'07799087201358',cost:'600'},inventoryQuantities:[{locationId:'loc',name:'available',quantity:2}]});
+  expect(input.variants[0]).toMatchObject({barcode:'07799087201358',inventoryItem:{sku:'07799087201358',cost:'600'},inventoryQuantities:[{locationId:'loc',name:'available',quantity:4}]});
   expect(calls.some(([q])=>q.includes('mutation GuardarTabla'))).toBe(true);
   graphql.mockReset().mockResolvedValue({locations:{edges:[]}});
   await expect(createProducts(result,config)).rejects.toThrow('sucursal');
