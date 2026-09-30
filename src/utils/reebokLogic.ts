@@ -1,3 +1,4 @@
+import { simplificarColores } from './coloresComerciales';
 // Primera etapa: indumentaria. No deducir tablas de calzado del sufijo del SKU.
 export const REEBOK_LOCATION = 'DISTRINANDO SA (Reebok - Kappa)';
 const tipos: Record<string, string> = {
@@ -53,5 +54,10 @@ export function parseReebok(rows: unknown[][]): { productos: Record<string, Reeb
     p.sizes[talle] = qty; p.skuPorTalle[talle] = sku;
   }
   if (!Object.keys(productos).length) throw new Error('Reebok: no hay indumentaria compatible en este archivo. El calzado está pendiente.');
+  for (const p of Object.values(productos)) {
+    const colores = simplificarColores(p.nombre);
+    p.nombre = colores.titulo;
+    if (colores.pendientes.length) avisos.push(`${p.codigo}: revisar colores sin equivalencia: ${colores.pendientes.join(', ')}.`);
+  }
   return { productos, avisos };
 }

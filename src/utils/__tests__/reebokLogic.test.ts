@@ -83,7 +83,7 @@ describe('Reebok indumentaria', () => {
     expect(ps).toHaveLength(63);
     expect(ps.reduce((n,p) => n + Object.keys(p.sizes).length, 0)).toBe(257);
     expect(ps.reduce((n,p) => n + Object.values(p.sizes).reduce((a,b) => a+b,0), 0)).toBe(8880);
-    expect(result.avisos).toEqual([]);
+    expect(result.avisos.filter(a=>!a.includes('revisar colores'))).toEqual([]);
     expect(result.productos.RBK2100254782.nombre).toMatch(/^Top deportivo Reebok /);
     expect(result.productos.RBK2100254587.nombre).toMatch(/^Calza Reebok /);
   });
@@ -94,7 +94,7 @@ describe('Reebok indumentaria', () => {
     expect(ps).toHaveLength(57);
     expect(ps.reduce((n,p) => n + Object.keys(p.sizes).length, 0)).toBe(211);
     expect(ps.reduce((n,p) => n + Object.values(p.sizes).reduce((a,b) => a+b,0), 0)).toBe(8233);
-    expect(result.avisos).toEqual([]);
+    expect(result.avisos.filter(a=>!a.includes('revisar colores'))).toEqual([]);
     for (const p of ps) {
       expect(1 - p.costo * 1.21 / p.precio).toBeCloseTo(.612903, 5);
     }

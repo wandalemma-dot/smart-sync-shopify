@@ -42,8 +42,8 @@ describe('Reebok inmediato y compatibilidad', () => {
    expect(ps.reduce((n,p)=>n+Object.keys(p.sizes).length,0)).toBe(inmediato ? 1001 : name.includes('40%') ? 450 : 152);
    if(inmediato) {
     expect(result.avisos.filter(s=>s.includes('pack excluido'))).toHaveLength(41);
-    expect(result.avisos.filter(s=>!s.includes('pack excluido'))).toHaveLength(1);
-    expect(result.avisos.at(-1)).toContain('Fila 838');
+    expect(result.avisos.filter(s=>!s.includes('pack excluido')&&!s.includes('revisar colores'))).toHaveLength(1);
+    expect(result.avisos.some(s=>s.includes('Fila 838'))).toBe(true);
     expect(ps.reduce((n,p)=>n+Object.values(p.skuPorTalle).filter(s=>/^\d+$/.test(s)).length,0)).toBe(992);
    }
   });

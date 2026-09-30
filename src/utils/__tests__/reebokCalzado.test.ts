@@ -51,7 +51,7 @@ describe('Reebok Calzado',()=>{
    const r=row(us,'48','RBK1100033912');r[2]=`ROYAL BB4590 UK ${uk}`;return r;
   });
   const result=parseReebokCalzado([headers,...rs]);
-  expect(result.avisos).toEqual([]);
+  expect(result.avisos.filter(a=>!a.includes('revisar colores'))).toEqual([]);
   expect(result.productos.RBK1100033912.sizes).toEqual({'48':1,'40':1,'40.5':1});
   expect(result.productos.RBK1100033912.tablaTalle).toBe('TABLA DE TALLE REEBOK HOMBRE');
  });
@@ -59,7 +59,7 @@ describe('Reebok Calzado',()=>{
   const r=row('10','43','RBK1100000089');
   r[2]='CN4107 - REEBOK ROYAL BB4500 HI2 - WHITE/LGH SOLID GREY - 43';
   const result=await processFiles(file([headers,r]),null,null,config);
-  const title='Zapatillas Reebok Royal Bb4500 Hi2 Blanco';
+  const title='Zapatillas Reebok Royal Bb4500 Hi2 Blanco Gris';
   expect(result.missingProducts[0].title).toBe(title);
   const p=buildMatrixProducts(result,config)[0];
   expect(p.title).toBe(title);
@@ -67,8 +67,8 @@ describe('Reebok Calzado',()=>{
   downloadMatrixCSV(result,config);expect(download.mock.calls.at(-1)?.[0]).toContain(title);
  });
  it('mantiene el modelo y simplifica colores conocidos sin guiones',()=>{
-  expect(tituloReebokCalzado('Zapatillas Reebok CLUB C EXTRA - CHALK/CHALK/GLEN GREEN')).toBe('Zapatillas Reebok Club C Extra Tiza');
-  expect(tituloReebokCalzado('Zapatillas Reebok NANO X3 CBLACK/FTWWHT')).toBe('Zapatillas Reebok Nano X3 Negro');
+  expect(tituloReebokCalzado('Zapatillas Reebok CLUB C EXTRA - CHALK/CHALK/GLEN GREEN')).toBe('Zapatillas Reebok Club C Extra Tiza Verde');
+  expect(tituloReebokCalzado('Zapatillas Reebok NANO X3 CBLACK/FTWWHT')).toBe('Zapatillas Reebok Nano X3 Negro Blanco');
   expect(tituloReebokCalzado('Zapatillas Reebok ROYAL BB4500 HI2')).toBe('Zapatillas Reebok Royal Bb4500 Hi2');
  });
  it('fila 142: W es USA Mujer, conserva SKU y reconoce AR 40.5',()=>{
@@ -143,7 +143,7 @@ describe('Reebok Calzado',()=>{
    const r=parseReebokCalzado(rs); const ps=Object.values(r.productos);
    expect(ps.length).toBeGreaterThan(0);
    expect(ps.reduce((n,p)=>n+Object.keys(p.sizes).length,0)).toBe(name.includes('40%') ? 450 : 152);
-   expect(r.avisos).toHaveLength(name.includes('40%') ? 2 : 0);
+   expect(r.avisos.filter(a=>!a.includes('revisar colores'))).toHaveLength(name.includes('40%') ? 2 : 0);
    expect(ps.every(p=>Object.keys(p.sizes).every(ar=>Number(ar)>=20))).toBe(true);
   });
  }

@@ -1,3 +1,4 @@
+import { simplificarColores } from './coloresComerciales';
 import * as XLSX from 'xlsx';
 import { KAPPA_TABLAS, convertirTalleKappa, type TablaKappa } from './kappaTalles';
 import type { SizeConversion } from './reebokCalzado';
@@ -61,7 +62,12 @@ export function parseKappa(rows: unknown[][], calzado: boolean, sistema: 'EU'|'A
  }
  if(!Object.keys(productos).length)throw new Error('Kappa: no hay filas compatibles. '+avisos.join(' '));
  for(const codigo of incompletos) if(productos[codigo]) {productos[codigo].tablaTalle='TABLA DE TALLE KAPPA SIN IDENTIFICAR';delete productos[codigo].sizeConversion;}
- return {productos,avisos};
+ for (const p of Object.values(productos)) {
+    const colores = simplificarColores(p.nombre);
+    p.nombre = colores.titulo;
+    if (colores.pendientes.length) avisos.push(`${p.codigo}: revisar colores sin equivalencia: ${colores.pendientes.join(', ')}.`);
+  }
+  return {productos,avisos};
 }
 export function coincideVarianteKappa(data: {skuPorTalle?:Record<string,string>;skuProveedorPorTalle?:Record<string,string>},size:string,v:{sku?:string}) {
  const sku=String(v.sku||'').trim();return !!sku&&(sku===data.skuPorTalle?.[size]||sku===data.skuProveedorPorTalle?.[size]);
