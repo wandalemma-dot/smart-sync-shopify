@@ -80,6 +80,20 @@ Tiene que servir para **todos** los proveedores.
   artículo, se suman (aparece «cantidad distinta»). Achicar fechas o filtrar persona.
 - Pendiente: guardar el historial de controles (hoy no hay base de datos) para
   armar el resumen por persona de varios remitos.
+- **Camino GRATIS (el que eligió Wanda, 30-sep-2026):** la clave de Anthropic
+  cuesta (~US$0,07 por remito), así que Wanda pasa las FOTOS a Claude en el chat
+  y Claude le devuelve un **Excel** que ella sube en «Opción A · Excel del remito»
+  (`remitoDesdeFilas`). **Formato que tiene que armar Claude, siempre igual:**
+  - Fila 1: `Proveedor — Tipo Número — dd/mm/aaaa — N renglones / M unidades`
+    (N y M tal como vienen IMPRESOS en el comprobante: «Filas» y «Cantidad total»).
+  - Fila 3: encabezados `Renglón | Código | Descripción | Color | Talle | Cantidad | Precio unit. | Monto`.
+  - Un renglón por línea del comprobante, en el mismo orden. Sin talle → `—`.
+  - Antes de entregarlo: verificar que la suma de cantidades y la cantidad de
+    renglones den igual a lo impreso, y que cantidad × precio dé el monto.
+  La opción de fotos con IA (`api/remito.js`) queda lista para cuando se cargue la clave.
+- La conexión a Shopify usa el **token fijo** `SHOPIFY_ADMIN_TOKEN` (Vercel no tiene
+  CLIENT_ID/SECRET). El permiso `read_reports` + datos protegidos de clientes nivel 2
+  se agregan en Shopify → Configuración → Apps → Desarrollar apps → la app.
 
 ### Reebok Calzado (28-sep-2026)
 
