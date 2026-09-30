@@ -33,6 +33,20 @@ const ALLOWED_MUTATIONS = [
 
 const SHOP = 'indy-com-ar.myshopify.com';
 
+// Versión de la API de Shopify. El resto de la app sigue en 2024-04 (ver
+// «Pendientes» en CLAUDE.md: hay que migrarla antes del 1-ene-2027).
+// Las consultas de informes (shopifyqlQuery, usado por «Control de remitos»
+// para leer QUIÉN cargó stock) solo existen desde 2025-10, así que SOLO esas
+// lecturas van a una versión nueva. Nada que escriba pasa por acá.
+const API_VERSION = '2024-04';
+const API_VERSION_INFORMES = '2026-07';
+
+function versionPara(query) {
+  const esMutacion = /\bmutation\b/i.test(query);
+  if (!esMutacion && /\bshopifyqlQuery\b/.test(query)) return API_VERSION_INFORMES;
+  return API_VERSION;
+}
+
 // ---- TOKEN ----
 // Preferimos "client credentials": la app pide el token sola con el Client ID +
 // Secret y lo renueva cada 24h. Así los permisos nuevos (ej. read_orders) quedan
@@ -100,7 +114,7 @@ export default async function handler(req, res) {
   }
 
   try {
-    const response = await fetch(`https://${SHOP}/admin/api/2024-04/graphql.json`, {
+    const response = await fetch(`https://${SHOP}/admin/api/${versionPara(query)}/graphql.json`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
