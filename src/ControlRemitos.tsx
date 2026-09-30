@@ -9,7 +9,7 @@
 import { useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import {
-  chequeosRemito, compararRemito, netoPorVariante, personasDe, sumarDias,
+  chequeosRemito, compararRemito, netoPorVariante, personasDe, sumarDias, remitoDesdeFilas,
   traerMovimientos, traerVariantes, variantesHuerfanas,
 } from './utils/controlRemitos';
 import type { Movimiento, Remito, RenglonRemito, VarianteInfo, FilaControl, TipoFila } from './utils/controlRemitos';
@@ -86,7 +86,7 @@ export default function ControlRemitos() {
       });
       const txt = await r.text();
       let j: any; try { j = JSON.parse(txt); } catch { throw new Error(`Error ${r.status}: ${txt.slice(0, 150)}`); }
-      if (!r.ok) throw new Error(j.error || `Error ${r.status}`);
+      if (!r.ok) throw new Error((j.error || `Error ${r.status}`) + (/ANTHROPIC_API_KEY/.test(j.error || '') ? ' Mientras tanto usá la Opción A (Excel).' : ''));
       const rem: Remito = j.remito;
       rem.renglones = (rem.renglones || []).map((x: RenglonRemito) => ({
         ...x, codigo: String(x.codigo ?? ''), descripcion: String(x.descripcion ?? ''), color: String(x.color ?? ''),
@@ -103,6 +103,26 @@ export default function ControlRemitos() {
       setError(e.message);
     } finally {
       setLeyendo(false);
+    }
+  };
+
+  // Camino gratis: el Excel que arma Claude en el chat a partir de las fotos.
+  const subirExcel = async (file: File | undefined) => {
+    if (!file) return;
+    setError(null); setRemito(null); setMovs(null);
+    try {
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      const hoja = wb.Sheets[wb.SheetNames[0]];
+      const filas = XLSX.utils.sheet_to_json<unknown[]>(hoja, { header: 1, raw: true, defval: '' });
+      const rem = remitoDesdeFilas(filas);
+      setRemito(rem);
+      if (/^\d{4}-\d{2}-\d{2}$/.test(rem.fecha || '')) {
+        setDesde(rem.fecha);
+        const h = sumarDias(rem.fecha, 7);
+        setHasta(h > hoy() ? hoy() : h);
+      }
+    } catch (e: any) {
+      setError('No pude leer el Excel: ' + e.message);
     }
   };
 
@@ -181,8 +201,17 @@ export default function ControlRemitos() {
         <strong> quién cargó stock</strong> en esas fechas y te muestra qué coincide y qué no. <strong>No cambia nada en Shopify.</strong>
       </p>
 
-      {/* ---- 1. FOTOS ---- */}
-      <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>1 · Fotos del remito</h3>
+      {/* ---- 1. REMITO: Excel (gratis) o fotos (con clave de IA) ---- */}
+      <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>1 · El remito</h3>
+      <div style={{ background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.3)', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
+        <strong>Opción A · Excel del remito</strong> <span style={{ opacity: 0.75, fontSize: '0.82rem' }}>(gratis)</span>
+        <p style={{ fontSize: '0.82rem', opacity: 0.85, margin: '4px 0 8px' }}>
+          Pasale las fotos del remito a Claude en el chat y pedile «el Excel para Control de remitos». Subí acá ese Excel.
+        </p>
+        <input type="file" accept=".xlsx,.xls,.csv" onChange={(e) => { subirExcel(e.target.files?.[0]); e.target.value = ''; }} />
+      </div>
+      <strong>Opción B · Fotos</strong> <span style={{ opacity: 0.75, fontSize: '0.82rem' }}>(la app las lee sola; necesita la clave de Anthropic en Vercel)</span>
+      <br />
       <input type="file" accept="image/*" multiple onChange={(e) => { agregarFotos(e.target.files); e.target.value = ''; }} />
       {fotos.length > 0 && (
         <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
