@@ -249,6 +249,10 @@ export default function App() {
 
     try {
       const res = await processFiles(providerFile, null, null, cfg, null);
+      // Mismo orden en la lista, el CSV y «Crear 1 de prueba».
+      const unidades = (p: SyncResult['missingProducts'][number]) =>
+        Object.values(p.sizes).reduce((total, q) => total + (Number(q) || 0), 0);
+      res.missingProducts.sort((a, b) => unidades(b) - unidades(a));
       setResult(res);
       setPreviewReady(true);
     } catch (err: any) {
@@ -622,6 +626,7 @@ export default function App() {
               <p style={{ fontSize: '0.85rem', opacity: 0.85, marginTop: 0 }}>
                 Se crean en <strong>Activo</strong>, publicados <strong>solo en Point of Sale</strong>, con el stock del archivo.
                 Destildá lo que no quieras publicar. Probá primero con 1.
+                {' '}Ordenados de mayor a menor cantidad total de unidades.
               </p>
 
               {pendientes.length > 0 && <p role="alert" style={{ color: '#fbbf24' }}>

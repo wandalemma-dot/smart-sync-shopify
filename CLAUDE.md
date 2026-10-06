@@ -865,6 +865,8 @@ archivo. Si el archivo no trae precio, se crean en **$0**.
 
 ### 3.5-bis Crear productos nuevos: se ELIGE cuál crear
 
+- 6-oct-2026: ordenar los productos nuevos de todas las marcas por total de unidades descendente (suma de los talles, el mismo número mostrado en cada fila). Empates conservan el orden del archivo. Lista, CSV y «Crear 1 de prueba» comparten el orden; las casillas siguen asociadas al código y no cambian al ordenar. Mantener las exclusiones por stock de Reebok/Kappa.
+
 La caja «Crear los nuevos directo en Shopify» y la de «Configurar Tablas para
 Nuevos Productos» eran **dos paneles separados**, uno arriba y otro al final de
 la página. Wanda pidió tenerlos **juntos** (20-ago-2026): cada producto muestra
