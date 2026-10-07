@@ -317,7 +317,8 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     const estaCorrido = talleCorrido.some((t) => t.handle === handle);
     if (estaCorrido) conversionDudosa.add(handle);
     for (const [size, qtyRaw] of Object.entries(d.sizes || {})) {
-      const desired = Number(qtyRaw);
+      const desired = config.brand === 'converse' || config.brand === 'lecoq'
+        ? Math.max(0, Number(qtyRaw)) : Number(qtyRaw);
       // ⚠ Si hay tabla de conversión pero este talle NO está en ella, no sabemos
       // a qué talle de Shopify corresponde. Ese producto queda EXCLUIDO del
       // barrido a cero: si no, un talle que el proveedor SÍ tiene podría
@@ -439,7 +440,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
         if (!lvl) continue;                             // no está en la sucursal: nada que apagar
         const qEntry = (lvl.quantities || []).find((x: any) => x.name === 'available');
         const current = qEntry ? Number(qEntry.quantity) : 0;
-        if (current <= 0) continue;                     // ya está en 0
+        if (current === 0) continue;                    // negativos también se corrigen a 0
         changes.push({
           handle,
           title: shopTitle,
@@ -464,7 +465,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
       if (!v?.inventoryItem?.id) continue;
       const qEntry = (v.inventoryItem.inventoryLevel?.quantities || []).find((x: any) => x.name === 'available');
       const current = qEntry ? Number(qEntry.quantity) : 0;
-      if (current <= 0) continue; // ya está en 0
+      if (current === 0) continue; // negativos también se corrigen a 0
       changes.push({
         handle,
         title: shopTitle,

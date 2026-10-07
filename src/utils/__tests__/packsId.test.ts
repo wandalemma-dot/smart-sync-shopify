@@ -38,6 +38,23 @@ describe('cantidad del pack en el nombre, nunca del código o talle', () => {
 
 describe.each(['lecoq', 'converse'] as const)('precios por par: %s', brand => {
   const config = { brand, sheetName: 'Plantilla' };
+  it('incluye agotados con stock negativo o compensado; ignora cero y Martínez', async () => {
+    const product = (handle: string, cantidades: (number | null)[]) => ({ node: {
+      handle, title: handle, tags: [], variants: { edges: cantidades.map((quantity, i) => ({ node: {
+        title: String(i), sku: `${handle}-${i}`, price: '0', inventoryItem: {
+          inventoryLevel: quantity === null ? null : { quantities: [{ name: 'available', quantity }] },
+          mar: { quantities: [{ name: 'available', quantity: 8 }] },
+        },
+      } })) },
+    } });
+    graphql.mockImplementation(async (q: string) => q.includes('locations(')
+      ? { locations: { edges: ['ID (Converse - Le Coq Sportif)', 'DEPOSITO MARTINEZ'].map(name => ({ node: { id: name, name } })) } }
+      : { products: { edges: [product('negativo', [-1]), product('compensado', [-1, 1]), product('cero', [0]), product('sin-alta', [null])], pageInfo: { hasNextPage: false } } });
+    const res = await processFiles(plantilla(), null, null, config);
+    expect(res.enPeligro.map(p => p.handle).sort()).toEqual(['compensado', 'negativo']);
+    expect(res.enPeligro.find(p => p.handle === 'compensado')?.talles).toEqual(['0', '1']);
+    expect(graphql.mock.calls.every(([q]) => !q.includes('mutation'))).toBe(true);
+  });
   it('reconoce X 6 antes de CON ANTIDES', async () => {
     const res = await processFiles(plantilla('PUMAS HOME SOCKS X 6 CON ANTIDES'), null, null, config);
     expect(res.excelMap.lan0226024p.costFinal).toBe(6208.5);

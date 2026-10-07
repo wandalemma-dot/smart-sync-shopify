@@ -1186,6 +1186,16 @@ export async function processFiles(
     }
   }
 
+  // iD: el proveedor no puede aportar disponibilidad negativa. Esta misma
+  // cantidad alimenta simulación, altas y CSV, sin alterar otras marcas.
+  if (config.brand === 'converse' || config.brand === 'lecoq') {
+    for (const data of Object.values(excelMap)) {
+      for (const size of Object.keys(data.sizes)) {
+        data.sizes[size] = Math.max(0, data.sizes[size]);
+      }
+    }
+  }
+
   // 3. Leer datos de Shopify desde el CSV exportado que el usuario subió
   interface ShopifyProductNode {
     handle: string;
@@ -1537,7 +1547,7 @@ export async function processFiles(
       if (handlesMatcheados.has(prod.handle)) continue;
       const variantes = prod.variants.edges.map((e: any) => e.node);
       const stock = variantes.reduce((a: number, v: any) => a + (Number(v.inventoryQuantity) || 0), 0);
-      if (stock <= 0) continue; // sin stock del proveedor: no urge
+      if (!variantes.some((v: any) => (Number(v.inventoryQuantity) || 0) !== 0)) continue;
       const tagsStr = String(prod.tags || '');
       const cod = tagsStr.split(',').map(s => s.trim().toUpperCase())
         .find(t => t && !t.includes(' ') && /\d/.test(t) && /^[A-Z0-9]{4,}$/.test(t)) || null;
@@ -1546,7 +1556,7 @@ export async function processFiles(
         titulo: prod.title,
         codigo: cod,
         stockProveedor: stock,
-        talles: variantes.filter((v: any) => Number(v.inventoryQuantity) > 0).map((v: any) => String(v.title)),
+        talles: variantes.filter((v: any) => (Number(v.inventoryQuantity) || 0) !== 0).map((v: any) => String(v.title)),
       });
     }
     enPeligro.sort((a, b) => b.stockProveedor - a.stockProveedor);

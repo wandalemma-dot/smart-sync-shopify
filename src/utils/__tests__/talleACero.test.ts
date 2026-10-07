@@ -70,6 +70,24 @@ const cfg = (brand: string) => ({ brand } as any);
 beforeEach(() => graphql.mockReset());
 
 describe('talles que el proveedor ya no tiene', () => {
+  it.each(['converse', 'lecoq'])('%s: corrige negativos de talles agotados, conserva stock disponible y no activa sucursales', async brand => {
+    responder([variante('S', -1), variante('M', -3), variante('L', 0), variante('XL', 4), variante('XXL', null)], '');
+    const plan = await planStockWrite(resultado({ XL: 4 }), cfg(brand));
+    expect(plan.changes.map(c => [c.talle, c.current, c.desired])).toEqual([['S', -1, 0], ['M', -3, 0]]);
+    expect(plan.locationId).toBe(LOC);
+    expect(plan.unchangedRows.map(r => r.talle)).toEqual(['XL']);
+  });
+  it.each(['converse', 'lecoq'])('%s: producto ausente corrige negativos aunque los positivos los compensen', async brand => {
+    responder([variante('S', -1), variante('M', 1), variante('L', 0), variante('XL', null)], '');
+    const res = { excelMap: {}, enPeligro: [{ handle: 'zapa', titulo: 'Agotado', codigo: 'A1' }] } as any;
+    const plan = await planStockWrite(res, cfg(brand));
+    expect(plan.changes.map(c => [c.current, c.desired])).toEqual([[-1, 0], [1, 0]]);
+  });
+  it.each(['converse', 'lecoq'])('%s: no propone enviar stock negativo del archivo', async brand => {
+    responder([variante('S', -1)], '');
+    const plan = await planStockWrite(resultado({ S: -2 }), cfg(brand));
+    expect(plan.changes[0]).toMatchObject({current: -1, desired: 0});
+  });
   it.each(['converse', 'lecoq'])('indumentaria %s: CTO0226102 agota S/M/L y conserva XL/XXL en iD', async brand => {
     responder([variante('S', 50), variante('M', 50), variante('L', 49), variante('XL', 27), variante('XXL', 13)], 'cto0226102');
     const plan = await planStockWrite(resultado({ XL: 27, XXL: 13 }), cfg(brand));

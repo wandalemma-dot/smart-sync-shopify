@@ -48,6 +48,10 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ## 1. Qué hace la app
 
+### Stock negativo en iD (7-oct-2026)
+- Wanda cancela faltantes sin reponer inventario. Solo para Converse/Le Coq, al sincronizar iD, los talles agotados o productos ausentes con disponible negativo deben pasar a 0 igual que los positivos. No saltear por total <= 0: una suma cero puede contener talles +1 y -1.
+- No enviar cantidades negativas desde el archivo de iD. Mantener stock positivo informado por el proveedor, sucursal iD, controles de conversión y exclusiones por talles dudosos; nunca tocar Martínez. No cancelar órdenes ni restituir inventario automáticamente. Esto se aplica al confirmar la sincronización, no es un monitor de ventas en tiempo real.
+
 ### Control de remitos (30-sep-2026)
 
 Pedido de Wanda: controlar que lo que llega del proveedor se cargue bien en
