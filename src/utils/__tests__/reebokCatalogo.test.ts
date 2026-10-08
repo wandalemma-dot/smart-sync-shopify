@@ -44,9 +44,13 @@ describe('Unión Reebok Calzado', () => {
     expect(p.skuPorTalle['36']).toBe('04065419284966');
     expect(p.tablaTalle).toContain('MUJER');
   });
-  it('exige elección ante cantidades distintas, nunca suma', () => {
+  it('aparta cantidades distintas sin bloquear la unión; nunca suma', () => {
     const a = lista('30.xlsx',[row()]), b = lista('40.xlsx',[row('6.5','36',12)]);
-    expect(() => combinarReebok([a,b])).toThrow('Elegí qué planilla');
+    const result=combinarReebok([a,b]);
+    expect(result.productos[code]).toBeUndefined();
+    expect(result.cobertura.modelosPresentes).toContain(code);
+    expect(result.cobertura.modelosProtegidos).toContain(code);
+    expect(result.avisos.some(a=>a.includes('Modelo pendiente:'))).toBe(true);
     expect(combinarReebok([a,b],'40.xlsx').productos[code].sizes['36']).toBe(12);
     expect(combinarReebok([b,a],'30.xlsx').productos[code].sizes['36']).toBe(5);
   });
@@ -65,10 +69,12 @@ describe('Unión Reebok Calzado', () => {
     expect(datos.modelosPresentes).toContain(code);
     expect(datos.modelosProtegidos).toContain(code);
   });
-  it('los precios diferentes requieren prioridad explícita', () => {
+  it('conserva modelos con precios diferentes sin bloquear los demás', () => {
     const r=row('7.5','37'); r[4]=50000;
     const a=lista('30.xlsx',[row()]),b=lista('40.xlsx',[r]);
-    expect(()=>combinarReebok([a,b])).toThrow('precios diferentes');
+    const resultado=combinarReebok([a,b]);
+    expect(resultado.productos[code]).toBeUndefined();
+    expect(resultado.cobertura.modelosProtegidos).toContain(code);
     const p=combinarReebok([a,b],'40.xlsx').productos[code];
     expect(p.costo).toBe(30000);expect(p.sizes).toEqual({'36':5,'37':5});
   });
@@ -110,6 +116,24 @@ describe('Unión Reebok Calzado', () => {
     expect(res.enPeligro).toEqual([]);
     const plan=await planStockWrite(res,cfg);
     expect(plan.changes).toHaveLength(1); expect(plan.changes[0].desired).toBe(5);
+  });
+  it('sin elegir prioridad, compara ausentes aun cuando todos los modelos presentes tengan diferencias',async()=>{
+    const f1=file('30.xlsx',[row()]),f2=file('40.xlsx',[row('6.5','36',12)]);
+    products=[product(code,[variant(`${code}-6.5`,'36'),variant(`${code}-8`,'38')]),product('RBKAUSENTE')];
+    const res=await processFiles(f1,null,null,cfg,null,[{file:f1,sheetName:'Calzado'},{file:f2,sheetName:'Calzado'}]);
+    expect(res.excelMap).toEqual({});
+    expect(res.updatesToApply).toEqual([]);expect(res.missingProducts).toEqual([]);
+    expect(res.enPeligro.map(p=>p.handle)).toEqual(['rbkausente']);
+    const plan=await planStockWrite(res,cfg);
+    expect(plan.changes).toHaveLength(1);
+    expect(plan.changes[0]).toMatchObject({sku:'RBKAUSENTE-6.5',desired:0});
+  });
+  it('actualiza modelos sin diferencias de ambas listas aunque otro quede pendiente',async()=>{
+    const f1=file('30.xlsx',[row(),row('6.5','36',6,'RBKSOLO30')]),f2=file('40.xlsx',[row('6.5','36',12),row('6.5','36',7,'RBKSOLO40')]);
+    products=[product(code),product('RBKSOLO30'),product('RBKSOLO40'),product('RBKAUSENTE')];
+    const res=await processFiles(f1,null,null,cfg,null,[{file:f1,sheetName:'Calzado'},{file:f2,sheetName:'Calzado'}]);
+    const plan=await planStockWrite(res,cfg);
+    expect(plan.changes.map(p=>[p.sku,p.desired])).toEqual([['RBKSOLO30-6.5',6],['RBKSOLO40-6.5',7],['RBKAUSENTE-6.5',0]]);
   });
   it('no pone a cero variantes de modelos con filas excluidas ni talles que no pudo ubicar', async () => {
     products=[product(code,[variant(`${code}-6.5`,'36'),variant(`${code}-8`,'38')]), product('RBKDUDA'),product('RBKPACK'),
@@ -170,6 +194,12 @@ it.skipIf(!reales.every(n=>existsSync(`C:/Users/maxim/Downloads/${n}`)))('combin
     return {nombre,datos:parseReebokCalzado(XLSX.utils.sheet_to_json<unknown[]>(w.Sheets[w.SheetNames[0]],{header:1}))};
   });
   const result=combinarReebok(listas,reales[0]);
+  const sinPrioridad=combinarReebok(listas);
+  expect(sinPrioridad.cobertura.modelosPresentes).toEqual(result.cobertura.modelosPresentes);
+  expect(sinPrioridad.avisos.some(a=>a.includes('Modelo pendiente:'))).toBe(true);
+  for (const code of Object.keys(result.productos).filter(c=>!sinPrioridad.productos[c])) {
+    expect(sinPrioridad.cobertura.modelosProtegidos).toContain(code);
+  }
   const skus=new Set(listas.flatMap(l=>Object.values(l.datos.productos).flatMap(p=>Object.values(p.skuProveedorPorTalle!))));
   expect(Object.values(result.productos).reduce((n,p)=>n+Object.keys(p.sizes).length,0)).toBe(skus.size);
   for(const code of result.cobertura.modelosProtegidos) expect(result.cobertura.modelosPresentes).toContain(code);

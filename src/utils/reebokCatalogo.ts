@@ -19,6 +19,7 @@ export function combinarReebok(listas: ReebokLista[], prioridad = '') {
   const productos: Record<string, ReebokCalzadoProducto> = {};
   const origen: Record<string, string> = {}, avisos: string[] = [];
   const sinTabla = new Set<string>();
+  const pendientes = new Set<string>();
   const cobertura: ReebokCobertura = {
     categoria: 'calzado',
     archivos: listas.map(l => l.nombre),
@@ -37,8 +38,10 @@ export function combinarReebok(listas: ReebokLista[], prioridad = '') {
       if (!p.sizeConversion) sinTabla.add(code);
       const anterior = productos[code];
       if (anterior && (anterior.costo !== p.costo || anterior.precio !== p.precio)) {
-        if (origen[code] !== prioridad) throw new Error(`${code}: precios diferentes en ${origen[code]} y ${nombre}. Elegí qué planilla tiene prioridad.`);
-        avisos.push(`${code}: precios tomados de ${prioridad}.`);
+        if (origen[code] !== prioridad) {
+          pendientes.add(code);
+          avisos.push(`${code}: precios diferentes en ${origen[code]} y ${nombre}. Modelo pendiente: conserva su stock y precios actuales, sin altas ni ceros. La comparación del resto continúa.`);
+        } else avisos.push(`${code}: precios tomados de ${prioridad}.`);
       }
       const destino = productos[code] ??= { ...p, sizes: {}, skuPorTalle: {}, skuProveedorPorTalle: {} };
       origen[code] ??= nombre;
@@ -57,8 +60,10 @@ export function combinarReebok(listas: ReebokLista[], prioridad = '') {
             throw new Error(`${code}, AR ${ar}: identificadores distintos entre planillas. Revisá el SKU/EAN.`);
           }
           if (destino.sizes[ar] !== qty) {
-            if (origen[clave] !== prioridad) throw new Error(`${sku}: stock ${destino.sizes[ar]} en ${origen[clave]} y ${qty} en ${nombre}. Elegí qué planilla tiene prioridad.`);
-            avisos.push(`${sku}: stock ${destino.sizes[ar]} de ${prioridad}; no se suma ${qty} de ${nombre}.`);
+            if (origen[clave] !== prioridad) {
+              pendientes.add(code);
+              avisos.push(`${sku}: stock ${destino.sizes[ar]} en ${origen[clave]} y ${qty} en ${nombre}. Modelo pendiente: conserva su stock y precios actuales, sin altas ni ceros. La comparación del resto continúa.`);
+            } else avisos.push(`${sku}: stock ${destino.sizes[ar]} de ${prioridad}; no se suma ${qty} de ${nombre}.`);
           }
           // La lista sin EAN puede complementarse con la que sí lo informa.
           if (ean !== sku) destino.skuPorTalle[ar] = ean;
@@ -70,6 +75,10 @@ export function combinarReebok(listas: ReebokLista[], prioridad = '') {
         }
       }
     }
+  }
+  for (const code of pendientes) {
+    delete productos[code];
+    if (!cobertura.modelosProtegidos.includes(code)) cobertura.modelosProtegidos.push(code);
   }
   for (const [code, p] of Object.entries(productos)) {
     Object.assign(p, sinTabla.has(code) ? { tablaTalle: REEBOK_SIN_TABLA, sizeConversion: undefined } :

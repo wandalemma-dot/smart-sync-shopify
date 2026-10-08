@@ -370,14 +370,14 @@ export default function App() {
               </div>)}
               {reebokFiles.length > 1 ? <>
                 <p style={{color: '#fbbf24'}}>Cargá todas las listas vigentes de Reebok Calzado. Lo que no esté en ninguna se propondrá en cero, únicamente en DISTRINANDO.</p>
-                <label>Si un producto tiene distinto stock o precio entre planillas:</label>
+                <label>Si un producto tiene distinto stock o precio entre planillas (opcional):</label>
                 <select aria-label="Planilla con prioridad" value={config.reebokPrioridad || ''} disabled={readingFiles || loading} onChange={e => {
                   invalidateAnalysis(); setConfig({...config, reebokPrioridad: e.target.value});
                 }}>
-                  <option value="">Avisarme para que elija antes de continuar</option>
+                  <option value="">Conservar esos modelos y continuar comparando el resto</option>
                   {reebokFiles.map(a => <option key={a.file.name} value={a.file.name}>Usar {a.file.name}</option>)}
                 </select>
-                <p>Los repetidos nunca suman stock entre planillas.</p>
+                <p>Se usan todas las listas de Reebok juntas. Los repetidos no suman stock. Si difieren, el modelo conserva su stock y queda señalado para revisión, sin bloquear los ceros de los ausentes.</p>
               </> : <p>Con una sola planilla se actualiza lo informado; los productos ausentes conservan su stock.</p>}
             </div>}
 
