@@ -21,7 +21,7 @@ export const LINES_QUERY = `query PedidoIdLines($id: ID!, $after: String) {
   } }
 }`;
 
-export interface PendienteId { orden: string; id: string; titulo: string; sku: string; talle: string; cantidad: number; tags: string[]; vendor: string }
+export interface PendienteId { orden: string; id: string; titulo: string; sku: string; talle: string; cantidad: number; tags: string[]; vendor: string; barcode?: string; variantId?: string }
 export interface CeldaPedido { raw: string; col: number; disponible: number; tope: boolean }
 export interface ArticuloPedido { codigo: string; nombre: string; row: number; celdas: CeldaPedido[]; pack: number }
 export interface PlantillaId { original: Uint8Array; articulos: ArticuloPedido[]; sheetPath: string; limpiar: string[]; previas: number }
@@ -54,11 +54,19 @@ function cursor(conn: any, anterior: string | null): string | null {
 }
 
 export async function leerPendientesId(ids: string[], progreso?: (n: number) => void): Promise<{ lineas: PendienteId[]; avisos: string[] }> {
+  return leerPendientesSucursal(ids, { ubicacion: STOCK_LOCATION.converse, etiqueta: 'iD', excluirTags: ['pedido id', 'solucionar'], estadosPago: ['PAID'], linesQuery: LINES_QUERY }, progreso);
+}
+
+export interface FiltroPedidoSucursal {
+  ubicacion: string; etiqueta: string; excluirTags: string[]; estadosPago: string[]; linesQuery: string;
+}
+
+export async function leerPendientesSucursal(ids: string[], filtro: FiltroPedidoSucursal, progreso?: (n: number) => void): Promise<{ lineas: PendienteId[]; avisos: string[] }> {
   // Sin este permiso Shopify puede devolver solo una parte de las asignaciones.
   const access: any = await shopifyGraphQL(`query PedidoIdPermisos { currentAppInstallation { accessScopes { handle } } }`);
   const scopes = new Set((access?.currentAppInstallation?.accessScopes || []).map((s: any) => s.handle));
   if (!scopes.has('read_merchant_managed_fulfillment_orders') && !scopes.has('write_merchant_managed_fulfillment_orders')) {
-    throw new Error('Falta habilitar en la conexión de la app el permiso de lectura read_merchant_managed_fulfillment_orders. Sin él no se puede comprobar la sucursal iD.');
+    throw new Error(`Falta habilitar en la conexión de la app el permiso de lectura read_merchant_managed_fulfillment_orders. Sin él no se puede comprobar la sucursal ${filtro.etiqueta}.`);
   }
   const lineas: PendienteId[] = [], avisos: string[] = [];
   const vistos = new Set<string>();
@@ -71,18 +79,18 @@ export async function leerPendientesId(ids: string[], progreso?: (n: number) => 
       const o = data?.order;
       if (!o) throw new Error(`No pude leer la orden ${id.split('/').pop()}. Revisá permisos o antigüedad; no se descarga un pedido incompleto.`);
       const tags = (o.tags || []).map((t: string) => t.trim().toLowerCase());
-      if (o.cancelledAt || o.closed || o.displayFinancialStatus !== 'PAID' || tags.some((t: string) => ['pedido id', 'solucionar'].includes(t))) {
-        avisos.push(`${o.name}: excluida por estar cancelada/cerrada, no pagada o etiquetada pedido id/solucionar.`); break;
+      if (o.cancelledAt || o.closed || !filtro.estadosPago.includes(o.displayFinancialStatus) || tags.some((t: string) => filtro.excluirTags.includes(t))) {
+        avisos.push(`${o.name}: excluida por estar cancelada/cerrada, estado de pago ${o.displayFinancialStatus} o etiqueta ${filtro.excluirTags.join('/')}.`); break;
       }
       const conn = o.fulfillmentOrders;
       const next = cursor(conn, after);
       for (const fo of conn.nodes) {
-        if (!mismaSucursal(fo.assignedLocation?.name, STOCK_LOCATION.converse)) continue;
+        if (!mismaSucursal(fo.assignedLocation?.name, filtro.ubicacion)) continue;
         idEncontrado = true;
-        if (!['OPEN', 'IN_PROGRESS'].includes(fo.status)) { avisos.push(`${o.name}: preparación de iD en estado ${fo.status}; revisar, no incluida.`); continue; }
+        if (!['OPEN', 'IN_PROGRESS'].includes(fo.status)) { avisos.push(`${o.name}: preparación de ${filtro.etiqueta} en estado ${fo.status}; revisar, no incluida.`); continue; }
         let page: string | null = null;
         do {
-          const d: any = await shopifyGraphQL(LINES_QUERY, { id: fo.id, after: page });
+          const d: any = await shopifyGraphQL(filtro.linesQuery, { id: fo.id, after: page });
           const c = d?.fulfillmentOrder?.lineItems;
           const siguiente = cursor(c, page);
           for (const item of c.nodes) {
@@ -91,13 +99,15 @@ export async function leerPendientesId(ids: string[], progreso?: (n: number) => 
             if (!Number.isInteger(item.remainingQuantity) || item.remainingQuantity < 0) throw new Error('Cantidad pendiente inválida en Shopify.');
             if (!item.remainingQuantity) continue;
             const l = item.lineItem;
-            lineas.push({ orden: o.name, id: item.id, titulo: l.title, sku: l.sku || '', talle: l.variantTitle || '', cantidad: item.remainingQuantity, tags: l.product?.tags || [], vendor: l.product?.vendor || '' });
+            if (!l) throw new Error('Shopify no devolvió el artículo pendiente completo.');
+            const opciones = (l.variant?.selectedOptions || []).filter((v: any) => /^(talle|talla|size)$/i.test(v.name.trim()));
+            lineas.push({ orden: o.name, id: item.id, titulo: l.title, sku: l.sku || '', talle: opciones.length === 1 ? opciones[0].value : l.variantTitle || '', cantidad: item.remainingQuantity, tags: l.product?.tags || [], vendor: l.product?.vendor || '', barcode: l.variant?.barcode || '', variantId: l.variant?.id });
           }
           page = siguiente;
         } while (page);
       }
       after = next;
-      if (!after && !idEncontrado) avisos.push(`${o.name}: sin preparación visible asignada a iD; no incluida.`);
+      if (!after && !idEncontrado) avisos.push(`${o.name}: sin preparación visible asignada a ${filtro.etiqueta}; no incluida.`);
     } while (after);
     progreso?.(++n);
   }

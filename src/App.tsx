@@ -7,12 +7,13 @@ import { createProducts } from './utils/createProducts';
 import { aplicarPrecios, actualizacionesAplicables, sinCambios, margenPct } from './utils/updatePrices';
 import Reposicion from './Reposicion';
 import PedidoId from './PedidoId';
+import PedidoDistrinando from './PedidoDistrinando';
 import Recuperar from './Recuperar';
 import ControlRemitos from './ControlRemitos';
 
 export default function App() {
   // Pestaña activa: sincronización (lo de siempre) o reposición (pedido a iD).
-  const [tab, setTab] = useState<'sync' | 'pedido' | 'reposicion' | 'recuperar' | 'remitos'>('sync');
+  const [tab, setTab] = useState<'sync' | 'pedido' | 'distrinando' | 'reposicion' | 'recuperar' | 'remitos'>('sync');
   const [providerFile, setProviderFile] = useState<File | null>(null);
 
   const [sheets, setSheets] = useState<string[]>([]);
@@ -286,7 +287,7 @@ export default function App() {
 
       {/* ====== PESTAÑAS ====== */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '1.2rem' }}>
-        {([['sync', '🔄 Sincronización'], ['pedido', '📋 Armado de pedido iD'], ['reposicion', '📦 Reposición anterior'], ['recuperar', '♻️ Recuperar'], ['remitos', '🧾 Control de remitos']] as const).map(([id, label]) => (
+        {([['sync', '🔄 Sincronización'], ['pedido', '📋 Armado de pedido iD'], ['distrinando', '📋 Pedidos DISTRINANDO'], ['reposicion', '📦 Reposición anterior'], ['recuperar', '♻️ Recuperar'], ['remitos', '🧾 Control de remitos']] as const).map(([id, label]) => (
           <button
             key={id}
             onClick={() => setTab(id)}
@@ -302,7 +303,7 @@ export default function App() {
         ))}
       </div>
 
-      {tab === 'pedido' ? <PedidoId /> : tab === 'remitos' ? <ControlRemitos /> : tab === 'recuperar' ? <Recuperar /> : tab === 'reposicion' ? <Reposicion /> : (<>
+      {tab === 'distrinando' ? <PedidoDistrinando /> : tab === 'pedido' ? <PedidoId /> : tab === 'remitos' ? <ControlRemitos /> : tab === 'recuperar' ? <Recuperar /> : tab === 'reposicion' ? <Reposicion /> : (<>
 
       {!previewReady ? (
         <div className="main-grid">

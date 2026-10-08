@@ -32,6 +32,14 @@ function coincideUS(key: string, ar: string, us: string) {
   return REEBOK_TABLAS[key][ar]?.us === valor;
 }
 
+// Compartido con el armado de pedidos: UK solo se convierte con respaldo US.
+export function talleArReebok(desc: string, us: string): string {
+  const match = desc.match(/(?:\bAR\s*-?\s*|\s-\s|\s)(\d+(?:[.,]\d+)?)\s*$/i);
+  const ukFinal = desc.match(/\bUK\s*-?\s*(\d+(?:[.,]\d+)?)\s*$/i);
+  const ref = ukFinal ? (ukTabla as Record<string, { arg: string }>)[num(ukFinal[1])] : undefined;
+  return ukFinal ? (ref && Object.keys(REEBOK_TABLAS).some(key => coincideUS(key, ref.arg, us)) ? ref.arg : '') : match ? num(match[1]) : '';
+}
+
 export function tablaReebok(pares: { ar: string; us: string }[], incompleto = false) {
   const candidatas = incompleto || !pares.length ? [] : Object.keys(REEBOK_TABLAS).filter(key =>
     pares.every(({ ar, us }) => coincideUS(key, ar, us)));
@@ -77,8 +85,7 @@ export function parseReebokCalzado(rows: unknown[][]) {
     const ukFinal = desc.match(/\bUK\s*-?\s*(\d+(?:[.,]\d+)?)\s*$/i);
     const uk = desc.match(/\bUK\s*-?\s*(\d+(?:[.,]\d+)?)/i);
     const refUK = uk ? (ukTabla as Record<string, { arg: string; cm: string }>)[num(uk[1])] : undefined;
-    let ar = match ? num(match[1]) : '';
-    if (ukFinal) ar = refUK && Object.keys(REEBOK_TABLAS).some(key => coincideUS(key, refUK.arg, us)) ? refUK.arg : '';
+    const ar = talleArReebok(desc, us);
     const individual = /^(?:\d+(?:\.\d+)?[KW]?|M\d+(?:\.\d+)?\/W\d+(?:\.\d+)?)$/.test(us);
     if (!individual || !ar || Number(ar) < 20 || Number(ar) > 55) {
       incompletos.add(codigo);
