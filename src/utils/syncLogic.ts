@@ -16,12 +16,15 @@ import { parseReebok, REEBOK_LOCATION } from './reebokLogic';
 import { coincideVarianteReebok } from './reebokMatching';
 import { parseReebokCalzado } from './reebokCalzado';
 import type { SizeConversion } from './reebokCalzado';
+import { combinarReebok, ausenteReebok } from './reebokCatalogo';
+import type { ReebokArchivo, ReebokCobertura } from './reebokCatalogo';
 
 export type SyncMode = 'all' | 'stock_only' | 'cost_only' | 'price_only';
 
 export interface SyncConfig {
   sheetName: string;
   reebokCalzado?: boolean;
+  reebokPrioridad?: string;
   kappaCalzado?: boolean;
   brand: 'lecoq' | 'converse' | 'bloque' | 'orchard' | 'luxo' | 'vart' | 'orng' | 'ntf' | 'reebok' | 'kappa';
 }
@@ -85,6 +88,7 @@ export interface ProductoEnPeligro {
 }
 
 export interface SyncResult {
+  reebokCobertura?: ReebokCobertura;
   updatesToApply: UpdateAction[];
   missingProducts: MissingProduct[];
   enPeligro: ProductoEnPeligro[];
@@ -648,10 +652,10 @@ async function fetchLocationIdByName(name: string): Promise<string | null> {
 }
 
 // Extract Sheet names
-export async function extractSheetNames(file: File): Promise<string[]> {
+export async function extractSheetNames(file: File, soloVisibles = false): Promise<string[]> {
   const arrayBuffer = await file.arrayBuffer();
   const workbook = XLSX.read(arrayBuffer, { type: 'array' });
-  return workbook.SheetNames;
+  return workbook.SheetNames.filter((_, i) => !soloVisibles || !workbook.Workbook?.Sheets?.[i]?.Hidden);
 }
 
 async function readExcel(file: File, sheetName: string): Promise<any[]> {
@@ -697,8 +701,10 @@ export async function processFiles(
   shopifyExportFile: File | null,
   config: SyncConfig,
   listaPrecios?: ListaPrecios | null,
+  archivosReebok?: ReebokArchivo[],
 ): Promise<SyncResult> {
   const alerts: AlertMessage[] = [];
+  let reebokCobertura: ReebokCobertura | undefined;
   const excelMap: Record<string, { tablaTalle?: string, sizeConversion?: SizeConversion, wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyTags?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number, costoMargen?: number, usaListaPrecios?: boolean, skuPorTalle?: Record<string, string>, skuProveedorPorTalle?: Record<string, string>, whslDelArchivo?: boolean, unidadesPorPack?: number }> = {};
 
   if (config.brand === 'bloque' && /\.xlsx?$/i.test(providerFile.name)) {
@@ -905,7 +911,20 @@ export async function processFiles(
       });
     }
   } else if (config.brand === 'reebok') {
-    const reebok = config.reebokCalzado ? parseReebokCalzado(await readExcel(providerFile, config.sheetName)) : parseReebok(await readExcel(providerFile, config.sheetName));
+    const archivos = archivosReebok?.length ? archivosReebok : [{ file: providerFile, sheetName: config.sheetName }];
+    const combinado = config.reebokCalzado && archivos.length > 1 ? combinarReebok(await Promise.all(archivos.map(async a => ({
+      nombre: a.file.name, datos: parseReebokCalzado(await readExcel(a.file, a.sheetName)),
+    }))), config.reebokPrioridad) : undefined;
+    const reebok = combinado || (config.reebokCalzado ? parseReebokCalzado(await readExcel(providerFile, config.sheetName)) : parseReebok(await readExcel(providerFile, config.sheetName)));
+    reebokCobertura = combinado?.cobertura;
+    if (!config.reebokCalzado) {
+      const ropa = reebok as ReturnType<typeof parseReebok>;
+      reebokCobertura = { categoria: 'indumentaria', archivos: [providerFile.name], modelosPresentes: ropa.modelosPresentes,
+        modelosProtegidos: ropa.modelosProtegidos, identificadoresPresentes: ropa.identificadoresPresentes };
+      alerts.push({ type: 'warning', title: 'Lista vigente de Reebok Indumentaria', message: 'Al simular se propondrá cero para los modelos y talles de indumentaria ausentes de esta lista, solo en DISTRINANDO. El calzado y los modelos con filas excluidas conservan su stock. Revisá antes de confirmar.' });
+    }
+    if (combinado) alerts.push({ type: 'warning', title: `${archivos.length} planillas de Reebok Calzado combinadas`,
+      message: 'Al simular se propondrá cero para el calzado ausente de TODAS estas listas, solo en DISTRINANDO. Los modelos con filas excluidas quedan protegidos. Revisá los ceros antes de confirmar.' });
     for (const [codigo, p] of Object.entries(reebok.productos)) {
       excelMap[codigo] = { wholesale: p.costo, publicPrice: p.precio, costFinal: p.costo,
         title: p.nombre, vendor: 'Reebok', sizes: p.sizes, skuPorTalle: p.skuPorTalle, skuProveedorPorTalle: p.skuProveedorPorTalle,
@@ -1541,10 +1560,12 @@ export async function processFiles(
   // catálogo COMPLETO de lo que tiene el proveedor. Otras marcas mandan listas
   // parciales ("cargá esto"), y poner en 0 lo que no aparece sería un error grave.
   const enPeligro: ProductoEnPeligro[] = [];
+  // Reebok Calzado habilita ausencias solo con varias listas y cobertura conservadora.
   const marcaConCatalogoCompleto = config.brand === 'converse' || config.brand === 'lecoq';
-  if (marcaConCatalogoCompleto && !shopifyExportFile && Object.keys(excelMap).length > 0) {
+  if ((marcaConCatalogoCompleto || reebokCobertura) && !shopifyExportFile && Object.keys(excelMap).length > 0) {
     for (const prod of shopifyProducts) {
       if (handlesMatcheados.has(prod.handle)) continue;
+      if (reebokCobertura && !ausenteReebok(prod, reebokCobertura)) continue;
       const variantes = prod.variants.edges.map((e: any) => e.node);
       const stock = variantes.reduce((a: number, v: any) => a + (Number(v.inventoryQuantity) || 0), 0);
       if (!variantes.some((v: any) => (Number(v.inventoryQuantity) || 0) !== 0)) continue;
@@ -1590,6 +1611,7 @@ export async function processFiles(
   }
 
   return {
+    reebokCobertura,
     updatesToApply,
     missingProducts,
     enPeligro,

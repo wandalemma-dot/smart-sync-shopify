@@ -11,6 +11,7 @@ import { coincideVarianteKappa } from './kappaLogic';
 // ============================================================================
 
 import { coincideVarianteReebok } from './reebokMatching';
+import { coincideCategoriaReebok, codigosReebok } from './reebokCatalogo';
 import { shopifyGraphQL, mismaSucursal } from './shopify';
 import { talleMatches, STOCK_LOCATION, converseTablaInfo, talleShopifyLeCoq } from './syncLogic';
 import type { SyncResult, SyncConfig } from './syncLogic';
@@ -174,6 +175,9 @@ async function getLocationId(name: string): Promise<string | null> {
 
 // PASO 1 — Calcula el plan (no escribe nada).
 export async function planStockWrite(result: SyncResult, config: SyncConfig): Promise<StockPlan> {
+  const categoria = config.reebokCalzado ? 'calzado' : 'indumentaria';
+  const cobertura = config.brand === 'reebok' && result.reebokCobertura?.categoria === categoria &&
+    result.reebokCobertura.archivos.length >= (config.reebokCalzado ? 2 : 1) ? result.reebokCobertura : undefined;
   const locName = STOCK_LOCATION[config.brand];
   const locId = await getLocationId(locName);
   if (!locId) {
@@ -188,7 +192,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
 
   // También traemos los productos que el proveedor YA NO LISTA: a esos les vamos
   // a poner el stock en 0 (no los borramos).
-  const handlesPeligro = (result.enPeligro || []).map((p) => p.handle);
+  const handlesPeligro = (config.brand === 'reebok' && !cobertura ? [] : result.enPeligro || []).map((p) => p.handle);
   const tituloPeligro = new Map((result.enPeligro || []).map((p) => [p.handle, p.titulo]));
   const codigoPeligro = new Map((result.enPeligro || []).map((p) => [p.handle, p.codigo || '']));
 
@@ -421,11 +425,12 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
   // El producto sigue en el Excel, pero ese talle ya no viene con número.
   // Regla de Wanda: si el archivo no le pone número, en Shopify va a cero.
   //
-  // ⚠ SOLO para CONVERSE y LE COQ (depósito iD): ahí el Excel es el catálogo
+  // CONVERSE y LE COQ (depósito iD): ahí el Excel es el catálogo
   // COMPLETO del proveedor. Las otras marcas mandan listas PARCIALES
   // ("cargá esto"), y poner en 0 lo que no aparece sería un error grave.
   // Es la misma salvaguarda que ya usa `enPeligro` en syncLogic.ts.
-  const marcaConCatalogoCompleto = config.brand === 'converse' || config.brand === 'lecoq';
+  // Excepción explícita: Reebok Calzado con la unión de varias listas validadas.
+  const marcaConCatalogoCompleto = config.brand === 'converse' || config.brand === 'lecoq' || !!cobertura;
   if (marcaConCatalogoCompleto) {
     for (const [handle, cubiertas] of cubiertasPorHandle) {
       // Si de este producto hubo algún talle que no supimos convertir, no lo
@@ -433,9 +438,13 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
       if (conversionDudosa.has(handle)) continue;
       const live = liveByHandle[handle] || [];
       const shopTitle = titleByHandle[handle] || handle;
+      if (cobertura && (!coincideCategoriaReebok(shopTitle, tagsByHandle[handle] || '', cobertura.categoria) ||
+          cobertura.modelosProtegidos.some(code => code.toLowerCase() === codigoPorHandle.get(handle)?.toLowerCase()) ||
+          codigosReebok(tagsByHandle[handle] || '', live.map(v => String(v.sku || ''))).some(code => cobertura.modelosProtegidos.includes(code)))) continue;
       for (const v of live) {
         const invId = v?.inventoryItem?.id;
         if (!invId || cubiertas.has(invId)) continue;   // el archivo sí lo trae
+        if (cobertura && (!v.sku || cobertura.identificadoresPresentes.includes(v.sku))) continue;
         const lvl = v.inventoryItem.inventoryLevel;
         if (!lvl) continue;                             // no está en la sucursal: nada que apagar
         const qEntry = (lvl.quantities || []).find((x: any) => x.name === 'available');
@@ -450,7 +459,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
           inventoryItemId: invId,
           current,
           desired: 0,
-          motivo: 'El proveedor ya no tiene este talle',
+          motivo: cobertura ? 'Este talle no aparece en ninguna de las planillas cargadas' : 'El proveedor ya no tiene este talle',
         });
       }
     }
@@ -461,6 +470,12 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
   for (const handle of handlesPeligro) {
     const live = liveByHandle[handle] || [];
     const shopTitle = titleByHandle[handle] || tituloPeligro.get(handle) || handle;
+    if (cobertura) {
+      const codes = codigosReebok(tagsByHandle[handle] || '', live.map(v => String(v.sku || '')));
+      if (!coincideCategoriaReebok(shopTitle, tagsByHandle[handle] || '', cobertura.categoria) || !codes.length ||
+          codes.some(code => cobertura.modelosPresentes.includes(code)) ||
+          live.some(v => cobertura.identificadoresPresentes.includes(v.sku))) continue;
+    }
     for (const v of live) {
       if (!v?.inventoryItem?.id) continue;
       const qEntry = (v.inventoryItem.inventoryLevel?.quantities || []).find((x: any) => x.name === 'available');
@@ -475,7 +490,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
         inventoryItemId: v.inventoryItem.id,
         current,
         desired: 0,
-        motivo: 'El proveedor ya no lo lista',
+        motivo: cobertura ? 'El modelo no aparece en ninguna de las planillas cargadas' : 'El proveedor ya no lo lista',
       });
     }
   }

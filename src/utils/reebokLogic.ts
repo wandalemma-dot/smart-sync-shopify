@@ -13,7 +13,7 @@ export interface ReebokProducto {
   sizes: Record<string, number>; skuPorTalle: Record<string, string>;
   skuProveedorPorTalle?: Record<string, string>;
 }
-export function parseReebok(rows: unknown[][]): { productos: Record<string, ReebokProducto>; avisos: string[] } {
+export function parseReebok(rows: unknown[][]) {
   const h = rows.findIndex(r => r.some(v => norm(v) === 'MODELO COLOR') && r.some(v => norm(v) === 'MAYORISTA CON DESCUENTO'));
   if (h < 0) throw new Error('Reebok: falta el encabezado Modelo color / Mayorista con descuento.');
   const headers = rows[h].map(norm);
@@ -23,17 +23,24 @@ export function parseReebok(rows: unknown[][]): { productos: Record<string, Reeb
   const precioCol = col('PRECIO PUBLICO');
   const productos: Record<string, ReebokProducto> = {}, avisos: string[] = [];
   const vistos = new Set<string>();
+  const modelosPresentes = new Set<string>(), modelosProtegidos = new Set<string>(), identificadoresPresentes = new Set<string>();
   for (let i = h + 1; i < rows.length; i++) {
     const r = rows[i], sku = String(r[skuCol] ?? '').trim();
-    if (!sku) continue;
+    const codigo = String(r[modeloCol] ?? '').trim().replace(/-+$/, '');
+    if (codigo) modelosPresentes.add(codigo);
+    if (!sku) {
+      if (codigo) { modelosProtegidos.add(codigo); avisos.push(`Fila ${i + 1}: ${codigo} sin SKU; modelo protegido de ceros por ausencia.`); }
+      continue;
+    }
+    identificadoresPresentes.add(sku);
     const udmCol = headers.findIndex(v => ['UDM','UNI. MEDIDA','UNIDAD DE MEDIDA'].includes(v));
     if (/PACK|CURVA/.test(norm(r[udmCol])) || /(?:^|[\s-])(?:PACK|CURVA|M\d+U?)(?:[\s-]|$)/.test(norm(sku)+' '+norm(r[descCol]))) {
+      if (codigo) modelosProtegidos.add(codigo);
       avisos.push(`Fila ${i + 1}: ${sku}; pack/curva excluido, no se carga.`);
       continue;
     }
     const tipo = tipos[norm(r[grupoCol])];
-    if (!tipo) { avisos.push(`Fila ${i + 1}: ${sku}, grupo ${r[grupoCol] || 'sin identificar'}, excluido porque la categoría aún no está reconocida como indumentaria. Revisar categoría; el calzado sigue pendiente.`); continue; }
-    const codigo = String(r[modeloCol] ?? '').trim().replace(/-+$/, '');
+    if (!tipo) { if (codigo) modelosProtegidos.add(codigo); avisos.push(`Fila ${i + 1}: ${sku}, grupo ${r[grupoCol] || 'sin identificar'}, excluido porque la categoría aún no está reconocida como indumentaria. Revisar categoría; el calzado se procesa por separado.`); continue; }
     const descripcion = String(r[descCol] ?? '').trim();
     const sizeMatch = descripcion.match(/\s-\s*(XXXS|XXS|XS|S|M|L|XL|XXL|XXXL|[2-6]XL|TU|UNICO|ÚNICO)\s*$/i);
     const talle = sizeMatch?.[1].toUpperCase();
@@ -59,5 +66,5 @@ export function parseReebok(rows: unknown[][]): { productos: Record<string, Reeb
     p.nombre = colores.titulo;
     if (colores.pendientes.length) avisos.push(`${p.codigo}: revisar colores sin equivalencia: ${colores.pendientes.join(', ')}.`);
   }
-  return { productos, avisos };
+  return { productos, avisos, modelosPresentes: [...modelosPresentes], modelosProtegidos: [...modelosProtegidos], identificadoresPresentes: [...identificadoresPresentes] };
 }

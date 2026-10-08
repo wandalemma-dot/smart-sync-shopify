@@ -15,6 +15,8 @@ export default function App() {
   // Pestaña activa: sincronización (lo de siempre) o reposición (pedido a iD).
   const [tab, setTab] = useState<'sync' | 'pedido' | 'distrinando' | 'reposicion' | 'recuperar' | 'remitos'>('sync');
   const [providerFile, setProviderFile] = useState<File | null>(null);
+  const [reebokFiles, setReebokFiles] = useState<{ file: File; sheetName: string; sheets: string[] }[]>([]);
+  const [readingFiles, setReadingFiles] = useState(false);
 
   const [sheets, setSheets] = useState<string[]>([]);
 
@@ -202,6 +204,30 @@ export default function App() {
   // ya no la pide.
 
   // --- Lógica central de cada archivo, reutilizada por drag & drop y por clic ---
+  const invalidateAnalysis = () => {
+    setResult(null); setPreviewReady(false); setStockPlan(null); setWriteConfirm(false); setWriteDone(null);
+    setCreateConfirm(false); setCreateDone(null); setPrecioConfirm(false); setPrecioDone(null);
+    setAltaConfirm(false); setAltaDone(null); setFaltantesConfirm(false); setFaltantesDone(null);
+    setCorridoConfirm(false); setCorridoDone(null); setCrearTalle({}); setNoCrear({}); setExcluidas({});
+  };
+  const processProviderFiles = async (files: File[]) => {
+    if (readingFiles || loading || !files.length) return;
+    if (!config.reebokCalzado) { await processProviderFile(files[0]); return; }
+    setReadingFiles(true);
+    invalidateAnalysis();
+    try {
+      const added = await Promise.all(files.map(async file => {
+        if (!/\.(xlsx|xls|xlsb)$/i.test(file.name)) throw new Error(`${file.name}: subí un Excel .xlsx, .xls o .xlsb.`);
+        const names = await extractSheetNames(file, true);
+        if (!names.length) throw new Error(`${file.name}: no tiene pestañas visibles.`);
+        return { file, sheetName: names[0], sheets: names };
+      }));
+      const combined = [...reebokFiles.filter(a => !added.some(b => b.file.name === a.file.name)), ...added];
+      setReebokFiles(combined); setProviderFile(combined[0].file);
+      setConfig(prev => ({ ...prev, sheetName: combined[0].sheetName, reebokPrioridad: '' }));
+    } catch (e: any) { alert('Error leyendo planillas: ' + e.message); }
+    finally { setReadingFiles(false); }
+  };
   const processProviderFile = async (file: File) => {
     if (!file) return;
     if (config.brand === 'bloque' && !/\.(pdf|xlsx|xls)$/i.test(file.name)) {
@@ -212,7 +238,7 @@ export default function App() {
       alert("⚠️ Error: Por favor, subí el archivo Excel (.xlsx o .xls).");
       return;
     }
-    setProviderFile(file);
+    invalidateAnalysis(); setProviderFile(file);
     try {
       if (config.brand !== 'bloque') {
         const names = await extractSheetNames(file);
@@ -228,8 +254,7 @@ export default function App() {
 
   const handleProviderDrop = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
-    const file = e.dataTransfer.files[0];
-    if (file) processProviderFile(file);
+    void processProviderFiles(Array.from(e.dataTransfer.files));
   };
 
   const preventDefault = (e: React.DragEvent) => e.preventDefault();
@@ -242,14 +267,14 @@ export default function App() {
 
     setLoading(true);
     setLoadingText('Analizando archivos y conectando con Shopify...');
-    setResult(null);
+    invalidateAnalysis();
     setTableSelections({});
     setCreateConfirm(false);
     setCreateDone(null);
     setPreviewReady(false);
 
     try {
-      const res = await processFiles(providerFile, null, null, cfg, null);
+      const res = await processFiles(providerFile, null, null, cfg, null, cfg.reebokCalzado ? reebokFiles : undefined);
       // Mismo orden en la lista, el CSV y «Crear 1 de prueba».
       const unidades = (p: SyncResult['missingProducts'][number]) =>
         Object.values(p.sizes).reduce((total, q) => total + (Number(q) || 0), 0);
@@ -313,9 +338,11 @@ export default function App() {
             <input
               ref={providerInputRef}
               type="file"
+              multiple={!!config.reebokCalzado}
+              disabled={readingFiles || loading}
               accept={config.brand === 'bloque' ? '.pdf,.xlsx,.xls' : config.reebokCalzado ? '.xlsx,.xls,.xlsb' : '.xlsx,.xls'}
               style={{ display: 'none' }}
-              onChange={e => { const f = e.target.files?.[0]; if (f) processProviderFile(f); e.target.value = ''; }}
+              onChange={e => { void processProviderFiles(Array.from(e.target.files || [])); e.target.value = ''; }}
             />
             <div
               className={`dropzone ${providerFile ? 'has-file' : ''}`}
@@ -323,9 +350,36 @@ export default function App() {
               onClick={() => providerInputRef.current?.click()}
               style={{ cursor: 'pointer' }}
             >
-              <h3>{providerFile ? '📄 Archivo Principal Listo' : (config.brand === 'bloque' ? '📥 Arrastrá o hacé clic: PRESUPUESTO (PDF) o Excel' : '📥 Arrastrá o hacé clic: Excel del Proveedor')}</h3>
-              <p>{providerFile?.name}</p>
+              <h3>{config.reebokCalzado ? (readingFiles ? 'Leyendo planillas…' : '📥 Arrastrá o hacé clic: agregá los Excel de Reebok Calzado') : providerFile ? '📄 Archivo Principal Listo' : (config.brand === 'bloque' ? '📥 Arrastrá o hacé clic: PRESUPUESTO (PDF) o Excel' : '📥 Arrastrá o hacé clic: Excel del Proveedor')}</h3>
+              <p>{config.reebokCalzado ? `${reebokFiles.length} planilla(s) cargada(s). Podés seleccionar varias juntas o agregarlas de a una.` : providerFile?.name}</p>
             </div>
+            {config.reebokCalzado && <div style={{ marginTop: 16 }}>
+              {reebokFiles.map((a, i) => <div key={a.file.name} className="form-group">
+                <label>{i + 1}. {a.file.name}</label>
+                <select aria-label={`Pestaña de ${a.file.name}`} disabled={readingFiles || loading} value={a.sheetName} onChange={e => {
+                  invalidateAnalysis();
+                  setReebokFiles(prev => prev.map((p,j) => j === i ? {...p, sheetName: e.target.value} : p));
+                  if (i === 0) setConfig(prev => ({...prev, sheetName: e.target.value}));
+                }}>{a.sheets.map(s => <option key={s}>{s}</option>)}</select>
+                <button disabled={readingFiles || loading} onClick={() => {
+                  invalidateAnalysis();
+                  const next = reebokFiles.filter((_,j) => j !== i);
+                  setReebokFiles(next); setProviderFile(next[0]?.file || null);
+                  setConfig(prev => ({...prev, sheetName: next[0]?.sheetName || '', reebokPrioridad: ''}));
+                }}>Quitar planilla</button>
+              </div>)}
+              {reebokFiles.length > 1 ? <>
+                <p style={{color: '#fbbf24'}}>Cargá todas las listas vigentes de Reebok Calzado. Lo que no esté en ninguna se propondrá en cero, únicamente en DISTRINANDO.</p>
+                <label>Si un producto tiene distinto stock o precio entre planillas:</label>
+                <select aria-label="Planilla con prioridad" value={config.reebokPrioridad || ''} disabled={readingFiles || loading} onChange={e => {
+                  invalidateAnalysis(); setConfig({...config, reebokPrioridad: e.target.value});
+                }}>
+                  <option value="">Avisarme para que elija antes de continuar</option>
+                  {reebokFiles.map(a => <option key={a.file.name} value={a.file.name}>Usar {a.file.name}</option>)}
+                </select>
+                <p>Los repetidos nunca suman stock entre planillas.</p>
+              </> : <p>Con una sola planilla se actualiza lo informado; los productos ausentes conservan su stock.</p>}
+            </div>}
 
             <p style={{ marginTop: '0.8rem', fontSize: '0.85rem', opacity: 0.75, textAlign: 'center' }}>
               🔗 La app se conecta sola a Shopify. No necesitás subir ningún CSV.
@@ -338,10 +392,11 @@ export default function App() {
             <div className="form-group">
               <label>Marca a procesar</label>
               <select
+                disabled={readingFiles || loading}
                 value={config.kappaCalzado ? 'kappa-calzado' : config.reebokCalzado ? 'reebok-calzado' : config.brand}
                 onChange={e => {
                   setConfig({...config, brand: (e.target.value === 'kappa-calzado' ? 'kappa' : e.target.value === 'reebok-calzado' ? 'reebok' : e.target.value) as any, reebokCalzado: e.target.value === 'reebok-calzado', kappaCalzado: e.target.value === 'kappa-calzado'});
-                  setResult(null);
+                  invalidateAnalysis(); setReebokFiles([]); setSheets([]);
                   setProviderFile(null);
                 }}
               >
@@ -384,12 +439,13 @@ export default function App() {
                 considerando costo × 1,21. Revisá los precios en el resumen antes de cargar.
                 Los talles se agrupan por modelo/color y se conservan los SKU del Excel.
                 Stock en <strong>DISTRINANDO SA (Reebok - Kappa)</strong>.
+                {' '}Al simular, los modelos y talles de indumentaria que no aparezcan en esta lista se propondrán en <strong>cero</strong>. Cargá la lista vigente completa. Los modelos con filas excluidas quedan protegidos para revisión.
                 Para calzado, elegí Reebok — Calzado.
               </p>
             )}
 
             {config.reebokCalzado && <div style={{ marginTop: 12 }}>
-              <p><strong>Reebok — Calzado</strong>: subí la lista PROMO, Calzado o Inmediato (.xlsx/.xlsb), una por análisis.
+              <p><strong>Reebok — Calzado</strong>: subí juntas las listas PROMO, Calzado o Inmediato (.xlsx/.xlsb) en el mismo recuadro. Con dos o más listas se compara contra la unión de todas y se proponen ceros solo para calzado ausente en DISTRINANDO. Con una lista no se ponen en cero los ausentes.
               Se conserva el talle AR. El EAN va en SKU y Código de barras de cada talle; el SKU del proveedor va en etiquetas. Si falta EAN, se usa el SKU del proveedor y el código de barras queda vacío. Se excluyen los packs de UDM en ambos formatos. La tabla se identifica comparando todos los talles disponibles,
               sin asumir que Unisex usa Hombre. Si no se identifica, se crea con etiqueta «TABLA DE TALLE REEBOK SIN IDENTIFICAR» y JSON vacío.
               UK se convierte a AR cuando coincide con la referencia y el US del SKU. Se reconocen sufijos W de mujer. Ropa, packs y talles sin equivalencia quedan para revisión.</p>
@@ -408,12 +464,13 @@ export default function App() {
               </p>
             )}
 
-            {config.brand !== 'bloque' && sheets.length > 0 && (
+            {config.brand !== 'bloque' && !config.reebokCalzado && sheets.length > 0 && (
               <div className="form-group">
                 <label>Pestaña del Excel</label>
                 <select
                   value={config.sheetName}
-                  onChange={e => setConfig({...config, sheetName: e.target.value})}
+                  disabled={loading}
+                  onChange={e => { invalidateAnalysis(); setConfig({...config, sheetName: e.target.value}); }}
                 >
                   {sheets.map(s => <option key={s} value={s}>{s}</option>)}
                 </select>
@@ -423,7 +480,7 @@ export default function App() {
             <button
               className="btn-primary"
               onClick={() => handleAnalyze()}
-              disabled={!providerFile || loading}
+              disabled={!providerFile || loading || readingFiles}
             >
               {loading ? <span className="loader"></span> : '🔍 Analizar y Preparar Resumen'}
             </button>
@@ -437,7 +494,8 @@ export default function App() {
             <button
               className="btn-success"
               style={{ background: '#dc2626', marginLeft: '10px' }}
-              onClick={() => { setResult(null); setPreviewReady(false); }}
+              disabled={stockPlanning || stockWriting || creating || precioLoading || altaLoading || faltantesLoading || corridoLoading}
+              onClick={invalidateAnalysis}
             >
               ❌ Cancelar
             </button>

@@ -48,6 +48,20 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ## 1. Qué hace la app
 
+### Varias listas en Sincronización Reebok Calzado (8-oct-2026)
+
+- En el MISMO recuadro de Archivos del Proveedor se pueden seleccionar/arrastrar varios Excel .xlsx/.xls/.xlsb, agregarlos de a uno y quitarlos. Cada archivo conserva su propia pestaña visible. No es una pestaña nueva de pedidos.
+- Una lista sigue siendo parcial: no barrer ausentes. Dos o más listas forman el catálogo conjunto de Reebok Calzado; cargar todas las vigentes antes de analizar. La simulación propone ceros solo en DISTRINANDO SA (Reebok - Kappa), nunca Martínez/iD, Kappa ni indumentaria. No escribe hasta la confirmación existente.
+- Unión por modelo y talle AR con identidad SKU/EAN comprobada. Repetidos no suman stock. Si cantidades o precios difieren, se bloquea hasta que Wanda elija en el cuadro qué archivo tiene prioridad; discrepancias de SKU/EAN/AR bloquean aun con prioridad. No aceptar dos copias idénticas como catálogo completo. Tabla JSON se conserva solo si el conjunto respalda una tabla única; no inventar talles.
+- Presencia registrada ANTES de excluir packs, ropa, talles sin equivalencia o filas sin SKU. Esos modelos quedan protegidos de ceros por ausencia. Si no se puede ubicar un talle en Shopify, no barrer los otros talles del modelo. Ausencia de modelo completo requiere vendor Reebok, título Zapatillas Reebok o etiqueta de tabla Reebok, y código RBK conocido en SKU/tags; modelos no identificados conservan stock.
+- Cambio de archivos, hojas o marca invalida análisis, planes y confirmaciones anteriores. Pruebas en reebokCatalogo.test.ts incluyen las listas reales 30% del 07-10 y 40% del 05-10, unión, duplicados, protección de talles, alcance de sucursal y compatibilidad de carga individual. No modifica Shopify al desplegar.
+
+### Ceros de Reebok Indumentaria (8-oct-2026, ampliación pedida por Wanda)
+
+- La lista vigente de Indumentaria SÍ reemplaza el catálogo de ropa del proveedor: con UNA lista, proponer cero a modelos y talles de ropa ausentes. Reemplaza la regla anterior de conservar todo lo ausente en indumentaria. Calzado conserva su regla independiente de varias listas; Kappa sigue parcial.
+- Exclusivamente DISTRINANDO, luego de simular y confirmar. No tocar calzado ni Martínez. Ropa identificada por vendor Reebok + nombre comercial de prenda (Remera, Buzo, Campera, Pantalón, Conjunto, Calza, Top deportivo, Short o Indumentaria) y código RBK en SKU/etiquetas para modelos completos. No deducir ropa por falta de etiqueta de calzado o por talle.
+- Parser guarda presencia ANTES de excluir packs/categorías no reconocidas/SKU vacío. Esos modelos y los talles no ubicados quedan protegidos. Archivo vacío/sin indumentaria válida bloquea. Aviso en configuración y resumen antes de escribir. Probado con RBK Indumentaria 001 40% 05-10 (1).xlsx y casos de aislamiento ropa/calzado/Kappa.
+
 ### Armado de pedidos DISTRINANDO (8-oct-2026)
 
 - Nueva pestaña `PedidoDistrinando.tsx`, separada del pedido iD. Acepta varios CSV de órdenes y varios Excel .xlsx de Reebok/Kappa, ropa/calzado. Detecta columnas por encabezado, no por letra. Para .xlsb pide guardar una copia .xlsx, porque la exportación conserva el ZIP original, fotos, estilos, hojas y fórmulas.

@@ -52,7 +52,7 @@ describe('Reebok indumentaria', () => {
     expect(download.mock.calls.at(-1)?.[0]).toContain('RBK2100-S');
     expect(graphql.mock.calls.every(([q]) => !q.includes('mutation'))).toBe(true);
   });
-  it('solo actualiza el SKU incluido y simula stock por SKU, conservando otros talles', async () => {
+  it('actualiza precios del SKU incluido y propone cero al talle ausente de la lista vigente (regla 8-oct)', async () => {
     const product = { id: 'p', handle: 'r', title: 'Remera Reebok', tags: ['RBK2100'], options: [{name: 'Talle'}], variants: { edges: ['S', 'M'].map(s => ({ node: {
       id: s, title: s === 'S' ? 'Small' : 'Medium', sku: `RBK2100-${s}`, price: '100',
       inventoryItem: { id: `i-${s}`, unitCost: { amount: '50' }, inventoryLevel: { quantities: [{ name: 'available', quantity: 10 }] } },
@@ -65,8 +65,9 @@ describe('Reebok indumentaria', () => {
     expect(res.updatesToApply[0].sku).toBe('RBK2100-S');
     expect(res.updatesToApply[0]).toMatchObject({newPrice: 154999, newCost: 49586.45});
     const plan = await planStockWrite(res, config);
-    expect(plan.changes).toHaveLength(1);
+    expect(plan.changes).toHaveLength(2);
     expect(plan.changes[0]).toMatchObject({ sku: 'RBK2100-S', desired: 3 });
+    expect(plan.changes[1]).toMatchObject({ sku: 'RBK2100-M', desired: 0 });
   });
   it('no crea en otra sucursal ni sin stock cuando falta la sucursal Reebok', async () => {
     const res = await processFiles(file([headers, row('S', 4)]), null, null, config);

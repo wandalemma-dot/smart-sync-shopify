@@ -68,14 +68,24 @@ export function parseReebokCalzado(rows: unknown[][]) {
   const productos: Record<string, ReebokCalzadoProducto> = {}, avisos: string[] = [];
   const evidencias: Record<string, { ar: string; us: string }[]> = {};
   const incompletos = new Set<string>(), vistos = new Set<string>(), eans = new Set<string>();
+  const modelosPresentes = new Set<string>(), modelosProtegidos = new Set<string>();
+  const identificadoresPresentes = new Set<string>();
   for (let i = h + 1; i < rows.length; i++) {
     const r = rows[i], sku = String(r[skuC] ?? '').trim();
-    if (!sku) continue;
+    const codigo = String(r[modelC] ?? '').trim().replace(/-+$/, '');
+    // Presencia se registra ANTES de excluir packs o talles sin conversión.
+    if (codigo) modelosPresentes.add(codigo);
+    if (!sku) {
+      if (codigo) { modelosProtegidos.add(codigo); avisos.push(`Fila ${i + 1}: ${codigo} sin SKU; modelo protegido de ceros por ausencia.`); }
+      continue;
+    }
+    identificadoresPresentes.add(sku);
+    if (eanC >= 0 && r[eanC]) identificadoresPresentes.add(String(r[eanC]).trim());
     if (/PACK|CURVA/.test(norm(r[udmC]))) {
+      if (codigo) modelosProtegidos.add(codigo);
       avisos.push(`Fila ${i + 1}: ${sku} — ${r[udmC]}; pack excluido, no se carga.`);
       continue;
     }
-    const codigo = String(r[modelC] ?? '').trim().replace(/-+$/, '');
     if (!codigo || !sku.startsWith(codigo + '-')) throw new Error(`Fila ${i + 1}: código y SKU incompatibles (${sku}).`);
     if (vistos.has(sku)) throw new Error(`SKU repetido: ${sku}.`);
     vistos.add(sku);
@@ -88,6 +98,7 @@ export function parseReebokCalzado(rows: unknown[][]) {
     const ar = talleArReebok(desc, us);
     const individual = /^(?:\d+(?:\.\d+)?[KW]?|M\d+(?:\.\d+)?\/W\d+(?:\.\d+)?)$/.test(us);
     if (!individual || !ar || Number(ar) < 20 || Number(ar) > 55) {
+      modelosProtegidos.add(codigo);
       incompletos.add(codigo);
       avisos.push(`Fila ${i + 1}: ${sku} — ${desc}. Pendiente: ${ukFinal ? 'UK sin equivalencia validada con US' : !individual ? 'no es un talle individual de calzado (ropa o curva/pack)' : 'talle AR sin identificar'}; no se carga esta fila.`);
       continue;
@@ -118,6 +129,6 @@ export function parseReebokCalzado(rows: unknown[][]) {
     if (revision.pendientes.length) avisos.push(`${code}: revisar colores sin equivalencia: ${revision.pendientes.join(', ')}.`);
     p.nombre = tituloReebokCalzado(p.nombre);
   }
-  return { productos, avisos };
+  return { productos, avisos, modelosPresentes: [...modelosPresentes], modelosProtegidos: [...modelosProtegidos], identificadoresPresentes: [...identificadoresPresentes] };
 }
 
