@@ -36,6 +36,42 @@ beforeEach(() => {
 });
 
 describe('Unión Reebok Calzado', () => {
+  it('Smash Edge: pone en cero 35/36 ausentes aunque 37/39 todavía no existan en Shopify', async () => {
+    const smash='RBK1100229953';
+    products=[product(smash,[variant(`${smash}-4`,'35',5),variant(`${smash}-5`,'36',3)],'Zapatillas Reebok Smash Edge Retroteal')];
+    const f1=file('30.xlsx',[row('6','37',3,smash),row('7.5','39',1,smash)]);
+    const f2=file('40.xlsx',[row('10','43',1,'RBK1100010473')]);
+    const res=await processFiles(f1,null,null,cfg,null,[{file:f1,sheetName:'Calzado'},{file:f2,sheetName:'Calzado'}]);
+    const plan=await planStockWrite(res,cfg);
+    expect(plan.notFound.map(p=>p.talle)).toEqual(['37','39']);
+    expect(plan.changes.map(p=>[p.sku,p.current,p.desired])).toEqual([[`${smash}-4`,5,0],[`${smash}-5`,3,0]]);
+    expect(plan.locationId).toBe('distri');
+    expect(graphql.mock.calls.every(([q])=>!q.includes('mutation'))).toBe(true);
+  });
+  it('con talles nuevos pendientes conserva EAN desconocidos, SKU ajenos y un talle AR que sí está en la lista', async () => {
+    products=[product(code,[variant('7791234567890','40'),variant('otro','41'),variant(`${code}-4`,'36')])];
+    const f1=file('30.xlsx',[row()]), f2=file('40.xlsx',[row('10','43',1,'RBK1100010473')]);
+    const res=await processFiles(f1,null,null,cfg,null,[{file:f1,sheetName:'Calzado'},{file:f2,sheetName:'Calzado'}]);
+    const plan=await planStockWrite(res,cfg);
+    expect(plan.notFound).toHaveLength(1);
+    expect(plan.changes).toEqual([]);
+  });
+  const archivosSmash=['RBK Calzado 006 40% 05-10 (3).xlsx','Reebok Calzado 001 30%  07-10 (1).xlsx'];
+  it.skipIf(!archivosSmash.every(n=>existsSync(`C:/Users/maxim/Downloads/${n}`)))('reproduce Smash Edge con las dos planillas adjuntas del 9-oct',async()=>{
+    const smash='RBK1100229953';
+    products=[product(smash,[variant(`${smash}-4`,'35',5),variant(`${smash}-5`,'36',3)],'Zapatillas Reebok Smash Edge Retroteal')];
+    const archivos=archivosSmash.map(name=>{
+      const b=readFileSync(`C:/Users/maxim/Downloads/${name}`),w=XLSX.read(b);
+      return {file:{name,arrayBuffer:async()=>b.buffer.slice(b.byteOffset,b.byteOffset+b.byteLength)} as File,sheetName:w.SheetNames[0]};
+    });
+    const config={...cfg,sheetName:archivos[0].sheetName};
+    const res=await processFiles(archivos[0].file,null,null,config,null,archivos);
+    expect(res.excelMap[smash].sizes).toEqual({'37':3,'39':1});
+    const plan=await planStockWrite(res,config);
+    expect(plan.notFound.map(p=>p.talle)).toEqual(['37','39']);
+    expect(plan.changes.map(p=>[p.sku,p.current,p.desired])).toEqual([[`${smash}-4`,5,0],[`${smash}-5`,3,0]]);
+    expect(graphql.mock.calls.every(([q])=>!q.includes('mutation'))).toBe(true);
+  });
   it('combina talles, no suma repetidos y complementa EAN', () => {
     const a = lista('30.xlsx',[row()]);
     const b = lista('40.xlsx',[row('6.5','36',5,code,'Pares','04065419284966'),row('7.5','37',8)]);

@@ -285,6 +285,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
   // que quedan afuera y todavía tienen stock se barren más abajo.
   const cubiertasPorHandle = new Map<string, Set<string>>();  // handle -> inventoryItemIds
   const codigoPorHandle = new Map<string, string>();
+  const tallesProveedorPorHandle = new Map<string, Set<string>>();
   // Productos donde la conversión de talle falló: NO se barren (ver abajo).
   const conversionDudosa = new Set<string>();
   const anotarCubierta = (handle: string, invId?: string) => {
@@ -314,6 +315,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     // producto no se barre a cero.
     if (info && info.origen === 'default') conversionDudosa.add(handle);
     codigoPorHandle.set(handle, code);
+    tallesProveedorPorHandle.set(handle, new Set(Object.keys(d.sizes || {})));
     // También recorrer productos presentes pero completamente agotados.
     if (!cubiertasPorHandle.has(handle)) cubiertasPorHandle.set(handle, new Set());
     evaluarCorrido(handle, code, d, convTable);
@@ -437,7 +439,10 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     for (const [handle, cubiertas] of cubiertasPorHandle) {
       // Si de este producto hubo algún talle que no supimos convertir, no lo
       // barremos: podríamos poner en 0 un talle que el proveedor SÍ tiene.
-      if (conversionDudosa.has(handle)) continue;
+      // Reebok con catálogo conjunto puede demostrar una ausencia por SKU del
+      // proveedor aunque otros talles nuevos aún no estén creados en Shopify.
+      const requiereAusenciaExacta = conversionDudosa.has(handle);
+      if (requiereAusenciaExacta && cobertura?.categoria !== 'calzado') continue;
       const live = liveByHandle[handle] || [];
       const shopTitle = titleByHandle[handle] || handle;
       if (cobertura && (!coincideCategoriaReebok(shopTitle, tagsByHandle[handle] || '', cobertura.categoria) ||
@@ -447,6 +452,14 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
         const invId = v?.inventoryItem?.id;
         if (!invId || cubiertas.has(invId)) continue;   // el archivo sí lo trae
         if (cobertura && (!v.sku || cobertura.identificadoresPresentes.includes(v.sku))) continue;
+        if (requiereAusenciaExacta) {
+          const codigo = codigoPorHandle.get(handle) || '';
+          const sku = String(v.sku || '');
+          const sufijo = sku.startsWith(`${codigo}-`) ? sku.slice(codigo.length + 1) : '';
+          const individual = /^(?:\d+(?:\.\d+)?[KW]?|M\d+(?:\.\d+)?\/W\d+(?:\.\d+)?)$/.test(sufijo);
+          // Un EAN sin equivalencia o un talle todavía presente no prueba ausencia.
+          if (!codigo || !individual || tallesProveedorPorHandle.get(handle)?.has(String(v.title || '').trim())) continue;
+        }
         const lvl = v.inventoryItem.inventoryLevel;
         if (!lvl) continue;                             // no está en la sucursal: nada que apagar
         const qEntry = (lvl.quantities || []).find((x: any) => x.name === 'available');
