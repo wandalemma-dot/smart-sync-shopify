@@ -950,7 +950,9 @@ export default function App() {
                                       <input type="checkbox" checked={on} disabled={!r.productId}
                                         onChange={e => setCrearTalle({ ...crearTalle, [k]: e.target.checked })} />
                                     </td>
-                                    <td style={{ padding: '6px 10px' }}>{r.title}</td>
+                                    <td style={{ padding: '6px 10px' }}>{r.title}
+                                      {r.motivoNoCrear && <small style={{ display: 'block', color: '#fbbf24' }}>{r.motivoNoCrear}</small>}
+                                    </td>
                                     <td style={{ padding: '6px', fontFamily: 'monospace', opacity: 0.85 }}>{r.code}</td>
                                     <td style={{ padding: '6px', textAlign: 'center', opacity: 0.7 }}>{r.talleProveedor}</td>
                                     <td style={{ padding: '6px', textAlign: 'center' }}>{r.talle}</td>
@@ -966,14 +968,15 @@ export default function App() {
                           {/* Crear los talles que faltan. Vienen destildados a propósito. */}
                           <p style={{ fontSize: '0.78rem', opacity: 0.85, margin: '0.5rem 0' }}>
                             Puedo <strong>crear estos talles</strong> en el producto, con su stock, precio y costo
-                            (los del archivo de iD). Vienen <strong>destildados</strong> a propósito:
+                            (los del archivo del proveedor). En Reebok se conserva el SKU original o el EAN, cuando viene informado.
+                            Vienen <strong>destildados</strong> a propósito:
                             un "no ubicado" no siempre es un talle que falta — a veces es una conversión que salió mal,
                             y ahí estaríamos inventando un talle. <strong>Mirá la lista y tildá los que correspondan.</strong>
                           </p>
                           <div style={{ display: 'flex', gap: '10px', alignItems: 'center', flexWrap: 'wrap', fontSize: '0.8rem', marginBottom: '0.4rem' }}>
                             <button style={{ padding: '4px 10px', borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.06)', color: 'white', fontSize: '0.8rem' }}
                               onClick={() => setCrearTalle(Object.fromEntries(fNoUbic.filter(r => r.productId).map(r => [claveFila(r), true])))}>
-                              Tildar los {fNoUbic.length} de la lista
+                              Tildar los {fNoUbic.filter(r => r.productId).length} habilitados
                             </button>
                             <button style={{ padding: '4px 10px', borderRadius: 6, cursor: 'pointer', border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.06)', color: 'white', fontSize: '0.8rem' }}
                               onClick={() => setCrearTalle({})}>Destildar todos</button>

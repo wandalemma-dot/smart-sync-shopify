@@ -5,7 +5,7 @@ import { parseReebokCalzado } from '../reebokCalzado';
 import { parseReebok } from '../reebokLogic';
 import { combinarReebok, ausenteReebok } from '../reebokCatalogo';
 import { processFiles } from '../syncLogic';
-import { planStockWrite } from '../writeStock';
+import { planStockWrite, crearTallesFaltantes } from '../writeStock';
 
 const { graphql } = vi.hoisted(() => ({ graphql: vi.fn() }));
 vi.mock('../shopify', () => ({ shopifyGraphQL: graphql, mismaSucursal: (a: string,b: string) => a === b }));
@@ -36,6 +36,62 @@ beforeEach(() => {
 });
 
 describe('Unión Reebok Calzado', () => {
+  it.each(['', '04065419284966'])('habilita talles faltantes y crea con SKU/EAN exacto %s', async (ean) => {
+    products=[product(code,[variant(`${code}-5.5`,'35')])];
+    const f=file('30.xlsx',[row('6.5','36',5,code,'Pares',ean)]);
+    const res=await processFiles(f,null,null,cfg);
+    const plan=await planStockWrite(res,cfg);
+    const r=plan.notFound[0];
+    expect(r).toMatchObject({productId:code,talle:'36',sku:ean || `${code}-6.5`,skuProveedor:`${code}-6.5`,barcode:ean});
+    const read=graphql.getMockImplementation()!;
+    graphql.mockImplementation(async(q:string,v:any)=>{
+      if(q.includes('tagsAdd')) return {tagsAdd:{node:{id:code},userErrors:[]}};
+      if(q.includes('productVariantsBulkCreate')) return {productVariantsBulkCreate:{productVariants:[{id:'new',title:'36'}],userErrors:[]}};
+      return read(q,v);
+    });
+    expect(await crearTallesFaltantes(plan,[r])).toMatchObject({written:1,failed:0});
+    const input=graphql.mock.calls.find(([q])=>q.includes('productVariantsBulkCreate'))![1];
+    expect(input).toEqual({productId:code,variants:[{
+      optionValues:[{name:'36',optionName:'Talle'}],inventoryItem:{tracked:true,sku:ean || `${code}-6.5`,cost:String(r.costo)},
+      inventoryQuantities:[{locationId:'distri',availableQuantity:5}],price:String(r.precio),...(ean?{barcode:ean}:{}),
+    }]});
+    expect(graphql.mock.calls.find(([q])=>q.includes('tagsAdd'))![1]).toEqual({id:code,tags:[code,`${code}-6.5`]});
+  });
+  it('bloquea un talle existente con código distinto y explica por qué', async()=>{
+    products=[product(code,[variant('codigo-ajeno','36')])];
+    const f=file('30.xlsx',[row()]);
+    const plan=await planStockWrite(await processFiles(f,null,null,cfg),cfg);
+    expect(plan.notFound[0]).toMatchObject({productId:'',motivoNoCrear:expect.stringContaining('ya existe')});
+  });
+  it('revisa otra vez antes de crear y evita duplicar por una segunda confirmación', async()=>{
+    products=[product(code,[variant(`${code}-5.5`,'35')])];
+    const f=file('30.xlsx',[row()]);
+    const plan=await planStockWrite(await processFiles(f,null,null,cfg),cfg);
+    products[0].variants.edges.push(variant(`${code}-6.5`,'36'));
+    expect(await crearTallesFaltantes(plan,plan.notFound)).toMatchObject({written:0,failed:1,errors:[expect.stringContaining('ya existe')]});
+    expect(graphql.mock.calls.some(([q])=>q.includes('mutation'))).toBe(false);
+  });
+  it('no crea si no se pueden conservar las etiquetas originales',async()=>{
+    products=[product(code,[variant(`${code}-5.5`,'35')])];
+    const f=file('30.xlsx',[row()]);
+    const plan=await planStockWrite(await processFiles(f,null,null,cfg),cfg);
+    const read=graphql.getMockImplementation()!;
+    graphql.mockImplementation(async(q:string,v:any)=>q.includes('tagsAdd')?{tagsAdd:{node:null,userErrors:[{message:'Sin permiso'}]}}:read(q,v));
+    expect(await crearTallesFaltantes(plan,plan.notFound)).toMatchObject({written:0,failed:1,errors:[expect.stringContaining('Sin permiso')]});
+    expect(graphql.mock.calls.some(([q])=>q.includes('productVariantsBulkCreate'))).toBe(false);
+  });
+  it.each([{}, {productVariantsBulkCreate:{productVariants:null,userErrors:[{message:'Talle duplicado'}]}}])('no informa éxito si Shopify no confirma el alta: %j',async(reply)=>{
+    products=[product(code,[variant(`${code}-5.5`,'35')])];
+    const f=file('30.xlsx',[row()]);
+    const plan=await planStockWrite(await processFiles(f,null,null,cfg),cfg);
+    const read=graphql.getMockImplementation()!;
+    graphql.mockImplementation(async(q:string,v:any)=>{
+      if(q.includes('tagsAdd')) return {tagsAdd:{node:{id:code},userErrors:[]}};
+      if(q.includes('productVariantsBulkCreate')) return reply;
+      return read(q,v);
+    });
+    expect(await crearTallesFaltantes(plan,plan.notFound)).toMatchObject({written:0,failed:1,errors:[expect.any(String)]});
+  });
   it('Smash Edge: pone en cero 35/36 ausentes aunque 37/39 todavía no existan en Shopify', async () => {
     const smash='RBK1100229953';
     products=[product(smash,[variant(`${smash}-4`,'35',5),variant(`${smash}-5`,'36',3)],'Zapatillas Reebok Smash Edge Retroteal')];
@@ -44,6 +100,7 @@ describe('Unión Reebok Calzado', () => {
     const res=await processFiles(f1,null,null,cfg,null,[{file:f1,sheetName:'Calzado'},{file:f2,sheetName:'Calzado'}]);
     const plan=await planStockWrite(res,cfg);
     expect(plan.notFound.map(p=>p.talle)).toEqual(['37','39']);
+    expect(plan.notFound.every(p=>p.productId===smash && p.sku===`${smash}-${p.talle==='37'?'6':'7.5'}`)).toBe(true);
     expect(plan.changes.map(p=>[p.sku,p.current,p.desired])).toEqual([[`${smash}-4`,5,0],[`${smash}-5`,3,0]]);
     expect(plan.locationId).toBe('distri');
     expect(graphql.mock.calls.every(([q])=>!q.includes('mutation'))).toBe(true);
@@ -69,6 +126,7 @@ describe('Unión Reebok Calzado', () => {
     expect(res.excelMap[smash].sizes).toEqual({'37':3,'39':1});
     const plan=await planStockWrite(res,config);
     expect(plan.notFound.map(p=>p.talle)).toEqual(['37','39']);
+    expect(plan.notFound.map(p=>[p.productId,p.sku,p.barcode])).toEqual([[smash,`${smash}-6`,''],[smash,`${smash}-7.5`,'']]);
     expect(plan.changes.map(p=>[p.sku,p.current,p.desired])).toEqual([[`${smash}-4`,5,0],[`${smash}-5`,3,0]]);
     expect(graphql.mock.calls.every(([q])=>!q.includes('mutation'))).toBe(true);
   });

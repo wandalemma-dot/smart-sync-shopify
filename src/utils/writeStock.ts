@@ -42,13 +42,16 @@ export interface StockRow {
   // Solo lo llevan las filas de `sinActivar`: hace falta para darlas de alta.
   inventoryItemId?: string;
   // Solo lo llevan las filas de `notFound`: hace falta para poder CREAR el
-  // talle que falta. Precio y costo salen del archivo de iD (regla de Wanda,
-  // 31-ago-2026): costo = lista − 10%, precio = sugerido si es básico o ×2,27.
+  // talle que falta. Precio y costo respetan las reglas del proveedor procesado.
   handle?: string;
   productId?: string;
   opcion?: string;        // nombre de la opción en Shopify ("Talle")
   precio?: number;
   costo?: number;
+  sku?: string;
+  barcode?: string;
+  skuProveedor?: string;
+  motivoNoCrear?: string;
 }
 
 // Un producto cuyos talles quedaron corridos en Shopify (dice 36 y es un 35).
@@ -155,6 +158,12 @@ const CREATE_VARIANTS = `
   }
 `;
 
+const ADD_SUPPLIER_TAGS = `
+  mutation EtiquetarTalles($id: ID!, $tags: [String!]!) {
+    tagsAdd(id: $id, tags: $tags) { node { id } userErrors { message } }
+  }
+`;
+
 // Da de alta un inventory item en una sucursal y, de paso, le pone la cantidad.
 // Es la ÚNICA forma de cargarle stock a una variante que todavía no existe en
 // esa sucursal. Va de a una: Shopify no tiene versión en lote de esta mutación.
@@ -208,6 +217,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
   const tagsByHandle: Record<string, string> = {};   // etiquetas (para la tabla de talle)
   const idByHandle: Record<string, string> = {};     // id del producto (para renombrar talles)
   const opcionByHandle: Record<string, string> = {}; // nombre de la opción ("Talle")
+  const opcionesPorHandle: Record<string, number> = {};
   const CHUNK = 20;
   for (let i = 0; i < handles.length; i += CHUNK) {
     const chunk = handles.slice(i, i + CHUNK);
@@ -220,6 +230,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
       tagsByHandle[p.handle] = Array.isArray(p.tags) ? p.tags.join(', ') : String(p.tags || '');
       idByHandle[p.handle] = String(p.id || '');
       opcionByHandle[p.handle] = String(p.options?.[0]?.name || 'Talle');
+      opcionesPorHandle[p.handle] = p.options?.length || 0;
     }
   }
 
@@ -369,6 +380,17 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
         // (Caso real 28-ago-2026: A10547C, 103 unidades sin ubicar y el 41 con
         // 116 unidades que se habrían puesto en 0.)
         conversionDudosa.add(handle);
+        const sku = String(d.skuPorTalle?.[size] || '');
+        const skuProveedor = String(d.skuProveedorPorTalle?.[size] || sku);
+        const motivoNoCrear = config.brand === 'reebok'
+          ? !idByHandle[handle] ? 'No se pudo leer el producto en Shopify.'
+          : opcionesPorHandle[handle] !== 1 ? 'El producto tiene varias opciones o no se pudo leer su opción de talle.'
+          : live.length >= 100 ? 'Revisar el catálogo completo de variantes de este producto.'
+          : !sku || !skuProveedor ? 'Falta el SKU original del Excel.'
+          : live.some(n => talleMatches(argSize, n.title)) ? 'Este talle ya existe con otro código: revisar antes de crear.'
+          : !(Number(d.publicPrice) > 0) || !(Number(d.costFinal) > 0) ? 'Falta precio o costo válido.'
+          : ''
+          : (config.brand === 'kappa' || config.brand === 'crocs') ? 'Alta de talles pendiente de habilitar para esta marca.' : '';
         notFound.push({
           title: shopTitle, code, talle: String(argSize),
           talleProveedor: String(size), current: null, desired,
@@ -377,9 +399,10 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
           // apartan más arriba. Es lo que evita crear duplicados (el 36 corrido
           // y el 35 nuevo), que es la trampa documentada en CLAUDE.md.
           handle,
-          // El alta de variantes existente no conserva SKU del proveedor.
-          // Reebok queda para revisión hasta incorporar ese flujo por SKU.
-          productId: (config.brand === 'reebok' || config.brand === 'kappa' || config.brand === 'crocs') ? '' : idByHandle[handle] || '',
+          productId: motivoNoCrear ? '' : idByHandle[handle] || '',
+          motivoNoCrear,
+          ...(config.brand === 'reebok' ? { sku, skuProveedor,
+            barcode: config.reebokCalzado && /^\d{8,14}$/.test(sku) ? sku : '' } : {}),
           opcion: opcionByHandle[handle] || 'Talle',
           precio: Number(d.publicPrice) || 0,
           costo: Number(d.costFinal) || 0,
@@ -641,18 +664,53 @@ export async function crearTallesFaltantes(
         inventoryItem: { tracked: true },
         inventoryQuantities: [{ locationId: plan.locationId, availableQuantity: Number(f.desired) || 0 }],
       };
+      if (f.sku) v.inventoryItem.sku = f.sku;
+      if (f.barcode) v.barcode = f.barcode;
       if (f.precio && f.precio > 0) v.price = String(f.precio);
       if (f.costo && f.costo > 0) v.inventoryItem.cost = String(f.costo);
       return v;
     });
     try {
+      // Releer antes del alta Reebok: una segunda confirmación no debe duplicar talles.
+      if (lista.some(f => f.skuProveedor)) {
+        const fresh = await shopifyGraphQL<any>(PRODUCTS_BY_HANDLE, {
+          q: `handle:${JSON.stringify(lista[0].handle)}`, loc: plan.locationId,
+        });
+        const product = fresh?.products?.edges?.find((e: any) => e.node.id === productId)?.node;
+        const live = (product?.variants?.edges || []).map((e: any) => e.node);
+        if (!product || product.options?.length !== 1 || live.length >= 100) {
+          throw new Error('No se pudo verificar el producto. Volvé a simular antes de crear.');
+        }
+        const sizes = new Set<string>();
+        const skus = new Set<string>();
+        for (const f of lista) {
+          if (!f.sku || !f.skuProveedor || f.opcion !== product.options[0].name ||
+              sizes.has(f.talle) || skus.has(f.sku) ||
+              live.some((v: any) => talleMatches(f.talle, v.title) || v.sku === f.sku || v.sku === f.skuProveedor)) {
+            throw new Error(`El talle ${f.talle} ya existe o cambió su identificación. Volvé a simular.`);
+          }
+          sizes.add(f.talle); skus.add(f.sku);
+        }
+        // Agregar, sin reemplazar las etiquetas existentes. Si falla, no crear sin identificación.
+        const tagged = await shopifyGraphQL<any>(ADD_SUPPLIER_TAGS, {
+          id: productId, tags: [...new Set(lista.flatMap(f => [f.code, f.skuProveedor!]))],
+        });
+        if (!tagged?.tagsAdd?.node?.id || tagged.tagsAdd.userErrors?.length) {
+          throw new Error(tagged?.tagsAdd?.userErrors?.[0]?.message || 'No se pudieron guardar los códigos del proveedor.');
+        }
+      }
       const data = await shopifyGraphQL<any>(CREATE_VARIANTS, { productId, variants });
-      const ue = data?.productVariantsBulkCreate?.userErrors || [];
+      const payload = data?.productVariantsBulkCreate;
+      const ue = payload?.userErrors || [];
       if (ue.length) {
         failed += lista.length;
         if (errors.length < 5) errors.push(`${lista[0].title}: ${ue[0].message}`);
       } else {
-        written += lista.length;
+        if (!Array.isArray(payload?.productVariants)) throw new Error('Shopify no confirmó el alta. Volvé a simular antes de reintentar.');
+        const creadas = payload.productVariants.length;
+        written += creadas;
+        failed += lista.length - creadas;
+        if (creadas !== lista.length) errors.push(`${lista[0].title}: alta incompleta; volvé a simular.`);
       }
     } catch (err: any) {
       failed += lista.length;

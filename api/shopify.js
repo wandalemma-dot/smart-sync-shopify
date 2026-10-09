@@ -29,6 +29,7 @@ const ALLOWED_MUTATIONS = [
   // ⚠ Los productos con el TALLE CORRIDO nunca llegan ahí (se apartan antes),
   // que es lo que evita crear duplicados: el 36 corrido y el 35 nuevo.
   'productVariantsBulkCreate',
+  'tagsAdd', // conservar códigos originales al agregar talles Reebok
 ];
 
 const SHOP = 'indy-com-ar.myshopify.com';

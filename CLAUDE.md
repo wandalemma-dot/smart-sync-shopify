@@ -1068,6 +1068,13 @@ src/ControlRemitos.tsx      UI de la pestaña Control de remitos
 api/remito.js               Lee la foto del remito con IA (ANTHROPIC_API_KEY)
 ```
 
+### Alta de talles faltantes Reebok (9-oct-2026)
+
+- Habilitar selección en «No ubicados» para Reebok cuando el producto tiene una única opción, el talle aún no existe y el Excel conserva SKU, costo y precio válidos. No reconstruir SKU con el talle AR: usar skuPorTalle; EAN en SKU/barcode para calzado, sin EAN conservar SKU del proveedor y barcode vacío.
+- Agregar código de modelo y SKU proveedor a etiquetas con tagsAdd, sin reemplazar etiquetas anteriores. Si falla, no crear variantes sin identificación. Precio/costo siguen las reglas vigentes; stock solamente en la sucursal del plan.
+- Releer el producto antes de confirmar el alta para evitar duplicados por reintentos. Talle existente con distinto SKU, opciones múltiples y lecturas de 100 variantes quedan pendientes con motivo visible. No habilitar Kappa/Crocs por este cambio. Mantener protección de talles corridos de iD.
+- Selección y confirmación manual separadas de la escritura de stock. El despliegue no crea variantes ni modifica inventario por sí mismo.
+
 ## 9. Cómo verificar antes de deployar
 
 ```bash
