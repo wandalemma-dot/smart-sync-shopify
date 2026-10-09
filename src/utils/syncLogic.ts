@@ -1854,7 +1854,10 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
     } else if (config.brand === 'ntf') {
       displayTitle = tituloNtf(prod.title);
       productType = displayTitle.split(' ')[0];
-    } else if (config.brand === 'reebok' || config.brand === 'kappa' || config.brand === 'crocs') {
+    } else if (config.brand === 'crocs') {
+      displayTitle = niceTitle(prod.title);
+      productType = 'Calzado';
+    } else if (config.brand === 'reebok' || config.brand === 'kappa') {
       displayTitle = niceTitle(prod.title);
       productType = displayTitle.split(' ')[0];
     } else {

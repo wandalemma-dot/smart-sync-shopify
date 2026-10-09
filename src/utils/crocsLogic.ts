@@ -43,7 +43,7 @@ export function parseCrocs(rows: unknown[][], opciones: CrocsOpciones = {}) {
     if(vistos.has(sku))throw new Error(`Crocs: SKU repetido ${sku}; no se suma stock.`);
     vistos.add(sku);
     const costo=Math.round(rawCost*100)/100,precio=Math.round(rawPrice*100)/100;
-    const nombre=simplificarColores(`Calzado Crocs ${desc.slice(0,descSize!.index).replace(/\bCROCS\b/gi,'').trim()}`).titulo;
+    const nombre=simplificarColores(`Crocs ${desc.slice(0,descSize!.index).replace(/\bCROCS\b/gi,'').trim()}`).titulo;
     const old=productos[codigo];
     if(old&&(old.nombre!==nombre||old.costo!==costo||old.precio!==precio||old.tablaTalle!==mapped.tablaTalle))throw new Error(`Crocs ${codigo}: nombres, precios o tablas distintos entre talles. Revisar el modelo.`);
     const p=productos[codigo]??={codigo,nombre,artType:'calzado',costo,precio,sizes:{},skuPorTalle:{},skuProveedorPorTalle:{},tablaTalle:mapped.tablaTalle,sizeConversion:mapped.sizeConversion};

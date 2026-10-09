@@ -24,6 +24,9 @@ describe('Crocs integrado en sincronización', () => {
     const result=await processFiles(file([headers,row]),null,null,config);
     const p=buildMatrixProducts(result,config)[0];
     expect(p.vendor).toBe('Crocs');
+    expect(result.missingProducts[0].title).toBe('Crocs CLASSIC Negro');
+    expect(p.title).toBe('Crocs Classic Negro');
+    expect(p.productType).toBe('Calzado');
     expect(p.variants[0]).toMatchObject({sku:'C10001-C001-M8/W10',optionValue:'40',cost:23993.2,price:59999,qty:5});
     expect(p.variants[0].barcode).toBeUndefined();
     expect(p.tags).toEqual(expect.arrayContaining(['C10001-C001','C10001-C001-M8/W10','TABLA DE TALLE CROCS HOMBRE']));

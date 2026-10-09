@@ -50,6 +50,8 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ### Crocs Calzado (9-oct-2026)
 
+- Nombre comercial de nuevas altas: empieza por `Crocs`, sin prefijo `Calzado` (ej. Crocs Classic Mary Jane Clog Negro). El tipo de producto sigue siendo Calzado; no deducirlo de la primera palabra del título. Aplica a vista previa, CSV y alta; no renombra productos ya existentes.
+
 - Stock en DISTRINANDO. Primera etapa: calzado individual; excluir packs por UDM y accesorios. Tablas de Mujer, Hombre y Niño aportadas por Wanda: clave del JSON = talle web/a seleccionar, `arg` = rango ARG, `us` = nomenclatura de la tabla, `cm` = medida informada. Metacampo existente `custom.size_conversion`.
 - COSTO DESCUENTO (columna N) es el costo directo, sin volver a descontar 25% ni completarlo automáticamente. Si falta, dejar pendiente el modelo. Módulo Mayorista (columna L) es la base para calcular la venta; NO Individual Mayorista (M), ni PUBLICO DESCUENTO (O). Wanda pidió la fórmula existente de calzado: L ×1,8755, al terminado en 999 más cercano, sin IVA adicional; se reutiliza precioReebokCalzado. Kappa conserva su regla propia de precio Público de su archivo.
 - Los talles dobles infantiles (ej. C6/7) siguen pendientes de confirmación; no deducirlos automáticamente de C6. Los M/W exactos sí están en la tabla de Hombre; W solo usa Mujer y sus centímetros propios.
