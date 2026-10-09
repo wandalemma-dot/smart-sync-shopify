@@ -1,3 +1,4 @@
+import { parseCrocs, coincideVarianteCrocs } from './crocsLogic';
 import { parseKappa, leerKappa, coincideVarianteKappa } from './kappaLogic';
 import * as XLSX from 'xlsx';
 import { escapeCSV, triggerDownload, todayStamp } from './csv';
@@ -26,7 +27,7 @@ export interface SyncConfig {
   reebokCalzado?: boolean;
   reebokPrioridad?: string;
   kappaCalzado?: boolean;
-  brand: 'lecoq' | 'converse' | 'bloque' | 'orchard' | 'luxo' | 'vart' | 'orng' | 'ntf' | 'reebok' | 'kappa';
+  brand: 'lecoq' | 'converse' | 'bloque' | 'orchard' | 'luxo' | 'vart' | 'orng' | 'ntf' | 'reebok' | 'kappa' | 'crocs';
 }
 
 /** Solo altas: un único talle con stock y entre una y tres unidades. */
@@ -142,6 +143,7 @@ export const BRAND_PRICING: Record<SyncConfig['brand'], { markup: number; provid
   // orngLogic.ts y acá se usa el ya calculado.
   orng:     { markup: 0,    providerDiscount: 0,    usePublicPrice: true,  redondear9900: false },
   ntf:      { markup: 0,    providerDiscount: 0.15, usePublicPrice: true, redondear9900: false },
+  crocs: { markup: 0, providerDiscount: 0, usePublicPrice: true, redondear9900: false },
   kappa: { markup: 0, providerDiscount: 0, usePublicPrice: true, redondear9900: false },
   reebok:   { markup: 0,    providerDiscount: 0, usePublicPrice: true, redondear9900: false },
 };
@@ -164,6 +166,7 @@ export const VENDOR_POR_MARCA: Record<SyncConfig['brand'], string> = {
   ntf: 'NTF',
   reebok: 'Reebok',
   kappa: 'Kappa',
+  crocs: 'Crocs',
 };
 
 // Precio de venta final según la marca.
@@ -548,6 +551,7 @@ export const STOCK_LOCATION: Record<SyncConfig['brand'], string> = {
   ntf: NTF_LOCATION,
   reebok: REEBOK_LOCATION,
   kappa: REEBOK_LOCATION,
+  crocs: REEBOK_LOCATION,
   // 🟡 PENDIENTE: Wanda todavía no definió la sucursal de ORNG. Igual su archivo
   // NO trae stock (es una lista de precios), así que por ahora no se usa.
   orng: 'ORNG',
@@ -565,6 +569,7 @@ const VENDOR_QUERY: Partial<Record<SyncConfig['brand'], string>> = {
   ntf: 'vendor:NTF',
   reebok: 'vendor:Reebok',
   kappa: 'vendor:Kappa',
+  crocs: 'vendor:Crocs',
   orng: 'vendor:Orng OR vendor:"Orng Mochilas"',
 };
 
@@ -934,6 +939,15 @@ export async function processFiles(
     alerts.push({ type: 'info', title: `Reebok: ${Object.keys(reebok.productos).length} modelos de ${config.reebokCalzado ? "calzado" : "indumentaria"}`, 
       message: config.reebokCalzado ? 'Se conserva el AR informado. EAN como SKU y código de barras; SKU del proveedor en etiquetas. Sin EAN: SKU del proveedor y código de barras vacío. Packs UDM excluidos en ambas plantillas. Tabla por coincidencia completa US–AR; sin coincidencia única, JSON vacío. Costo: Mayorista original (Mayorista Unitario en Inmediato) menos 40%, también en PROMO. Venta: Mayorista original ×1,8755, al precio terminado en 999 más cercano, sin IVA adicional. Revisá filas pendientes antes del alta.' : 'Costo: L, Mayorista con descuento, sin volver a descontar. Venta: M, Precio Público, sin markup ni redondeo. Margen informativo: (venta − costo × 1,21) / venta. Usá una sola lista vigente; no combines la del 24 con la del 25. Para calzado, usar Reebok — Calzado.' });
     for (const message of reebok.avisos) alerts.push({ type: 'warning', title: message.includes('Modelo pendiente:') ? 'Reebok: modelo con diferencias, conserva su stock' : message.includes('revisar colores') ? 'Reebok: colores por revisar' : 'Reebok: fila excluida', message });
+  } else if (config.brand === 'crocs') {
+    const crocs = parseCrocs(await readExcel(providerFile, config.sheetName));
+    for (const [codigo, p] of Object.entries(crocs.productos)) excelMap[codigo] = {
+      wholesale:p.costo, publicPrice:p.precio, costFinal:p.costo, title:p.nombre, vendor:'Crocs',
+      sizes:p.sizes, skuPorTalle:p.skuPorTalle, skuProveedorPorTalle:p.skuProveedorPorTalle,
+      artType:p.artType, foundInShopify:false, tablaTalle:p.tablaTalle, sizeConversion:p.sizeConversion,
+    };
+    alerts.push({type:'info',title:`Crocs: ${Object.keys(crocs.productos).length} modelos de calzado`,message:'Costo directo de N (COSTO DESCUENTO). Venta: L (Módulo Mayorista) ×1,8755, al terminado en 999 más cercano, sin IVA adicional. Stock en DISTRINANDO. Se conservan SKU originales y talles web; JSON de Mujer, Hombre o Niño. Packs, accesorios, costos vacíos y talles sin equivalencia confirmada quedan pendientes. No se ponen en cero productos ausentes.'});
+    for (const message of crocs.avisos) alerts.push({type:'warning',title:'Crocs: revisar',message});
   } else if (config.brand === 'kappa') {
     const kappa=parseKappa(await leerKappa(providerFile,!!config.kappaCalzado),!!config.kappaCalzado,'AR');
     for(const [codigo,p] of Object.entries(kappa.productos)) excelMap[codigo]={wholesale:p.costo,publicPrice:p.precio,costFinal:p.costo,costoMargen:p.costoMargen,title:p.nombre,vendor:'Kappa',sizes:p.sizes,skuPorTalle:p.skuPorTalle,skuProveedorPorTalle:p.skuProveedorPorTalle,artType:p.artType,foundInShopify:false,tablaTalle:p.tablaTalle,sizeConversion:p.sizeConversion};
@@ -1411,7 +1425,7 @@ export async function processFiles(
            && titleCanon.includes('orchard')
            && (!aType || titleCanon.includes(aType))
            && titleCanon.includes(dCod);
-      } else if (config.brand === 'ntf' || config.brand === 'reebok' || config.brand === 'kappa') {
+      } else if (config.brand === 'ntf' || config.brand === 'reebok' || config.brand === 'kappa' || config.brand === 'crocs') {
          const codigo = cod.toLowerCase();
          match = tags.split(',').some(t => t.trim() === codigo)
            || prod.variants.edges.some(v => {
@@ -1433,10 +1447,10 @@ export async function processFiles(
       }
 
       if (match) {
-        if (config.brand === 'kappa' || (config.brand === 'reebok' && config.reebokCalzado)) {
+        if (config.brand === 'crocs' || config.brand === 'kappa' || (config.brand === 'reebok' && config.reebokCalzado)) {
           if (provData.foundInShopify && provData.shopifyHandle !== prod.handle) throw new Error(`Reebok ${cod}: más de un producto coincide; revisar duplicados antes de cargar.`);
           for (const size of Object.keys(provData.sizes)) {
-            if (prod.variants.edges.filter(v => config.brand === 'kappa' ? coincideVarianteKappa(provData,size,v.node) : coincideVarianteReebok(provData, size, v.node, true)).length > 1) throw new Error(`Reebok ${cod}: más de una variante coincide con AR ${size}; revisar antes de cargar.`);
+            if (prod.variants.edges.filter(v => config.brand === 'crocs' ? coincideVarianteCrocs(provData,size,v.node) : config.brand === 'kappa' ? coincideVarianteKappa(provData,size,v.node) : coincideVarianteReebok(provData, size, v.node, true)).length > 1) throw new Error(`Reebok ${cod}: más de una variante coincide con AR ${size}; revisar antes de cargar.`);
           }
         }
         // ⚠ ORNG: EL CONTRATO LO DECIDE EL PROVEEDOR (vendor) DE SHOPIFY.
@@ -1471,6 +1485,7 @@ export async function processFiles(
            const variant = vEdge.node;
            // Las listas Reebok son parciales: solo tocar las variantes incluidas,
            // identificadas por su SKU completo del proveedor.
+           if (config.brand === 'crocs' && !Object.keys(provData.sizes).some(size => coincideVarianteCrocs(provData,size,variant))) continue;
            if (config.brand === 'kappa' && !Object.keys(provData.sizes).some(size => coincideVarianteKappa(provData,size,variant))) continue;
            if (config.brand === 'reebok' && !Object.keys(provData.sizes).some(size => coincideVarianteReebok(provData, size, variant, !!config.reebokCalzado))) continue;
            const variantPrice = parseFloat(variant.price);
@@ -1809,7 +1824,7 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
         // (en ropa el sufijo es un código: 63=S, 64=M...). Usamos el del Excel.
         else if (config.brand === 'vart') variantSku = prod.skuPorTalle?.[String(size).toUpperCase()] || `${prod.coditm}-${String(size).toUpperCase()}`;
         else if (config.brand === 'ntf') variantSku = `${prod.coditm}-${String(size).toUpperCase()}`;
-        else if (config.brand === 'reebok' || config.brand === 'kappa') {
+        else if (config.brand === 'reebok' || config.brand === 'kappa' || config.brand === 'crocs') {
           variantSku = prod.skuPorTalle?.[String(size)] || '';
           if (!variantSku) throw new Error(`Reebok: falta el SKU original de ${prod.coditm}, talle ${size}.`);
         }
@@ -1839,7 +1854,7 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
     } else if (config.brand === 'ntf') {
       displayTitle = tituloNtf(prod.title);
       productType = displayTitle.split(' ')[0];
-    } else if (config.brand === 'reebok' || config.brand === 'kappa') {
+    } else if (config.brand === 'reebok' || config.brand === 'kappa' || config.brand === 'crocs') {
       displayTitle = niceTitle(prod.title);
       productType = displayTitle.split(' ')[0];
     } else {
@@ -1849,12 +1864,12 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
     // Etiquetas: el código (o tag de la marca) + la etiqueta de la tabla de talle
     // para las zapatillas Converse, así la próxima sync la lee sola.
     const tags: string[] = [tagValue];
-    if (config.brand === 'kappa' || (config.brand === 'reebok' && config.reebokCalzado)) tags.push(...new Set(Object.values(prod.skuProveedorPorTalle || prod.skuPorTalle || {})));
+    if (config.brand === 'crocs' || config.brand === 'kappa' || (config.brand === 'reebok' && config.reebokCalzado)) tags.push(...new Set(Object.values(prod.skuProveedorPorTalle || prod.skuPorTalle || {})));
     if (config.brand === 'converse' && converseKind && converseKind >= 1 && CONVERSE_TABLE_TAG[converseKind]) {
       tags.push(CONVERSE_TABLE_TAG[converseKind]);
     }
-    if ((config.reebokCalzado || config.kappaCalzado) && prod.tablaTalle) tags.push(prod.tablaTalle);
-    out.push({ sizeConversion: (config.reebokCalzado || config.kappaCalzado) ? prod.sizeConversion : undefined, handle, title: displayTitle, vendor, productType, tags, weightGrams: calcWeightGrams(config.brand, prod.artType), hasSizes, variants });
+    if ((config.reebokCalzado || config.kappaCalzado || config.brand === 'crocs') && prod.tablaTalle) tags.push(prod.tablaTalle);
+    out.push({ sizeConversion: (config.reebokCalzado || config.kappaCalzado || config.brand === 'crocs') ? prod.sizeConversion : undefined, handle, title: displayTitle, vendor, productType, tags, weightGrams: calcWeightGrams(config.brand, prod.artType), hasSizes, variants });
   }
   return out;
 }
@@ -1885,11 +1900,11 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, tableS
     'Google Shopping / Custom label 3', 'Google Shopping / Custom label 4'
   ];
 
-  if (config.reebokCalzado || config.kappaCalzado) headers.push('Size Conversion (product.metafields.custom.size_conversion)');
+  if (config.reebokCalzado || config.kappaCalzado || config.brand === 'crocs') headers.push('Size Conversion (product.metafields.custom.size_conversion)');
   let csvContent = headers.join(',') + '\n';
 
   // Converse usa exactamente las variantes y la tabla elegida para el alta por API.
-  if (config.brand === 'converse' || config.brand === 'ntf' || config.brand === 'reebok' || config.brand === 'kappa') {
+  if (config.brand === 'converse' || config.brand === 'ntf' || config.brand === 'reebok' || config.brand === 'kappa' || config.brand === 'crocs') {
     for (const prod of buildMatrixProducts(result, config, tableSelections)) {
       prod.variants.forEach((v, index) => {
         const row: Record<string, string | number> = {
@@ -1904,7 +1919,7 @@ export function downloadMatrixCSV(result: SyncResult, config: SyncConfig, tableS
         if (index === 0) Object.assign(row, {
           Title: prod.title, Description: prod.title, Vendor: prod.vendor,
           Type: prod.productType, Tags: prod.tags.join(', '),
-          ...((config.reebokCalzado || config.kappaCalzado) && prod.sizeConversion ? { 'Size Conversion (product.metafields.custom.size_conversion)': JSON.stringify(prod.sizeConversion) } : {}),
+          ...((config.reebokCalzado || config.kappaCalzado || config.brand === 'crocs') && prod.sizeConversion ? { 'Size Conversion (product.metafields.custom.size_conversion)': JSON.stringify(prod.sizeConversion) } : {}),
           'Published on online store': 'FALSE', Status: 'Active',
         });
         csvContent += headers.map(h => escapeCSV(row[h] ?? '')).join(',') + '\n';
@@ -2080,7 +2095,10 @@ export function downloadInventoryCSV(result: SyncResult, config: SyncConfig) {
 
       // Buscar variante exacta en Shopify
       let exactVariant = null;
-      if (config.brand === 'kappa') {
+      if (config.brand === 'crocs') {
+         exactVariant = data.shopifyVariants?.find((v: any) => coincideVarianteCrocs(data,size,v));
+         if (!exactVariant) throw new Error(`${coditm}: no se encontró el SKU original del talle ${size} en Shopify.`);
+      } else if (config.brand === 'kappa') {
          exactVariant = data.shopifyVariants?.find((v: any) => coincideVarianteKappa(data,size,v));
       } else if (config.brand === 'reebok') {
          exactVariant = data.shopifyVariants?.find((v: any) => coincideVarianteReebok(data, size, v, !!config.reebokCalzado));

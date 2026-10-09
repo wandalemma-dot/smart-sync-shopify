@@ -120,7 +120,7 @@ export async function createProducts(
   if (limit && limit > 0) products = products.slice(0, limit);
 
   const locId = await getLocationId(STOCK_LOCATION[config.brand]);
-  if ((config.brand === 'reebok' || config.brand === 'kappa') && !locId) throw new Error(`No encontré la sucursal ${STOCK_LOCATION.reebok}. No se crearon productos.`);
+  if ((config.brand === 'reebok' || config.brand === 'kappa' || config.brand === 'crocs') && !locId) throw new Error(`No encontré la sucursal ${STOCK_LOCATION[config.brand]}. No se crearon productos.`);
   const posId = await getPosPublicationId();
 
   let created = 0;

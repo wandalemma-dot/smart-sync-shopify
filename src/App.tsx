@@ -410,6 +410,7 @@ export default function App() {
                 <option value="reebok-calzado">Reebok — Calzado</option>
                 <option value="kappa">Kappa — Indumentaria</option>
                 <option value="kappa-calzado">Kappa — Calzado</option>
+                <option value="crocs">Crocs — Calzado</option>
                 <option value="orng">ORNG</option>
                 <option value="bloque">Bloque (PDFs)</option>
               </select>
@@ -451,6 +452,14 @@ export default function App() {
               UK se convierte a AR cuando coincide con la referencia y el US del SKU. Se reconocen sufijos W de mujer. Ropa, packs y talles sin equivalencia quedan para revisión.</p>
               <p>Costo: Mayorista original (Mayorista Unitario en Inmediato) menos 40%, redondeado a centavos. Venta: Mayorista original ×1,8755,
               ajustada al precio terminado en 999 más cercano. Sin IVA adicional. También aplica a PROMO.</p>
+            </div>}
+            {config.brand === 'crocs' && <div>
+              <p><strong>Crocs — Calzado:</strong> subí STOCKPROMOCROCS. Stock en DISTRINANDO.
+              Costo: columna N (COSTO DESCUENTO), sin otro descuento. Venta: columna L (Módulo Mayorista) ×1,8755,
+              redondeada al precio terminado en 999 más cercano, sin IVA adicional.</p>
+              <p>Se conserva el SKU del proveedor y se usa el talle web de la tabla Mujer (W), Hombre (M o M/W) o Niño (C/J),
+              con su etiqueta y JSON. Los packs, accesorios, talles dobles infantiles y modelos con costo vacío quedan pendientes.
+              Los productos ausentes conservan su stock.</p>
             </div>}
             {config.brand === 'kappa' && <div>
               <p>Kappa: stock en DISTRINANDO SA (Reebok - Kappa). Venta Público exacto, costo Mayorista con descuento. EAN en SKU y código de barras. Packs excluidos; filas repetidas idénticas se toman una vez.</p>
@@ -725,10 +734,10 @@ export default function App() {
                           {' · '}{talles.slice(0, 8).map(([t, q]) => `${t}:${q}`).join('  ')}{talles.length > 8 ? ' …' : ''}
                         </div>
                         {problema && <div style={{ fontSize: '0.8rem', color: '#fbbf24', marginTop: 4 }}>{problema}</div>}
-                        {(config.reebokCalzado || config.kappaCalzado) && <div style={{ color: p.sizeConversion ? '#a7f3d0' : '#fbbf24', marginTop: 4 }}>
+                        {(config.reebokCalzado || config.kappaCalzado || config.brand === 'crocs') && <div style={{ color: p.sizeConversion ? '#a7f3d0' : '#fbbf24', marginTop: 4 }}>
                           {p.tablaTalle} · {p.sizeConversion ? 'JSON de equivalencias incluido' : 'Size Conversion vacío: revisión manual'}
                         </div>}
-                        {(config.brand === 'reebok' || config.brand === 'kappa') && <div style={{ fontSize: '0.8rem', color: '#a7f3d0', marginTop: 4 }}>
+                        {(config.brand === 'reebok' || config.brand === 'kappa' || config.brand === 'crocs') && <div style={{ fontSize: '0.8rem', color: '#a7f3d0', marginTop: 4 }}>
                           Costo: ${p.costFinal?.toLocaleString('es-AR')} · Venta: ${p.publicPrice?.toLocaleString('es-AR')}
                           {' · '}Margen de la planilla: {((1 - (p.costoMargen ?? p.costFinal ?? 0) * 1.21 / (p.publicPrice || 1)) * 100).toFixed(2)}%
                         </div>}

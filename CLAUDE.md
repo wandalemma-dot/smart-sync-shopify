@@ -48,6 +48,13 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ## 1. Qué hace la app
 
+### Crocs Calzado (9-oct-2026)
+
+- Stock en DISTRINANDO. Primera etapa: calzado individual; excluir packs por UDM y accesorios. Tablas de Mujer, Hombre y Niño aportadas por Wanda: clave del JSON = talle web/a seleccionar, `arg` = rango ARG, `us` = nomenclatura de la tabla, `cm` = medida informada. Metacampo existente `custom.size_conversion`.
+- COSTO DESCUENTO (columna N) es el costo directo, sin volver a descontar 25% ni completarlo automáticamente. Si falta, dejar pendiente el modelo. Módulo Mayorista (columna L) es la base para calcular la venta; NO Individual Mayorista (M), ni PUBLICO DESCUENTO (O). Wanda pidió la fórmula existente de calzado: L ×1,8755, al terminado en 999 más cercano, sin IVA adicional; se reutiliza precioReebokCalzado. Kappa conserva su regla propia de precio Público de su archivo.
+- Los talles dobles infantiles (ej. C6/7) siguen pendientes de confirmación; no deducirlos automáticamente de C6. Los M/W exactos sí están en la tabla de Hombre; W solo usa Mujer y sus centímetros propios.
+- SKU completo del proveedor por variante, sin código de barras inventado (no hay EAN en este Excel). Código modelo/color, SKUs y etiqueta de tabla en tags; JSON en vista previa, CSV y alta. Nuevos productos activos, POS según flujo existente, stock en DISTRINANDO. Matching de variante por SKU exacto, nunca solo por talle. Lista parcial: conservar productos y talles ausentes. Confirmaciones existentes antes de cualquier escritura; pruebas con Shopify simulado, sin mutaciones reales.
+
 ### Varias listas en Sincronización Reebok Calzado (8-oct-2026)
 
 - En el MISMO recuadro de Archivos del Proveedor se pueden seleccionar/arrastrar varios Excel .xlsx/.xls/.xlsb, agregarlos de a uno y quitarlos. Cada archivo conserva su propia pestaña visible. No es una pestaña nueva de pedidos.
