@@ -15,6 +15,12 @@ const config = { brand:'reebok', reebokCalzado:true, sheetName:'Calzado' } as co
 const file = (rows: unknown[][]) => { const w=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(w,XLSX.utils.aoa_to_sheet(rows),'Calzado'); return {name:'Calzado.xlsx',arrayBuffer:async()=>XLSX.write(w,{type:'array',bookType:'xlsx'})} as File; };
 beforeEach(()=>{ graphql.mockReset().mockImplementation(async(q:string)=>q.includes('locations(')?{locations:{edges:[{node:{id:'loc',name:'DISTRINANDO SA (Reebok - Kappa)'}}]}}:q.includes('mutation CrearProducto')?{productSet:{product:{id:'p'},userErrors:[]}}:q.includes('mutation GuardarTabla')?{metafieldsSet:{metafields:[{key:'size_conversion'}],userErrors:[]}}:{products:{edges:[],pageInfo:{hasNextPage:false}}}); });
 describe('Reebok Calzado',()=>{
+ it('talles UK de niño con K (UK-12.5K/AR-29) no cambian el nombre del modelo',()=>{
+  const code='RBK1LZN90-RBKHQ2231', d=(uk:string,ar:string)=>[`${code}-${uk}`,code,`CLASSIC LEATHER FTWR WHITE/PURE GREY 7/VINTAGE CHALK S23-R UK-${uk}/AR-${ar}`,'UNISEX',1,1,1,53318.58];
+  const p=parseReebokCalzado([headers,d('1','31'),d('12.5K','29'),d('13.5K','30'),d('2','33')]).productos[code];
+  expect(p.sizes).toEqual({'29':1,'30':1,'31':1,'33':1});
+  expect(p.nombre).not.toMatch(/UK/);
+ });
  const immediateHeaders=['Número de artículo','Modelo Color','Descripción del artículo','EAN','UDM','DISPONIBLE (inmediato)','Mayorista Unitario'];
  const immediateRow=['RBK1100201449-6.5','RBK1100201449--','PHASE COURT - WHITE - 36','04065419284966','Pares','+ 240',63982.4];
  it('EAN en SKU y barcode de alta/API/CSV, proveedor en etiquetas; sin EAN deja barcode vacío',async()=>{

@@ -114,7 +114,7 @@ export function parseReebokCalzado(rows: unknown[][]) {
     if (r[stockC] == null || r[stockC] === '' || !Number.isInteger(qty) || qty < 0 || !Number.isFinite(rawCost) || rawCost <= 0) throw new Error(`Fila ${i + 1}: revisar stock o costo de ${sku}.`);
     const costo = Math.round(rawCost * 0.60 * 100) / 100;
     const precio = precioReebokCalzado(rawCost);
-    const nombre = `Zapatillas Reebok ${desc.slice(0, ukFinal ? ukFinal.index : match!.index).replace(/\bUK\s*-?\s*\d+(?:[.,]\d+)?\s*[-/]?\s*$/i, '').replace(/\bREEBOK\b/gi, '').replace(/[-\s]+$/, '').trim()}`;
+    const nombre = `Zapatillas Reebok ${desc.slice(0, ukFinal ? ukFinal.index : match!.index).replace(/\bUK\s*-?\s*\d+(?:[.,]\d+)?K?\s*[-/]?\s*$/i, '').replace(/\bREEBOK\b/gi, '').replace(/[-\s]+$/, '').trim()}`;
     const old = productos[codigo];
     if (old && (old.nombre !== nombre || old.costo !== costo || old.precio !== precio)) throw new Error(`${codigo}: nombres o precios distintos entre talles; revisar el archivo.`);
     const p = productos[codigo] ??= { codigo, nombre, artType: 'zapatillas', costo, precio, sizes: {}, skuPorTalle: {}, skuProveedorPorTalle: {} };
