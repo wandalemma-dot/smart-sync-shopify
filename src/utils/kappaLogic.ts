@@ -75,7 +75,7 @@ export function parseKappa(rows: unknown[][], calzado: boolean, sistema: 'EU'|'A
     p.nombre = colores.titulo;
     if (colores.pendientes.length) avisos.push(`${p.codigo}: revisar colores sin equivalencia: ${colores.pendientes.join(', ')}.`);
   }
-  const cobertura:KappaCobertura={modelosPresentes:[...presentes],modelosProtegidos:[...protegidos],identificadoresPresentes:[...identificadores]};
+  const cobertura:KappaCobertura={categoria:calzado?'calzado':'indumentaria',modelosPresentes:[...presentes],modelosProtegidos:[...protegidos],identificadoresPresentes:[...identificadores]};
   return {productos,avisos,cobertura};
 }
 export function coincideVarianteKappa(data: {skuPorTalle?:Record<string,string>;skuProveedorPorTalle?:Record<string,string>},size:string,v:{sku?:string}) {

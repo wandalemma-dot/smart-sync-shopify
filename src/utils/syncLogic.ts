@@ -1,4 +1,5 @@
-import { parseCrocs, coincideVarianteCrocs } from './crocsLogic';
+import { parseCrocs, leerCrocs, coincideVarianteCrocs } from './crocsLogic';
+import { ausenteCrocs, codigosCrocs, type CrocsCobertura } from './crocsCatalogo';
 import { parseKappa, leerKappa, coincideVarianteKappa } from './kappaLogic';
 import { ausenteKappa, codigosKappa, type KappaCobertura } from './kappaCatalogo';
 import * as XLSX from 'xlsx';
@@ -90,6 +91,7 @@ export interface ProductoEnPeligro {
 }
 
 export interface SyncResult {
+  crocsCobertura?: CrocsCobertura;
   kappaCobertura?: KappaCobertura;
   reebokCobertura?: ReebokCobertura;
   updatesToApply: UpdateAction[];
@@ -713,6 +715,7 @@ export async function processFiles(
   const alerts: AlertMessage[] = [];
   let reebokCobertura: ReebokCobertura | undefined;
   let kappaCobertura: KappaCobertura | undefined;
+  let crocsCobertura: CrocsCobertura | undefined;
   const excelMap: Record<string, { tablaTalle?: string, sizeConversion?: SizeConversion, wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyTags?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number, costoMargen?: number, usaListaPrecios?: boolean, skuPorTalle?: Record<string, string>, skuProveedorPorTalle?: Record<string, string>, whslDelArchivo?: boolean, unidadesPorPack?: number }> = {};
 
   if (config.brand === 'bloque' && /\.xlsx?$/i.test(providerFile.name)) {
@@ -943,20 +946,21 @@ export async function processFiles(
       message: config.reebokCalzado ? 'Se conserva el AR informado. EAN como SKU y código de barras; SKU del proveedor en etiquetas. Sin EAN: SKU del proveedor y código de barras vacío. Packs UDM excluidos en ambas plantillas. Tabla por coincidencia completa US–AR; sin coincidencia única, JSON vacío. Costo: Mayorista original (Mayorista Unitario en Inmediato) menos 40%, también en PROMO. Venta: Mayorista original ×1,8755, al precio terminado en 999 más cercano, sin IVA adicional. Revisá filas pendientes antes del alta.' : 'Costo: L, Mayorista con descuento, sin volver a descontar. Venta: M, Precio Público, sin markup ni redondeo. Margen informativo: (venta − costo × 1,21) / venta. Usá una sola lista vigente; no combines la del 24 con la del 25. Para calzado, usar Reebok — Calzado.' });
     for (const message of reebok.avisos) alerts.push({ type: 'warning', title: message.includes('Modelo pendiente:') ? 'Reebok: modelo con diferencias, conserva su stock' : message.includes('revisar colores') ? 'Reebok: colores por revisar' : 'Reebok: fila excluida', message });
   } else if (config.brand === 'crocs') {
-    const crocs = parseCrocs(await readExcel(providerFile, config.sheetName));
+    const crocs = parseCrocs(await leerCrocs(providerFile, config.sheetName));
+    if(!Object.keys(crocs.productos).length) throw new Error('Crocs: no hay calzado individual válido. Revisá la hoja, los talles y los costos; no se proponen cambios de stock.');
+    crocsCobertura=crocs.cobertura;
+    alerts.push({type:'warning',title:'Lista vigente de Crocs Calzado',message:'Cargá la lista completa vigente. Al simular se propondrá cero para los modelos y talles ausentes, únicamente en DISTRINANDO. Los modelos con packs, costos vacíos o equivalencias pendientes conservan su stock por ausencia.'});
     for (const [codigo, p] of Object.entries(crocs.productos)) excelMap[codigo] = {
       wholesale:p.costo, publicPrice:p.precio, costFinal:p.costo, title:p.nombre, vendor:'Crocs',
       sizes:p.sizes, skuPorTalle:p.skuPorTalle, skuProveedorPorTalle:p.skuProveedorPorTalle,
       artType:p.artType, foundInShopify:false, tablaTalle:p.tablaTalle, sizeConversion:p.sizeConversion,
     };
-    alerts.push({type:'info',title:`Crocs: ${Object.keys(crocs.productos).length} modelos de calzado`,message:'Costo directo de N (COSTO DESCUENTO). Venta: L (Módulo Mayorista) ×1,8755, al terminado en 999 más cercano, sin IVA adicional. Stock en DISTRINANDO. Se conservan SKU originales y talles web; JSON de Mujer, Hombre o Niño. Packs, accesorios, costos vacíos y talles sin equivalencia confirmada quedan pendientes. No se ponen en cero productos ausentes.'});
+    alerts.push({type:'info',title:`Crocs: ${Object.keys(crocs.productos).length} modelos de calzado`,message:'Costo directo de N (COSTO DESCUENTO). Venta: L (Módulo Mayorista) ×1,8755, al terminado en 999 más cercano, sin IVA adicional. Stock en DISTRINANDO. Se conservan SKU originales y talles web; JSON de Mujer, Hombre o Niño. Packs, accesorios, costos vacíos y talles sin equivalencia confirmada quedan pendientes.'});
     for (const message of crocs.avisos) alerts.push({type:'warning',title:'Crocs: revisar',message});
   } else if (config.brand === 'kappa') {
     const kappa=parseKappa(await leerKappa(providerFile,!!config.kappaCalzado),!!config.kappaCalzado,'AR');
-    if(config.kappaCalzado) {
-      kappaCobertura=kappa.cobertura;
-      alerts.push({type:'warning',title:'Lista vigente de Kappa Calzado',message:'Al simular se mostrarán los modelos y talles de calzado ausentes de este Excel para dejarlos en cero únicamente en DISTRINANDO. Cargá la lista completa vigente. Los modelos con packs o filas excluidas quedan protegidos. Revisá antes de confirmar.'});
-    }
+    kappaCobertura=kappa.cobertura;
+    alerts.push({type:'warning',title:`Lista vigente de Kappa ${config.kappaCalzado?'Calzado':'Indumentaria'}`,message:`Al simular se mostrarán los modelos y talles de ${kappaCobertura.categoria} ausentes de este Excel para dejarlos en cero únicamente en DISTRINANDO. Cargá la lista completa vigente. Los modelos con packs o filas excluidas quedan protegidos. Revisá antes de confirmar.`});
     for(const [codigo,p] of Object.entries(kappa.productos)) excelMap[codigo]={wholesale:p.costo,publicPrice:p.precio,costFinal:p.costo,costoMargen:p.costoMargen,title:p.nombre,vendor:'Kappa',sizes:p.sizes,skuPorTalle:p.skuPorTalle,skuProveedorPorTalle:p.skuProveedorPorTalle,artType:p.artType,foundInShopify:false,tablaTalle:p.tablaTalle,sizeConversion:p.sizeConversion};
     alerts.push({type:'info',title:`Kappa: ${Object.keys(kappa.productos).length} modelos`,message:'EAN en SKU y código de barras; códigos originales en etiquetas. Precio Público exacto y costo Mayorista con descuento. Stock disponible en Distrinando. Se excluyen packs y hojas ocultas.'});
     for(const message of kappa.avisos) alerts.push({type:'warning',title:'Kappa: revisar',message});
@@ -1584,11 +1588,12 @@ export async function processFiles(
   const enPeligro: ProductoEnPeligro[] = [];
   // Reebok Calzado habilita ausencias solo con varias listas y cobertura conservadora.
   const marcaConCatalogoCompleto = config.brand === 'converse' || config.brand === 'lecoq';
-  if ((marcaConCatalogoCompleto || reebokCobertura || kappaCobertura) && !shopifyExportFile && (Object.keys(excelMap).length > 0 || !!reebokCobertura?.modelosPresentes.length)) {
+  if ((marcaConCatalogoCompleto || reebokCobertura || kappaCobertura || crocsCobertura) && !shopifyExportFile && (Object.keys(excelMap).length > 0 || !!reebokCobertura?.modelosPresentes.length)) {
     for (const prod of shopifyProducts) {
       if (handlesMatcheados.has(prod.handle)) continue;
       if (reebokCobertura && !ausenteReebok(prod, reebokCobertura)) continue;
       if (kappaCobertura && !ausenteKappa(prod, kappaCobertura)) continue;
+      if (crocsCobertura && !ausenteCrocs(prod, crocsCobertura)) continue;
       const variantes = prod.variants.edges.map((e: any) => e.node);
       const stock = variantes.reduce((a: number, v: any) => a + (Number(v.inventoryQuantity) || 0), 0);
       if (!variantes.some((v: any) => (Number(v.inventoryQuantity) || 0) !== 0)) continue;
@@ -1598,7 +1603,7 @@ export async function processFiles(
       enPeligro.push({
         handle: prod.handle,
         titulo: prod.title,
-        codigo: kappaCobertura ? codigosKappa(tagsStr,variantes.map(v=>v.sku))[0] || null : cod,
+        codigo: kappaCobertura ? codigosKappa(tagsStr,variantes.map(v=>v.sku))[0] || null : crocsCobertura ? codigosCrocs(tagsStr,variantes.map(v=>v.sku))[0] || null : cod,
         stockProveedor: stock,
         talles: variantes.filter((v: any) => (Number(v.inventoryQuantity) || 0) !== 0).map((v: any) => String(v.title)),
       });
@@ -1636,6 +1641,7 @@ export async function processFiles(
   return {
     reebokCobertura,
     kappaCobertura,
+    crocsCobertura,
     updatesToApply,
     missingProducts,
     enPeligro,

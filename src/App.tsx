@@ -459,11 +459,12 @@ export default function App() {
               redondeada al precio terminado en 999 más cercano, sin IVA adicional.</p>
               <p>Se conserva el SKU del proveedor y se usa el talle web de la tabla Mujer (W), Hombre (M o M/W) o Niño (C/J),
               con su etiqueta y JSON. Los packs, accesorios, talles dobles infantiles y modelos con costo vacío quedan pendientes.
-              Los productos ausentes conservan su stock.</p>
+              Cargá la lista completa vigente: al simular se propondrá cero para los modelos y talles ausentes, solo en DISTRINANDO.
+              Los modelos con filas pendientes conservan su stock por ausencia.</p>
             </div>}
             {config.brand === 'kappa' && <div>
               <p>Kappa: stock en DISTRINANDO SA (Reebok - Kappa). Venta Público exacto, costo Mayorista con descuento. EAN en SKU y código de barras. Packs excluidos; filas repetidas idénticas se toman una vez.</p>
-              {config.kappaCalzado && <p>El talle del Excel ya es argentino: se conserva. Cargá la lista completa vigente de calzado: al simular se propondrá cero para los modelos y talles ausentes, solo en DISTRINANDO. Los modelos con packs o filas excluidas quedan para revisión. La indumentaria conserva su stock.</p>}
+              <p>{config.kappaCalzado ? 'El talle del Excel ya es argentino: se conserva. ' : ''}Cargá la lista completa vigente de {config.kappaCalzado ? 'calzado' : 'indumentaria'}: al simular se propondrá cero para los modelos y talles ausentes de esa categoría, solo en DISTRINANDO. Los modelos con packs o filas excluidas quedan para revisión.</p>
             </div>}
             {config.brand === 'vart' && (
               <p style={{ fontSize: '0.8rem', color: '#fbbf24', marginTop: '0.4rem' }}>
@@ -521,9 +522,9 @@ export default function App() {
             </div>
           </div>
 
-          {result?.kappaCobertura && (
+          {(result?.kappaCobertura || result?.crocsCobertura || result?.reebokCobertura) && (
             <details style={{ marginTop: '20px', padding: '16px', border: '1px solid #f59e0b', borderRadius: '8px' }}>
-              <summary style={{ cursor: 'pointer', color: '#f59e0b', fontWeight: 'bold' }}>Kappa Calzado: modelos ausentes del Excel para revisar ({result.enPeligro.length})</summary>
+              <summary style={{ cursor: 'pointer', color: '#f59e0b', fontWeight: 'bold' }}>Modelos ausentes de las listas cargadas para revisar ({result.enPeligro.length})</summary>
               <p>Al simular el stock se mostrarán los talles ausentes con su cantidad actual y el nuevo stock en cero, únicamente en DISTRINANDO. Revisalos antes de confirmar.</p>
               <div style={{ maxHeight: '260px', overflowY: 'auto' }}>
                 {result.enPeligro.map(p => <p key={p.handle}>{p.codigo} — {p.titulo}</p>)}

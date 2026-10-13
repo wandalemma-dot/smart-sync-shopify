@@ -2,6 +2,8 @@ import { talleCrocs } from './crocsTalles';
 import type { ReebokCalzadoProducto } from './reebokCalzado';
 import { simplificarColores } from './coloresComerciales';
 import { precioReebokCalzado } from './reebokCalzado';
+import * as XLSX from 'xlsx';
+import { codigosCrocs, type CrocsCobertura } from './crocsCatalogo';
 
 export interface CrocsOpciones {
   /** Regla de venta explícita: recibe Módulo Mayorista (L), nunca el costo N. */
@@ -9,6 +11,14 @@ export interface CrocsOpciones {
   permitirDoblesNino?: boolean;
 }
 const norm = (v: unknown) => String(v ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g,'').trim().toUpperCase();
+
+export async function leerCrocs(file: File, sheetName?: string) {
+  const w=XLSX.read(await file.arrayBuffer());
+  const name=sheetName || w.SheetNames.find(n=>!w.Workbook?.Sheets?.find(s=>s.name===n)?.Hidden);
+  if(!name || !w.Sheets[name] || w.Workbook?.Sheets?.find(s=>s.name===name)?.Hidden)
+    throw new Error('Crocs: elegí una hoja visible de la lista completa vigente.');
+  return XLSX.utils.sheet_to_json<unknown[]>(w.Sheets[name],{header:1});
+}
 
 /** Solo calzado individual. Columnas por nombre; UDM se evalúa antes del sufijo M/C. */
 export function parseCrocs(rows: unknown[][], opciones: CrocsOpciones = {}) {
@@ -19,20 +29,28 @@ export function parseCrocs(rows: unknown[][], opciones: CrocsOpciones = {}) {
   const c={sku:col('SKU'),modelo:col('MODELO-COLOR'),tipo:col('TIPO DE PRODUCTO'),desc:col('DESCRIPCION'),udm:col('UDM'),stock:col('DISPONIBLE'),costo:col('COSTO DESCUENTO'),mayorista:col('MODULO MAYORISTA')};
   const productos:Record<string,ReebokCalzadoProducto>={},avisos:string[]=[];
   const vistos=new Set<string>(), pendientes=new Set<string>();
+  const presentes=new Set<string>(),protegidos=new Set<string>(),identificadores=new Set<string>();
   for(let i=h+1;i<rows.length;i++) {
-    const r=rows[i],sku=String(r[c.sku]??'').trim(); if(!sku)continue;
-    if(/PACK|CURVA|MODULO/.test(norm(r[c.udm]))) {avisos.push(`Fila ${i+1}: ${sku}; pack excluido.`);continue;}
-    if(norm(r[c.tipo])!=='CALZADO') {avisos.push(`Fila ${i+1}: ${sku}; accesorio excluido, esta carga es de calzado.`);continue;}
+    const r=rows[i],sku=String(r[c.sku]??'').trim();
+    const codes=codigosCrocs(String(r[c.modelo]??''),[sku]);
+    codes.forEach(code=>presentes.add(code));
+    if(sku)identificadores.add(sku);
+    const proteger=()=>codes.forEach(code=>protegidos.add(code));
+    if(!sku){proteger();if(codes.length)avisos.push(`Fila ${i+1}: modelo sin SKU; conserva su stock.`);continue;}
+    if(/PACK|CURVA|MODULO/.test(norm(r[c.udm]))) {proteger();avisos.push(`Fila ${i+1}: ${sku}; pack excluido.`);continue;}
+    if(norm(r[c.tipo])!=='CALZADO') {proteger();avisos.push(`Fila ${i+1}: ${sku}; accesorio excluido, esta carga es de calzado.`);continue;}
     const codigo=String(r[c.modelo]??'').trim();
     if(!codigo || !sku.startsWith(codigo+'-'))throw new Error(`Crocs fila ${i+1}: SKU y Modelo-Color incompatibles (${sku}).`);
     const us=sku.slice(codigo.length+1),desc=String(r[c.desc]??'').trim();
     const mapped=talleCrocs(us,opciones.permitirDoblesNino);
     const descSize=desc.match(/\s(\d+)$/);
     if(!mapped || mapped.talleWeb!==descSize?.[1]) {
+      proteger();
       pendientes.add(codigo);avisos.push(`Fila ${i+1}: ${sku}; talle ${us} sin equivalencia confirmada con la descripción (${desc}). Modelo pendiente, no se carga.`);continue;
     }
     const hasCost=r[c.costo]!==null && r[c.costo]!==undefined && r[c.costo]!=='';
     if(!hasCost) {
+      proteger();
       pendientes.add(codigo);avisos.push(`Fila ${i+1}: ${sku}; COSTO DESCUENTO vacío. Modelo pendiente, no se carga.`);continue;
     }
     // N ya contiene el costo: no descontar otra vez ni completar desde M.
@@ -52,7 +70,8 @@ export function parseCrocs(rows: unknown[][], opciones: CrocsOpciones = {}) {
   }
   // No crear un modelo incompleto si otro talle todavía necesita una decisión.
   for(const code of pendientes)delete productos[code];
-  return {productos,avisos};
+  const cobertura:CrocsCobertura={modelosPresentes:[...presentes],modelosProtegidos:[...protegidos],identificadoresPresentes:[...identificadores]};
+  return {productos,avisos,cobertura};
 }
 
 export function coincideVarianteCrocs(d:{skuPorTalle?:Record<string,string>},size:string,v:{sku?:string}) {

@@ -1,6 +1,7 @@
 import { coincideVarianteCrocs } from './crocsLogic';
 import { coincideVarianteKappa } from './kappaLogic';
-import { ausenteKappa, codigosKappa, esCalzadoKappa, varianteIndividualKappa } from './kappaCatalogo';
+import { ausenteKappa, codigosKappa, coincideCategoriaKappa, varianteIndividualKappa } from './kappaCatalogo';
+import { ausenteCrocs, codigosCrocs, esCalzadoCrocs, varianteIndividualCrocs } from './crocsCatalogo';
 // ============================================================================
 // ESCRITURA DE STOCK EN SHOPIFY (con simulación / dry-run)
 // ----------------------------------------------------------------------------
@@ -187,7 +188,9 @@ async function getLocationId(name: string): Promise<string | null> {
 
 // PASO 1 — Calcula el plan (no escribe nada).
 export async function planStockWrite(result: SyncResult, config: SyncConfig): Promise<StockPlan> {
-  const kappaCobertura = config.brand === 'kappa' && config.kappaCalzado ? result.kappaCobertura : undefined;
+  const kappaCategoria = config.kappaCalzado ? 'calzado' : 'indumentaria';
+  const kappaCobertura = config.brand === 'kappa' && result.kappaCobertura?.categoria === kappaCategoria ? result.kappaCobertura : undefined;
+  const crocsCobertura = config.brand === 'crocs' ? result.crocsCobertura : undefined;
   const categoria = config.reebokCalzado ? 'calzado' : 'indumentaria';
   const cobertura = config.brand === 'reebok' && result.reebokCobertura?.categoria === categoria &&
     result.reebokCobertura.archivos.length >= (config.reebokCalzado ? 2 : 1) ? result.reebokCobertura : undefined;
@@ -205,7 +208,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
 
   // También traemos los productos que el proveedor YA NO LISTA: a esos les vamos
   // a poner el stock en 0 (no los borramos).
-  const handlesPeligro = ((config.brand === 'reebok' && !cobertura) || (config.brand === 'kappa' && !kappaCobertura) ? [] : result.enPeligro || []).map((p) => p.handle);
+  const handlesPeligro = ((config.brand === 'reebok' && !cobertura) || (config.brand === 'kappa' && !kappaCobertura) || (config.brand === 'crocs' && !crocsCobertura) ? [] : result.enPeligro || []).map((p) => p.handle);
   const tituloPeligro = new Map((result.enPeligro || []).map((p) => [p.handle, p.titulo]));
   const codigoPeligro = new Map((result.enPeligro || []).map((p) => [p.handle, p.codigo || '']));
 
@@ -508,19 +511,18 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     }
   }
 
-  // Kappa Calzado: la hoja CALZADO es el catálogo vigente de esta categoría.
-  // Mantener el barrido separado de las conversiones US/AR de Reebok e iD.
+  // Kappa: cada hoja visible es el catálogo vigente de su propia categoría.
   if (kappaCobertura) {
     for (const { cod, d } of entries) {
       const handle = d.shopifyHandle;
       const live = liveByHandle[handle] || [];
       const tags = tagsByHandle[handle] || '';
       const codes = codigosKappa(tags, live.map(v => String(v.sku || '')));
-      if (!esCalzadoKappa(titleByHandle[handle] || '', tags, vendorByHandle[handle] || '') ||
+      if (!coincideCategoriaKappa(titleByHandle[handle] || '', tags, vendorByHandle[handle] || '', kappaCobertura.categoria) ||
           !codes.length || codes.some(c => c !== cod.toUpperCase() || kappaCobertura.modelosProtegidos.includes(c))) continue;
       for (const v of live) {
         const sku = String(v.sku || '').trim(), talle = String(v.title || '').trim().replace(',', '.');
-        if (!varianteIndividualKappa(sku, talle, codes) ||
+        if (!varianteIndividualKappa(sku, talle, codes, kappaCobertura.categoria) ||
             kappaCobertura.identificadoresPresentes.includes(sku) ||
             Object.keys(d.sizes).some(s => talleMatches(s, talle))) continue;
         const invId = v.inventoryItem?.id;
@@ -529,7 +531,25 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
         if (!invId || !q || !Number.isFinite(Number(q.quantity)) || Number(q.quantity) === 0 || changes.some(c => c.inventoryItemId === invId)) continue;
         changes.push({ handle, title: titleByHandle[handle], talle, sku, code: cod,
           inventoryItemId: invId, current: Number(q.quantity), desired: 0,
-          motivo: 'Este talle no aparece en el Excel vigente de Kappa Calzado' });
+          motivo: `Este talle no aparece en el Excel vigente de Kappa ${config.kappaCalzado?'Calzado':'Indumentaria'}` });
+      }
+    }
+  }
+
+  if (crocsCobertura) {
+    for (const { cod, d } of entries) {
+      const handle=d.shopifyHandle, live=liveByHandle[handle] || [], tags=tagsByHandle[handle] || '';
+      const codes=codigosCrocs(tags,live.map(v=>String(v.sku || '')));
+      if(!esCalzadoCrocs(titleByHandle[handle] || '',tags,vendorByHandle[handle] || '') ||
+        !codes.length || codes.some(c=>c!==cod.toUpperCase() || crocsCobertura.modelosProtegidos.includes(c)))continue;
+      for(const v of live) {
+        const sku=String(v.sku || '').trim(),talle=String(v.title || '').trim();
+        if(!varianteIndividualCrocs(sku,talle,codes) || crocsCobertura.identificadoresPresentes.includes(sku) ||
+          Object.keys(d.sizes).some(s=>talleMatches(s,talle)))continue;
+        const invId=v.inventoryItem?.id, q=v.inventoryItem?.inventoryLevel?.quantities?.find((x:any)=>x.name==='available');
+        if(!invId || !q || !Number.isFinite(Number(q.quantity)) || Number(q.quantity)===0 || changes.some(c=>c.inventoryItemId===invId))continue;
+        changes.push({handle,title:titleByHandle[handle],talle,sku,code:cod,inventoryItemId:invId,current:Number(q.quantity),desired:0,
+          motivo:'Este talle no aparece en el Excel vigente de Crocs Calzado'});
       }
     }
   }
@@ -541,6 +561,8 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     const shopTitle = titleByHandle[handle] || tituloPeligro.get(handle) || handle;
     const kappaCodes = codigosKappa(tagsByHandle[handle] || '', live.map(v => String(v.sku || '')));
     if (kappaCobertura && !ausenteKappa({title:shopTitle,tags:tagsByHandle[handle] || '',vendor:vendorByHandle[handle],variants:{edges:live.map(node=>({node}))}}, kappaCobertura)) continue;
+    const crocsCodes = codigosCrocs(tagsByHandle[handle] || '',live.map(v=>String(v.sku || '')));
+    if(crocsCobertura && !ausenteCrocs({title:shopTitle,tags:tagsByHandle[handle] || '',vendor:vendorByHandle[handle],variants:{edges:live.map(node=>({node}))}},crocsCobertura))continue;
     if (cobertura) {
       const codes = codigosReebok(tagsByHandle[handle] || '', live.map(v => String(v.sku || '')));
       if (!coincideCategoriaReebok(shopTitle, tagsByHandle[handle] || '', cobertura.categoria) || !codes.length ||
@@ -548,7 +570,8 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
           live.some(v => cobertura.identificadoresPresentes.includes(v.sku))) continue;
     }
     for (const v of live) {
-      if (kappaCobertura && !varianteIndividualKappa(String(v.sku || ''), String(v.title || ''), kappaCodes)) continue;
+      if (kappaCobertura && !varianteIndividualKappa(String(v.sku || ''), String(v.title || ''), kappaCodes, kappaCobertura.categoria)) continue;
+      if(crocsCobertura && !varianteIndividualCrocs(String(v.sku || ''),String(v.title || ''),crocsCodes))continue;
       if (!v?.inventoryItem?.id) continue;
       const qEntry = (v.inventoryItem.inventoryLevel?.quantities || []).find((x: any) => x.name === 'available');
       const current = qEntry ? Number(qEntry.quantity) : 0;
@@ -562,7 +585,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
         inventoryItemId: v.inventoryItem.id,
         current,
         desired: 0,
-        motivo: kappaCobertura ? 'El modelo no aparece en el Excel vigente de Kappa Calzado' : cobertura ? 'El modelo no aparece en ninguna de las planillas cargadas' : 'El proveedor ya no lo lista',
+        motivo: kappaCobertura ? `El modelo no aparece en el Excel vigente de Kappa ${config.kappaCalzado?'Calzado':'Indumentaria'}` : crocsCobertura ? 'El modelo no aparece en el Excel vigente de Crocs Calzado' : cobertura ? 'El modelo no aparece en ninguna de las planillas cargadas' : 'El proveedor ya no lo lista',
       });
     }
   }

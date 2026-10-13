@@ -52,17 +52,18 @@ describe('Crocs integrado en sincronización', () => {
     expect(graphql.mock.calls.every(([q])=>!q.includes('mutation'))).toBe(true);
   });
 
-  it('stock y precios requieren SKU exacto, conservan talles y modelos ausentes', async () => {
+  it('actualiza por SKU exacto y propone cero para talles y modelos ausentes identificados', async () => {
     const variant=(sku:string,id:string,title:string)=>({node:{id,title,sku,price:'100',inventoryItem:{id:'i'+id,unitCost:{amount:'50'},inventoryLevel:{quantities:[{name:'available',quantity:9}]}}}});
     const product={id:'p',handle:'crocs',vendor:'Crocs',title:'Calzado Crocs Classic',tags:['C10001-C001'],variants:{edges:[variant('C10001-C001-M8/W10','v','40'),variant('otro','v2','40'),variant('C10001-C001-M9/W11','v3','41')]}};
     const absent={...product,id:'p2',handle:'absent',tags:['C999-C001'],variants:{edges:[variant('C999-C001-M8','v4','40')]}};
     graphql.mockImplementation(async(q:string)=>q.includes('locations(')?locations:{products:{edges:[{node:product},{node:absent}],pageInfo:{hasNextPage:false}}});
     const result=await processFiles(file([headers,row]),null,null,config);
     expect(result.updatesToApply.map(v=>v.variantId)).toEqual(['v']);
-    expect(result.enPeligro).toEqual([]);
+    expect(result.enPeligro.map(p=>p.handle)).toEqual(['absent']);
     const plan=await planStockWrite(result,config);
-    expect(plan.locationId).toBe('loc'); expect(plan.changes).toHaveLength(1);
+    expect(plan.locationId).toBe('loc'); expect(plan.changes).toHaveLength(3);
     expect(plan.changes[0]).toMatchObject({desired:5,inventoryItemId:'iv'});
+    expect(plan.changes.filter(c=>c.desired===0).map(c=>c.inventoryItemId)).toEqual(['iv3','iv4']);
     expect(graphql.mock.calls.every(([q])=>!q.includes('mutation'))).toBe(true);
   });
 
