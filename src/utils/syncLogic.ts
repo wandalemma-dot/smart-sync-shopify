@@ -1,5 +1,6 @@
 import { parseCrocs, coincideVarianteCrocs } from './crocsLogic';
 import { parseKappa, leerKappa, coincideVarianteKappa } from './kappaLogic';
+import { ausenteKappa, codigosKappa, type KappaCobertura } from './kappaCatalogo';
 import * as XLSX from 'xlsx';
 import { escapeCSV, triggerDownload, todayStamp } from './csv';
 import { shopifyGraphQL, mismaSucursal } from './shopify';
@@ -89,6 +90,7 @@ export interface ProductoEnPeligro {
 }
 
 export interface SyncResult {
+  kappaCobertura?: KappaCobertura;
   reebokCobertura?: ReebokCobertura;
   updatesToApply: UpdateAction[];
   missingProducts: MissingProduct[];
@@ -710,6 +712,7 @@ export async function processFiles(
 ): Promise<SyncResult> {
   const alerts: AlertMessage[] = [];
   let reebokCobertura: ReebokCobertura | undefined;
+  let kappaCobertura: KappaCobertura | undefined;
   const excelMap: Record<string, { tablaTalle?: string, sizeConversion?: SizeConversion, wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyTags?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number, costoMargen?: number, usaListaPrecios?: boolean, skuPorTalle?: Record<string, string>, skuProveedorPorTalle?: Record<string, string>, whslDelArchivo?: boolean, unidadesPorPack?: number }> = {};
 
   if (config.brand === 'bloque' && /\.xlsx?$/i.test(providerFile.name)) {
@@ -950,6 +953,10 @@ export async function processFiles(
     for (const message of crocs.avisos) alerts.push({type:'warning',title:'Crocs: revisar',message});
   } else if (config.brand === 'kappa') {
     const kappa=parseKappa(await leerKappa(providerFile,!!config.kappaCalzado),!!config.kappaCalzado,'AR');
+    if(config.kappaCalzado) {
+      kappaCobertura=kappa.cobertura;
+      alerts.push({type:'warning',title:'Lista vigente de Kappa Calzado',message:'Al simular se mostrarán los modelos y talles de calzado ausentes de este Excel para dejarlos en cero únicamente en DISTRINANDO. Cargá la lista completa vigente. Los modelos con packs o filas excluidas quedan protegidos. Revisá antes de confirmar.'});
+    }
     for(const [codigo,p] of Object.entries(kappa.productos)) excelMap[codigo]={wholesale:p.costo,publicPrice:p.precio,costFinal:p.costo,costoMargen:p.costoMargen,title:p.nombre,vendor:'Kappa',sizes:p.sizes,skuPorTalle:p.skuPorTalle,skuProveedorPorTalle:p.skuProveedorPorTalle,artType:p.artType,foundInShopify:false,tablaTalle:p.tablaTalle,sizeConversion:p.sizeConversion};
     alerts.push({type:'info',title:`Kappa: ${Object.keys(kappa.productos).length} modelos`,message:'EAN en SKU y código de barras; códigos originales en etiquetas. Precio Público exacto y costo Mayorista con descuento. Stock disponible en Distrinando. Se excluyen packs y hojas ocultas.'});
     for(const message of kappa.avisos) alerts.push({type:'warning',title:'Kappa: revisar',message});
@@ -1577,10 +1584,11 @@ export async function processFiles(
   const enPeligro: ProductoEnPeligro[] = [];
   // Reebok Calzado habilita ausencias solo con varias listas y cobertura conservadora.
   const marcaConCatalogoCompleto = config.brand === 'converse' || config.brand === 'lecoq';
-  if ((marcaConCatalogoCompleto || reebokCobertura) && !shopifyExportFile && (Object.keys(excelMap).length > 0 || !!reebokCobertura?.modelosPresentes.length)) {
+  if ((marcaConCatalogoCompleto || reebokCobertura || kappaCobertura) && !shopifyExportFile && (Object.keys(excelMap).length > 0 || !!reebokCobertura?.modelosPresentes.length)) {
     for (const prod of shopifyProducts) {
       if (handlesMatcheados.has(prod.handle)) continue;
       if (reebokCobertura && !ausenteReebok(prod, reebokCobertura)) continue;
+      if (kappaCobertura && !ausenteKappa(prod, kappaCobertura)) continue;
       const variantes = prod.variants.edges.map((e: any) => e.node);
       const stock = variantes.reduce((a: number, v: any) => a + (Number(v.inventoryQuantity) || 0), 0);
       if (!variantes.some((v: any) => (Number(v.inventoryQuantity) || 0) !== 0)) continue;
@@ -1590,7 +1598,7 @@ export async function processFiles(
       enPeligro.push({
         handle: prod.handle,
         titulo: prod.title,
-        codigo: cod,
+        codigo: kappaCobertura ? codigosKappa(tagsStr,variantes.map(v=>v.sku))[0] || null : cod,
         stockProveedor: stock,
         talles: variantes.filter((v: any) => (Number(v.inventoryQuantity) || 0) !== 0).map((v: any) => String(v.title)),
       });
@@ -1627,6 +1635,7 @@ export async function processFiles(
 
   return {
     reebokCobertura,
+    kappaCobertura,
     updatesToApply,
     missingProducts,
     enPeligro,

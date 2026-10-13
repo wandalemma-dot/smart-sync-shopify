@@ -1112,3 +1112,9 @@ encontraron así y no se habrían visto de otra forma.
 
 ### Exclusión de nuevas altas por stock — Reebok y Kappa
 - Excluir modelos con exactamente UN talle con stock positivo y un total de 1 a 3 unidades. Dos talles con stock (aunque sumen 2 o 3) se mantienen; un talle con 4+ también. Talles en cero no cuentan como disponibles. Aplica ropa/calzado de ambas marcas, a vista previa, alta API y CSV nuevos. No excluir de excelMap ni de sincronización de productos existentes; no tocar otras marcas.
+
+### Kappa Calzado — ausentes del catálogo (13-oct-2026)
+- Reemplaza la regla de stock parcial solo para Kappa Calzado: la hoja visible CALZADO del archivo cargado es la lista completa vigente. Mostrar modelos ausentes en el resumen y proponer cero para modelos/talles ausentes únicamente en DISTRINANDO, con la simulación y confirmación manual existentes. Desplegar no escribe inventario.
+- Exigir vendor Kappa, identificación positiva de calzado por título/tabla y código proveedor en etiquetas o SKU. Conservar otras marcas, indumentaria y otras sucursales. Releer identificación y stock al simular.
+- Registrar presencia antes de filtrar filas. Proteger modelos con packs, filas excluidas o SKU ausente/incompatible (ambos códigos). No inferir ausencia por un SKU cambiado si el AR está presente. Admitir EAN o SKU proveedor individual; no barrer identificadores desconocidos, packs ni talles no numéricos. Ignorar hojas ocultas. Archivo vacío/inválido bloquea análisis.
+- Probado con Kappa Calzado 40% 006 09-10 (1).xlsx: 360 modelos. Los precios, costos, altas y el comportamiento de Kappa Indumentaria se mantienen.

@@ -463,7 +463,7 @@ export default function App() {
             </div>}
             {config.brand === 'kappa' && <div>
               <p>Kappa: stock en DISTRINANDO SA (Reebok - Kappa). Venta Público exacto, costo Mayorista con descuento. EAN en SKU y código de barras. Packs excluidos; filas repetidas idénticas se toman una vez.</p>
-              {config.kappaCalzado && <p>El talle del Excel ya es argentino: se conserva. La tabla agrega las equivalencias EU y centímetros disponibles.</p>}
+              {config.kappaCalzado && <p>El talle del Excel ya es argentino: se conserva. Cargá la lista completa vigente de calzado: al simular se propondrá cero para los modelos y talles ausentes, solo en DISTRINANDO. Los modelos con packs o filas excluidas quedan para revisión. La indumentaria conserva su stock.</p>}
             </div>}
             {config.brand === 'vart' && (
               <p style={{ fontSize: '0.8rem', color: '#fbbf24', marginTop: '0.4rem' }}>
@@ -520,6 +520,17 @@ export default function App() {
               <p style={{ fontSize: '24px', fontWeight: 'bold', color: '#f59e0b' }}>{result?.missingProducts.length || 0} modelos</p>
             </div>
           </div>
+
+          {result?.kappaCobertura && (
+            <details style={{ marginTop: '20px', padding: '16px', border: '1px solid #f59e0b', borderRadius: '8px' }}>
+              <summary style={{ cursor: 'pointer', color: '#f59e0b', fontWeight: 'bold' }}>Kappa Calzado: modelos ausentes del Excel para revisar ({result.enPeligro.length})</summary>
+              <p>Al simular el stock se mostrarán los talles ausentes con su cantidad actual y el nuevo stock en cero, únicamente en DISTRINANDO. Revisalos antes de confirmar.</p>
+              <div style={{ maxHeight: '260px', overflowY: 'auto' }}>
+                {result.enPeligro.map(p => <p key={p.handle}>{p.codigo} — {p.titulo}</p>)}
+                {!result.enPeligro.length && <p>No se detectaron modelos completos ausentes con stock en DISTRINANDO. La simulación también revisa los talles de los modelos presentes.</p>}
+              </div>
+            </details>
+          )}
 
           {result?.alerts && result.alerts.length > 0 && (
             <div style={{ marginTop: '2rem' }}>

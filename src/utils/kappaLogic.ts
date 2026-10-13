@@ -1,4 +1,5 @@
 import { simplificarColores } from './coloresComerciales';
+import { codigosKappa, type KappaCobertura } from './kappaCatalogo';
 import * as XLSX from 'xlsx';
 import { KAPPA_TABLAS, convertirTalleKappa, type TablaKappa } from './kappaTalles';
 import type { SizeConversion } from './reebokCalzado';
@@ -21,26 +22,33 @@ export function parseKappa(rows: unknown[][], calzado: boolean, sistema: 'EU'|'A
  const stockC=c(calzado?'DISPONIBLE (INMEDIATO)':'DISPONIBLE'),costC=c('MAYORISTA CON DESCUENTO'),priceC=c('PUBLICO'),listaC=c('MAYORISTA UNITARIO'),dtoC=c('DESCUENTO'),generoC=c('GENERO');
  const productos:Record<string,KappaProducto>={},avisos:string[]=[];
  const incompletos=new Set<string>();
+ const presentes=new Set<string>(),protegidos=new Set<string>(),identificadores=new Set<string>();
  const vistos=new Map<string,string>(),eans=new Map<string,string>();
  for(let i=h+1;i<rows.length;i++) {
-  const r=rows[i],sku=String(r[skuC]??'').trim();if(!sku)continue;
-  if(/PACK|CURVA/.test(norm(r[udmC]))) {avisos.push(`Fila ${i+1}: ${sku}; pack excluido (${r[udmC]}).`);continue;}
+  const r=rows[i],sku=String(r[skuC]??'').trim();
+  const codes=codigosKappa(String(r[modeloC]??''),[sku]);
+  codes.forEach(c=>presentes.add(c));
+  identificadores.add(sku);
+  if(r[eanC])identificadores.add(String(r[eanC]).trim());
+  const proteger=()=>codes.forEach(c=>protegidos.add(c));
+  if(!sku){proteger();if(codes.length)avisos.push(`Fila ${i+1}: modelo sin SKU; conserva su stock.`);continue;}
+  if(/PACK|CURVA/.test(norm(r[udmC]))) {proteger();avisos.push(`Fila ${i+1}: ${sku}; pack excluido (${r[udmC]}).`);continue;}
   const codigo=String(r[modeloC]??'').trim(),desc=String(r[descC]??'').trim();
-  if(!codigo || !sku.startsWith(codigo+'-')) {avisos.push(`Fila ${i+1}: ${sku}; SKU y Modelo Color ${codigo} incompatibles, fila excluida.`);continue;}
+  if(!codigo || !sku.startsWith(codigo+'-')) {proteger();avisos.push(`Fila ${i+1}: ${sku}; SKU y Modelo Color ${codigo} incompatibles, fila excluida.`);continue;}
   const original=sku.slice(codigo.length+1).replace(',','.').toUpperCase();
   if(!desc.toUpperCase().endsWith(' '+original))throw new Error(`Kappa ${sku}: talle del SKU y descripción no coinciden.`);
   let talle=original,tabla:TablaKappa|undefined;
   if(calzado) {
-   if(!/^\d+(\.\d+)?$/.test(original) || Number(original)<20 || Number(original)>55) {avisos.push(`${sku}: no es talle individual de calzado.`);continue;}
+   if(!/^\d+(\.\d+)?$/.test(original) || Number(original)<20 || Number(original)>55) {proteger();avisos.push(`${sku}: no es talle individual de calzado.`);continue;}
    tabla=/KIDS|CHILD|NINO|JUNIOR/.test(norm(r[generoC]))?'NINO':'UNISEX';
    const equivalencia=sistema==='EU'?convertirTalleKappa(original,tabla):Object.values(KAPPA_TABLAS[tabla]).find(t=>t.arg===original);
    if(!equivalencia){
     avisos.push(`${sku}: talle ${original} ${sistema} fuera de tabla ${tabla}; ${sistema==='AR'?'se conserva AR, sin JSON automático para este modelo':'fila excluida'}.`);
-    if(sistema==='EU')continue;
+    if(sistema==='EU'){proteger();continue;}
     incompletos.add(codigo);
    }
    talle=equivalencia?.arg ?? original;
-  } else if(!/^(X{0,4}[SML]|[2-6]XL|TU|UNICO)$/.test(original)) {avisos.push(`${sku}: talle de indumentaria sin identificar.`);continue;}
+  } else if(!/^(X{0,4}[SML]|[2-6]XL|TU|UNICO)$/.test(original)) {proteger();avisos.push(`${sku}: talle de indumentaria sin identificar.`);continue;}
   const qty=Number(String(r[stockC]??'').replace(/^\+\s*/,'')),costo=Math.round(Number(r[costC])*100)/100,precio=Number(r[priceC]),lista=Number(r[listaC]),dto=Number(r[dtoC]);
   if(r[stockC]==null || r[stockC]==='' || !Number.isInteger(qty)||qty<0||!Number.isFinite(costo)||costo<=0||!Number.isFinite(precio)||precio<=0||!Number.isFinite(lista)||lista<=0||r[dtoC]==null||r[dtoC]===''||!Number.isFinite(dto)||dto<0||dto>=100) throw new Error(`Kappa ${sku}: stock o precios inválidos.`);
   const costoMargen=lista*(1-dto/100);
@@ -67,7 +75,8 @@ export function parseKappa(rows: unknown[][], calzado: boolean, sistema: 'EU'|'A
     p.nombre = colores.titulo;
     if (colores.pendientes.length) avisos.push(`${p.codigo}: revisar colores sin equivalencia: ${colores.pendientes.join(', ')}.`);
   }
-  return {productos,avisos};
+  const cobertura:KappaCobertura={modelosPresentes:[...presentes],modelosProtegidos:[...protegidos],identificadoresPresentes:[...identificadores]};
+  return {productos,avisos,cobertura};
 }
 export function coincideVarianteKappa(data: {skuPorTalle?:Record<string,string>;skuProveedorPorTalle?:Record<string,string>},size:string,v:{sku?:string}) {
  const sku=String(v.sku||'').trim();return !!sku&&(sku===data.skuPorTalle?.[size]||sku===data.skuProveedorPorTalle?.[size]);

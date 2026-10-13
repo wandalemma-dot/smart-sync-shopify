@@ -1,5 +1,6 @@
 import { coincideVarianteCrocs } from './crocsLogic';
 import { coincideVarianteKappa } from './kappaLogic';
+import { ausenteKappa, codigosKappa, esCalzadoKappa, varianteIndividualKappa } from './kappaCatalogo';
 // ============================================================================
 // ESCRITURA DE STOCK EN SHOPIFY (con simulación / dry-run)
 // ----------------------------------------------------------------------------
@@ -104,6 +105,7 @@ const PRODUCTS_BY_HANDLE = `
           id
           handle
           title
+          vendor
           tags
           options { name }
           variants(first: 100) {
@@ -185,6 +187,7 @@ async function getLocationId(name: string): Promise<string | null> {
 
 // PASO 1 — Calcula el plan (no escribe nada).
 export async function planStockWrite(result: SyncResult, config: SyncConfig): Promise<StockPlan> {
+  const kappaCobertura = config.brand === 'kappa' && config.kappaCalzado ? result.kappaCobertura : undefined;
   const categoria = config.reebokCalzado ? 'calzado' : 'indumentaria';
   const cobertura = config.brand === 'reebok' && result.reebokCobertura?.categoria === categoria &&
     result.reebokCobertura.archivos.length >= (config.reebokCalzado ? 2 : 1) ? result.reebokCobertura : undefined;
@@ -202,7 +205,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
 
   // También traemos los productos que el proveedor YA NO LISTA: a esos les vamos
   // a poner el stock en 0 (no los borramos).
-  const handlesPeligro = (config.brand === 'reebok' && !cobertura ? [] : result.enPeligro || []).map((p) => p.handle);
+  const handlesPeligro = ((config.brand === 'reebok' && !cobertura) || (config.brand === 'kappa' && !kappaCobertura) ? [] : result.enPeligro || []).map((p) => p.handle);
   const tituloPeligro = new Map((result.enPeligro || []).map((p) => [p.handle, p.titulo]));
   const codigoPeligro = new Map((result.enPeligro || []).map((p) => [p.handle, p.codigo || '']));
 
@@ -213,6 +216,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
 
   // Traemos las variantes en vivo (con inventoryItem id y stock actual) por lotes de handles.
   const liveByHandle: Record<string, any[]> = {};
+  const vendorByHandle: Record<string, string> = {};
   const titleByHandle: Record<string, string> = {}; // título REAL de Shopify
   const tagsByHandle: Record<string, string> = {};   // etiquetas (para la tabla de talle)
   const idByHandle: Record<string, string> = {};     // id del producto (para renombrar talles)
@@ -226,6 +230,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     for (const edge of (data?.products?.edges || [])) {
       const p = edge.node;
       liveByHandle[p.handle] = (p.variants?.edges || []).map((e: any) => e.node);
+      vendorByHandle[p.handle] = String(p.vendor || '');
       titleByHandle[p.handle] = String(p.title || '');
       tagsByHandle[p.handle] = Array.isArray(p.tags) ? p.tags.join(', ') : String(p.tags || '');
       idByHandle[p.handle] = String(p.id || '');
@@ -503,11 +508,39 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     }
   }
 
+  // Kappa Calzado: la hoja CALZADO es el catálogo vigente de esta categoría.
+  // Mantener el barrido separado de las conversiones US/AR de Reebok e iD.
+  if (kappaCobertura) {
+    for (const { cod, d } of entries) {
+      const handle = d.shopifyHandle;
+      const live = liveByHandle[handle] || [];
+      const tags = tagsByHandle[handle] || '';
+      const codes = codigosKappa(tags, live.map(v => String(v.sku || '')));
+      if (!esCalzadoKappa(titleByHandle[handle] || '', tags, vendorByHandle[handle] || '') ||
+          !codes.length || codes.some(c => c !== cod.toUpperCase() || kappaCobertura.modelosProtegidos.includes(c))) continue;
+      for (const v of live) {
+        const sku = String(v.sku || '').trim(), talle = String(v.title || '').trim().replace(',', '.');
+        if (!varianteIndividualKappa(sku, talle, codes) ||
+            kappaCobertura.identificadoresPresentes.includes(sku) ||
+            Object.keys(d.sizes).some(s => talleMatches(s, talle))) continue;
+        const invId = v.inventoryItem?.id;
+        const lvl = v.inventoryItem?.inventoryLevel;
+        const q = lvl?.quantities?.find((x: any) => x.name === 'available');
+        if (!invId || !q || !Number.isFinite(Number(q.quantity)) || Number(q.quantity) === 0 || changes.some(c => c.inventoryItemId === invId)) continue;
+        changes.push({ handle, title: titleByHandle[handle], talle, sku, code: cod,
+          inventoryItemId: invId, current: Number(q.quantity), desired: 0,
+          motivo: 'Este talle no aparece en el Excel vigente de Kappa Calzado' });
+      }
+    }
+  }
+
   // El proveedor ya no lista estos productos -> les ponemos el stock en 0.
   // No se borran: solo dejan de estar disponibles para la venta.
   for (const handle of handlesPeligro) {
     const live = liveByHandle[handle] || [];
     const shopTitle = titleByHandle[handle] || tituloPeligro.get(handle) || handle;
+    const kappaCodes = codigosKappa(tagsByHandle[handle] || '', live.map(v => String(v.sku || '')));
+    if (kappaCobertura && !ausenteKappa({title:shopTitle,tags:tagsByHandle[handle] || '',vendor:vendorByHandle[handle],variants:{edges:live.map(node=>({node}))}}, kappaCobertura)) continue;
     if (cobertura) {
       const codes = codigosReebok(tagsByHandle[handle] || '', live.map(v => String(v.sku || '')));
       if (!coincideCategoriaReebok(shopTitle, tagsByHandle[handle] || '', cobertura.categoria) || !codes.length ||
@@ -515,6 +548,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
           live.some(v => cobertura.identificadoresPresentes.includes(v.sku))) continue;
     }
     for (const v of live) {
+      if (kappaCobertura && !varianteIndividualKappa(String(v.sku || ''), String(v.title || ''), kappaCodes)) continue;
       if (!v?.inventoryItem?.id) continue;
       const qEntry = (v.inventoryItem.inventoryLevel?.quantities || []).find((x: any) => x.name === 'available');
       const current = qEntry ? Number(qEntry.quantity) : 0;
@@ -528,7 +562,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
         inventoryItemId: v.inventoryItem.id,
         current,
         desired: 0,
-        motivo: cobertura ? 'El modelo no aparece en ninguna de las planillas cargadas' : 'El proveedor ya no lo lista',
+        motivo: kappaCobertura ? 'El modelo no aparece en el Excel vigente de Kappa Calzado' : cobertura ? 'El modelo no aparece en ninguna de las planillas cargadas' : 'El proveedor ya no lo lista',
       });
     }
   }
