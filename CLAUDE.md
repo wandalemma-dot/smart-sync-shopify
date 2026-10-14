@@ -880,6 +880,8 @@ El proveedor manda talles **US**; en Shopify están en **ARG**.
 
 ### 3.4 Le Coq — TÍTULOS
 
+- Equivalencias confirmadas por Wanda el 14-oct-2026: GLOVES → Guantes; WINDBREAKER → Campera; CREWNECK → Buzo; JOGGER → Pantalón; PUFFER VEST → Chaleco; LEGGINGS → Calzas. Aplicar en títulos y tipo de nuevas altas/CSV de Le Coq. WOMEN se reemplaza por Mujer en el título, conservando modelo y color. No extender automáticamente a otras palabras pendientes ni renombrar existentes. Estas categorías son indumentaria/accesorios: sus talles no llevan la conversión -1 de calzado; Slides/Ojotas sí la conserva.
+
 - 14-oct-2026: SLIDE / SLIDES = **Ojotas**, confirmado por Wanda (CARC SLIDES 2026). Nuevas altas, vista previa y CSV: prefijo `Ojotas Le Coq Sportif` y tipo `Ojotas`. Sigue siendo calzado: conservar proveedor -1 en Shopify / Shopify +1 en pedido, incluso al distinguir columnas 048/48. No renombrar automáticamente productos existentes. Probado con los 7 códigos Slides de PlantillaPedido (10).xlsx; el resto de nombres sin categoría se entrega para revisión, sin adivinar categorías adicionales.
 
 El proveedor manda los nombres en inglés/francés. En la tienda van como

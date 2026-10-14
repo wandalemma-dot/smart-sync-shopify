@@ -366,6 +366,10 @@ export function niceTitle(text: string): string {
 // (que viene en inglés/francés). Ej: "SOCKS" -> Medias, "MAILLOT" -> Camiseta.
 // El orden importa: lo más específico va primero.
 const LECOQ_CATEGORIAS: [RegExp, string][] = [
+  [/\bGLOVES?\b/i, 'Guantes'],
+  [/\bWINDBREAKER\b/i, 'Campera'],
+  [/\bPUFFER\s+VEST\b/i, 'Chaleco'],
+  [/\bLEGGINGS\b/i, 'Calzas'],
   [/\bSOCKS?\b/i, 'Medias'],
   [/\bNECK\b/i, 'Cuello'],
   [/\bPOLO\b/i, 'Chomba'],
@@ -373,10 +377,10 @@ const LECOQ_CATEGORIAS: [RegExp, string][] = [
   [/\bDÉBARDEUR\b|\bDEBARDEUR\b|\bTANK\b/i, 'Musculosa'],
   [/\bTEE\b|\bT-?SHIRT\b/i, 'Remera'],
   [/\bSHORT\b/i, 'Short'],
-  [/\bRAIN PANT\b|\bPANT\b|\bPANTALON\b|\bCHINO\b/i, 'Pantalón'],
+  [/\bRAIN PANT\b|\bPANT\b|\bPANTALON\b|\bCHINO\b|\bJOGGERS?\b/i, 'Pantalón'],
   [/\bPARKA\b/i, 'Parka'],
   [/\bDOUDOUNE\b|\bJACKET\b|\bVESTE\b/i, 'Campera'],
-  [/\bSWEAT\b|\bHOODIE\b|\bCREW\b/i, 'Buzo'],
+  [/\bSWEAT\b|\bHOODIE\b|\bCREW\b|\bCREWNECK\b/i, 'Buzo'],
   [/\bDRESS\b/i, 'Vestido'],
   [/\bBACKPACK\b/i, 'Mochila'],
   [/\bBAG\b/i, 'Bolso'],
@@ -1865,7 +1869,7 @@ export function buildMatrixProducts(result: SyncResult, config: SyncConfig, tabl
       // Formato de la tienda: "{Categoría} Le Coq Sportif {Nombre}".
       const talleEj = Object.keys(prod.sizes)[0] || '';
       const cat = lecoqCategoryWord(prod.title, talleEj);
-      displayTitle = `${cat} Le Coq Sportif ${niceTitle(prod.title)}`.replace(/\s+/g, ' ').trim();
+      displayTitle = `${cat} Le Coq Sportif ${niceTitle(prod.title.replace(/\bWOMEN\b/gi, 'Mujer'))}`.replace(/\s+/g, ' ').trim();
       productType = cat;
     } else if (config.brand === 'ntf') {
       displayTitle = tituloNtf(prod.title);
