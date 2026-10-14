@@ -31,6 +31,32 @@ export interface FilaArmado {
   ordenes: string[]; motivo: string; celda?: string; tope?: boolean;
 }
 export interface ResultadoArmado { filas: FilaArmado[]; avisos: string[]; ordenes: number; generado: string }
+export interface PendientesSucursal { lineas: PendienteId[]; avisos: string[]; etiquetadas: PendienteId[] }
+export interface PedidoMixtoId { orden: string; etiquetado: boolean; lineas: PendienteId[] }
+
+export function marcaPedidoId(vendor: string): 'Converse' | 'Le Coq' | null {
+  return /converse/i.test(vendor) ? 'Converse' : /coq/i.test(vendor) ? 'Le Coq' : null;
+}
+
+// Recibe exclusivamente líneas pendientes de la sucursal iD, antes del cruce
+// con la plantilla: la otra marca puede no estar en el Excel cargado.
+export function detectarPedidosMixtos(lineas: PendienteId[], etiquetadas: PendienteId[] = []): PedidoMixtoId[] {
+  const ordenes = new Map<string, PedidoMixtoId>();
+  const idsEtiquetados = new Set(etiquetadas.map(l => l.id));
+  const vistos = new Set<string>();
+  for (const l of [...lineas, ...etiquetadas]) {
+    if (l.cantidad <= 0 || vistos.has(l.id)) continue;
+    vistos.add(l.id);
+    let orden = ordenes.get(l.orden);
+    if (!orden) { orden = { orden: l.orden, etiquetado: false, lineas: [] }; ordenes.set(l.orden, orden); }
+    orden.lineas.push(l);
+    orden.etiquetado ||= idsEtiquetados.has(l.id);
+  }
+  return [...ordenes.values()].filter(o => {
+    const marcas = new Set(o.lineas.map(l => marcaPedidoId(l.vendor)));
+    return marcas.has('Converse') && marcas.has('Le Coq');
+  });
+}
 
 export function idsOrdenes(text: string): string[] {
   const p = Papa.parse<Record<string, string>>(text.replace(/^\uFEFF/, ''), { header: true, skipEmptyLines: true });
@@ -53,15 +79,16 @@ function cursor(conn: any, anterior: string | null): string | null {
   return next;
 }
 
-export async function leerPendientesId(ids: string[], progreso?: (n: number) => void): Promise<{ lineas: PendienteId[]; avisos: string[] }> {
-  return leerPendientesSucursal(ids, { ubicacion: STOCK_LOCATION.converse, etiqueta: 'iD', excluirTags: ['pedido id', 'solucionar'], estadosPago: ['PAID'], linesQuery: LINES_QUERY }, progreso);
+export async function leerPendientesId(ids: string[], progreso?: (n: number) => void): Promise<PendientesSucursal> {
+  return leerPendientesSucursal(ids, { ubicacion: STOCK_LOCATION.converse, etiqueta: 'iD', excluirTags: ['pedido id', 'solucionar'], estadosPago: ['PAID'], linesQuery: LINES_QUERY, revisarTag: 'pedido id' }, progreso);
 }
 
 export interface FiltroPedidoSucursal {
   ubicacion: string; etiqueta: string; excluirTags: string[]; estadosPago: string[]; linesQuery: string;
+  revisarTag?: string;
 }
 
-export async function leerPendientesSucursal(ids: string[], filtro: FiltroPedidoSucursal, progreso?: (n: number) => void): Promise<{ lineas: PendienteId[]; avisos: string[] }> {
+export async function leerPendientesSucursal(ids: string[], filtro: FiltroPedidoSucursal, progreso?: (n: number) => void): Promise<PendientesSucursal> {
   // Sin este permiso Shopify puede devolver solo una parte de las asignaciones.
   const access: any = await shopifyGraphQL(`query PedidoIdPermisos { currentAppInstallation { accessScopes { handle } } }`);
   const scopes = new Set((access?.currentAppInstallation?.accessScopes || []).map((s: any) => s.handle));
@@ -69,6 +96,7 @@ export async function leerPendientesSucursal(ids: string[], filtro: FiltroPedido
     throw new Error(`Falta habilitar en la conexión de la app el permiso de lectura read_merchant_managed_fulfillment_orders. Sin él no se puede comprobar la sucursal ${filtro.etiqueta}.`);
   }
   const lineas: PendienteId[] = [], avisos: string[] = [];
+  const etiquetadas: PendienteId[] = [];
   const vistos = new Set<string>();
   let n = 0;
   for (const id of [...new Set(ids)]) {
@@ -79,9 +107,11 @@ export async function leerPendientesSucursal(ids: string[], filtro: FiltroPedido
       const o = data?.order;
       if (!o) throw new Error(`No pude leer la orden ${id.split('/').pop()}. Revisá permisos o antigüedad; no se descarga un pedido incompleto.`);
       const tags = (o.tags || []).map((t: string) => t.trim().toLowerCase());
-      if (o.cancelledAt || o.closed || !filtro.estadosPago.includes(o.displayFinancialStatus) || tags.some((t: string) => filtro.excluirTags.includes(t))) {
+      const soloRevision = !!filtro.revisarTag && tags.includes(filtro.revisarTag);
+      if (o.cancelledAt || o.closed || !filtro.estadosPago.includes(o.displayFinancialStatus) || tags.some((t: string) => filtro.excluirTags.includes(t) && t !== filtro.revisarTag)) {
         avisos.push(`${o.name}: excluida por estar cancelada/cerrada, estado de pago ${o.displayFinancialStatus} o etiqueta ${filtro.excluirTags.join('/')}.`); break;
       }
+      if (soloRevision && !after) avisos.push(`${o.name}: excluida del Excel por etiqueta «${filtro.revisarTag}». Sus pendientes de iD se consultan solo para advertir pedidos mixtos; revisá manualmente lo ya comprado antes de cambiar la etiqueta.`);
       const conn = o.fulfillmentOrders;
       const next = cursor(conn, after);
       for (const fo of conn.nodes) {
@@ -101,7 +131,7 @@ export async function leerPendientesSucursal(ids: string[], filtro: FiltroPedido
             const l = item.lineItem;
             if (!l) throw new Error('Shopify no devolvió el artículo pendiente completo.');
             const opciones = (l.variant?.selectedOptions || []).filter((v: any) => /^(talle|talla|size)$/i.test(v.name.trim()));
-            lineas.push({ orden: o.name, id: item.id, titulo: l.title, sku: l.sku || '', talle: opciones.length === 1 ? opciones[0].value : l.variantTitle || '', cantidad: item.remainingQuantity, tags: l.product?.tags || [], vendor: l.product?.vendor || '', barcode: l.variant?.barcode || '', variantId: l.variant?.id });
+            (soloRevision ? etiquetadas : lineas).push({ orden: o.name, id: item.id, titulo: l.title, sku: l.sku || '', talle: opciones.length === 1 ? opciones[0].value : l.variantTitle || '', cantidad: item.remainingQuantity, tags: l.product?.tags || [], vendor: l.product?.vendor || '', barcode: l.variant?.barcode || '', variantId: l.variant?.id });
           }
           page = siguiente;
         } while (page);
@@ -111,7 +141,7 @@ export async function leerPendientesSucursal(ids: string[], filtro: FiltroPedido
     } while (after);
     progreso?.(++n);
   }
-  return { lineas, avisos };
+  return { lineas, avisos, etiquetadas };
 }
 
 export function leerPlantillaId(original: Uint8Array): PlantillaId {
@@ -175,9 +205,11 @@ function celdasLeCoq(articulo: ArticuloPedido): CeldaPedido[] {
   });
 }
 
-export function cruzarPedido(lineas: PendienteId[], plantilla: PlantillaId, avisos: string[] = [], ordenes = 0): ResultadoArmado {
+export function cruzarPedido(lineas: PendienteId[], plantilla: PlantillaId, avisos: string[] = [], ordenes = 0, omitidas: string[] = []): ResultadoArmado {
   const groups = new Map<string, FilaArmado>();
+  const excluidas = new Set(omitidas);
   for (const l of lineas) {
+    if (excluidas.has(l.id)) continue;
     const sku = l.sku.trim().toUpperCase();
     const tags = l.tags.map(t => t.trim().toUpperCase());
     const candidatos = plantilla.articulos.filter(a => tags.includes(a.codigo) || sku === a.codigo || sku.startsWith(`${a.codigo}-`));

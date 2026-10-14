@@ -84,7 +84,7 @@ describe('lectura de Shopify', () => {
     expect(api.mock.calls.every(([q]) => !q.includes('mutation'))).toBe(true);
   });
   it.each([{ tags: ['pedido id'] }, { tags: ['solucionar'] }, { cancelledAt: 'date' }, { closed: true }, { displayFinancialStatus: 'REFUNDED' }])('excluye órdenes fuera del filtro %j', async patch => {
-    api.mockImplementation(async q => q.includes('PedidoIdPermisos') ? { currentAppInstallation: { accessScopes: [{ handle: 'read_merchant_managed_fulfillment_orders' }] } } : { order: { name: '#1', tags: [], displayFinancialStatus: 'PAID', ...patch } });
+    api.mockImplementation(async q => q.includes('PedidoIdPermisos') ? { currentAppInstallation: { accessScopes: [{ handle: 'read_merchant_managed_fulfillment_orders' }] } } : { order: { name: '#1', tags: [], displayFinancialStatus: 'PAID', fulfillmentOrders: conn([]), ...patch } });
     expect((await leerPendientesId(['id'])).lineas).toHaveLength(0);
   });
 });
