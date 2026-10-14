@@ -880,6 +880,8 @@ El proveedor manda talles **US**; en Shopify están en **ARG**.
 
 ### 3.4 Le Coq — TÍTULOS
 
+- 14-oct-2026: SLIDE / SLIDES = **Ojotas**, confirmado por Wanda (CARC SLIDES 2026). Nuevas altas, vista previa y CSV: prefijo `Ojotas Le Coq Sportif` y tipo `Ojotas`. Sigue siendo calzado: conservar proveedor -1 en Shopify / Shopify +1 en pedido, incluso al distinguir columnas 048/48. No renombrar automáticamente productos existentes. Probado con los 7 códigos Slides de PlantillaPedido (10).xlsx; el resto de nombres sin categoría se entrega para revisión, sin adivinar categorías adicionales.
+
 El proveedor manda los nombres en inglés/francés. En la tienda van como
 **`{Categoría} Le Coq Sportif {Nombre}`**. Mapeo en `lecoqCategoryWord()`:
 

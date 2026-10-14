@@ -381,6 +381,7 @@ const LECOQ_CATEGORIAS: [RegExp, string][] = [
   [/\bBACKPACK\b/i, 'Mochila'],
   [/\bBAG\b/i, 'Bolso'],
   [/\bCAP\b|\bHAT\b/i, 'Gorra'],
+  [/\bSLIDES?\b|\bOJOTAS?\b/i, 'Ojotas'],
   [/\bRUNNING\b|\bSNEAKER\b|\bSTAR\b|\bCOURT\b/i, 'Zapatillas'],
 ];
 
@@ -426,7 +427,7 @@ export function esCalzadoLeCoq(nombreProducto: string | undefined, talle: string
   const n = parseFloat(s.replace(',', '.'));
   if (isNaN(n) || n < 30) return false;             // medias (1, 2) y demás numéricos chicos
   const cat = lecoqCategoryWord(String(nombreProducto ?? ''));
-  return cat === '' || cat === 'Zapatillas';        // '' = no lo reconocimos -> calzado
+  return cat === '' || cat === 'Zapatillas' || cat === 'Ojotas'; // Ojotas también conserva la conversión de calzado.
 }
 
 // LE COQ CALZADO: el talle de Shopify es UNO MENOS que el del Excel del
