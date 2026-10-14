@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { idsOrdenes, leerPendientesId, leerPlantillaId, cruzarPedido, generarExcelPedido, detectarPedidosMixtos, marcaPedidoId } from './utils/pedidoId';
 import type { PlantillaId, PendientesSucursal } from './utils/pedidoId';
+import ExclusionPedidoId from './ExclusionPedidoId';
 
 export default function PedidoId() {
   const [csv, setCsv] = useState<File | null>(null);
@@ -46,6 +47,10 @@ export default function PedidoId() {
   const filas = resultado?.filas || [];
   const faltantes = filas.filter(f => f.faltante > 0 || f.motivo);
   const cantidad = filas.reduce((n, f) => n + f.pedir, 0);
+  const exclusiones = pendientes?.exclusiones || [];
+  const ordenesExcluidas = new Set(exclusiones.map(e => e.orden)).size;
+  const avisosEnTabla = new Set(exclusiones.map(e => e.aviso));
+  const otrosAvisos = (resultado?.avisos || []).filter(a => !avisosEnTabla.has(a));
   return <section className="glass-panel" style={{ padding: '1.5rem', border: '1px solid #6366f1' }}>
     <h2 style={{ color: '#a5b4fc', marginTop: 0 }}>📋 Armado de pedido iD</h2>
     <p>Órdenes pendientes → revisión por artículo y talle → Excel de iD completo.</p>
@@ -63,7 +68,7 @@ export default function PedidoId() {
     <p role="status">{estado}</p>
     {error && <p role="alert" style={{ color: '#fda4af', whiteSpace: 'pre-wrap' }}>{error}</p>}
     {resultado && <>
-      <h3>{resultado.ordenes} órdenes consultadas · {cantidad} unidades de compra propuestas · {faltantes.length} renglones con faltantes o revisión</h3>
+      <h3>{resultado.ordenes} órdenes consultadas · {cantidad} unidades de compra propuestas · {faltantes.length} renglones con faltantes o revisión · {ordenesExcluidas} órdenes con exclusiones</h3>
       {mixtos.length > 0 && <div style={{ background: 'rgba(168,85,247,.17)', border: '1px solid #c084fc', borderRadius: 8, padding: 16, marginBottom: 16 }}>
         <h3 style={{ color: '#e9d5ff', marginTop: 0 }}>Pedidos mixtos: Converse + Le Coq ({mixtos.length})</h3>
         <p>El violeta señala órdenes con pendientes de ambas marcas en iD. El amarillo indica faltantes o problemas de coincidencia. Un pedido mixto también puede tener faltantes; el estado de cada artículo sigue visible abajo.</p>
@@ -88,15 +93,16 @@ export default function PedidoId() {
       {plantilla?.previas ? <p style={{ color: '#fcd34d' }}>La plantilla tenía {plantilla.previas} cantidades cargadas. La descarga las reemplaza por este pedido nuevo; no las suma.</p> : null}
       {faltantes.length > 0 && <p role="alert" style={{ color: '#fda4af', fontWeight: 'bold' }}>⚠ Hay artículos que no se pueden cubrir por completo. Revisá los renglones señalados y sus órdenes antes de descargar.</p>}
       <p>En packs, «Pedir» y «Disponible» son packs; «Necesitás» y «Faltan» son pares. +50 se toma como disponibilidad máxima de 50 en esta propuesta.</p>
+      {exclusiones.length > 0 && <p style={{ color: '#fbcfe8' }}>Las órdenes con exclusiones aparecen primero, en rosa, dentro de esta misma lista. Podés analizarlas por separado para ver sus artículos y motivos. Su revisión no agrega cantidades a la compra.</p>}
       <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.85rem' }}>
         <thead><tr>{['Artículo / código', 'Talle tienda → iD', 'Órdenes', 'Necesitás', 'Disponible', 'Pedir', 'Faltan', 'Estado'].map(t => <th key={t} style={{ textAlign: 'left', padding: 10 }}>{t}</th>)}</tr></thead>
-        <tbody>{filas.map((f, i) => <tr key={i} style={{ background: f.ordenes.some(o => ordenesMixtas.has(o)) ? 'rgba(168,85,247,.17)' : f.motivo ? 'rgba(245,158,11,.15)' : 'transparent', borderTop: '1px solid #475569' }}>
+        <tbody>{plantilla && exclusiones.map(e => <ExclusionPedidoId key={e.aviso} exclusion={e} plantilla={plantilla} />)}{filas.map((f, i) => <tr key={i} style={{ background: f.ordenes.some(o => ordenesMixtas.has(o)) ? 'rgba(168,85,247,.17)' : f.motivo ? 'rgba(245,158,11,.15)' : 'transparent', borderTop: '1px solid #475569' }}>
           <td style={{ padding: 10 }}>{f.titulo}<br/><strong>{f.codigo}</strong>{f.pack > 1 && <div>Pack ×{f.pack} · sobrante previsto: {f.excedente} pares</div>}</td>
           <td>{f.talle || 'Único'} → {f.talleProveedor}</td><td>{f.ordenes.map((o, j) => <span key={o}>{j > 0 && ', '}{o}{ordenesMixtas.has(o) && <strong style={{ color: '#e9d5ff' }}> (mixto)</strong>}</span>)}</td><td>{f.necesaria}</td><td>{f.tope ? '+' : ''}{f.disponible}</td><td><strong>{f.pedir}</strong></td><td>{f.faltante}</td><td style={{ color: f.motivo ? '#fcd34d' : undefined }}>{f.motivo || 'Listo para pedir'}</td>
         </tr>)}</tbody>
       </table></div>
-      {!filas.length && <p>No hay artículos pendientes de iD para armar con estas órdenes. Revisá también los avisos.</p>}
-      {resultado.avisos.length > 0 && <details open><summary>Avisos de órdenes ({resultado.avisos.length})</summary><ul>{resultado.avisos.map((a, i) => <li key={i}>{a}</li>)}</ul></details>}
+      {!filas.length && <p>No hay artículos incluidos en esta compra. Revisá los motivos y el análisis separado de las órdenes excluidas.</p>}
+      {otrosAvisos.length > 0 && <details open><summary>Avisos de órdenes ({otrosAvisos.length})</summary><ul>{otrosAvisos.map((a, i) => <li key={i}>{a}</li>)}</ul></details>}
       <label style={{ display: 'block', margin: '20px 0' }}><input type="checkbox" checked={revisado} onChange={e => setRevisado(e.target.checked)} /> Revisé cantidades, packs, talles, faltantes y pedidos mixtos. Descargar solo lo que figura en «Pedir».</label>
       <button className="btn-primary" style={{ background: '#6366f1' }} disabled={!revisado || !cantidad} onClick={descargar}>Descargar plantilla de pedido iD</button>
       <p style={{ opacity: .7 }}>Revisá el Excel antes de subirlo al proveedor. Descargarlo no etiqueta las órdenes como «pedido id»; repetir el proceso podría repetir el mismo pedido.</p>

@@ -31,8 +31,24 @@ export interface FilaArmado {
   ordenes: string[]; motivo: string; celda?: string; tope?: boolean;
 }
 export interface ResultadoArmado { filas: FilaArmado[]; avisos: string[]; ordenes: number; generado: string }
-export interface PendientesSucursal { lineas: PendienteId[]; avisos: string[]; etiquetadas: PendienteId[] }
+export interface ExclusionPedido { ordenId: string; orden: string; pago: string; motivo: string; aviso: string; alcance: 'orden' | 'preparacion' }
+export interface PendientesSucursal { lineas: PendienteId[]; avisos: string[]; etiquetadas: PendienteId[]; exclusiones: ExclusionPedido[] }
 export interface PedidoMixtoId { orden: string; etiquetado: boolean; lineas: PendienteId[] }
+
+export function estadoPagoPedido(estado: string): string {
+  const nombres: Record<string, string> = { PAID: 'Pagado', PENDING: 'Pago pendiente', AUTHORIZED: 'Autorizado', PARTIALLY_PAID: 'Pagado parcialmente', PARTIALLY_REFUNDED: 'Reembolsado parcialmente', REFUNDED: 'Reembolsado', VOIDED: 'Pago anulado', EXPIRED: 'Pago vencido' };
+  return nombres[estado] || estado || 'Estado de pago no informado';
+}
+
+export function motivosExclusionOrden(o: { cancelledAt?: string | null; closed?: boolean; displayFinancialStatus: string; tags?: string[] }, filtro: Pick<FiltroPedidoSucursal, 'estadosPago' | 'excluirTags'>): string[] {
+  const motivos: string[] = [];
+  if (o.cancelledAt) motivos.push('Orden cancelada');
+  if (o.closed) motivos.push('Orden archivada/cerrada');
+  if (!filtro.estadosPago.includes(o.displayFinancialStatus)) motivos.push(`Estado de pago no admitido para esta compra: ${estadoPagoPedido(o.displayFinancialStatus)}`);
+  const tags = new Set((o.tags || []).map(t => t.trim().toLowerCase()));
+  for (const tag of filtro.excluirTags) if (tags.has(tag)) motivos.push(`Etiqueta «${tag}»`);
+  return motivos;
+}
 
 export function marcaPedidoId(vendor: string): 'Converse' | 'Le Coq' | null {
   return /converse/i.test(vendor) ? 'Converse' : /coq/i.test(vendor) ? 'Le Coq' : null;
@@ -83,12 +99,19 @@ export async function leerPendientesId(ids: string[], progreso?: (n: number) => 
   return leerPendientesSucursal(ids, { ubicacion: STOCK_LOCATION.converse, etiqueta: 'iD', excluirTags: ['pedido id', 'solucionar'], estadosPago: ['PAID'], linesQuery: LINES_QUERY, revisarTag: 'pedido id' }, progreso);
 }
 
+// Revisión solicitada expresamente desde una orden excluida. Devuelve un
+// diagnóstico independiente: nunca se une a las líneas del Excel principal.
+export async function analizarExclusionId(ordenId: string, plantilla: PlantillaId): Promise<ResultadoArmado> {
+  const revision = await leerPendientesSucursal([ordenId], { ubicacion: STOCK_LOCATION.converse, etiqueta: 'iD', excluirTags: ['pedido id', 'solucionar'], estadosPago: ['PAID'], linesQuery: LINES_QUERY }, undefined, true);
+  return cruzarPedido(revision.lineas, plantilla, revision.avisos, 1);
+}
+
 export interface FiltroPedidoSucursal {
   ubicacion: string; etiqueta: string; excluirTags: string[]; estadosPago: string[]; linesQuery: string;
   revisarTag?: string;
 }
 
-export async function leerPendientesSucursal(ids: string[], filtro: FiltroPedidoSucursal, progreso?: (n: number) => void): Promise<PendientesSucursal> {
+export async function leerPendientesSucursal(ids: string[], filtro: FiltroPedidoSucursal, progreso?: (n: number) => void, soloDiagnostico = false): Promise<PendientesSucursal> {
   // Sin este permiso Shopify puede devolver solo una parte de las asignaciones.
   const access: any = await shopifyGraphQL(`query PedidoIdPermisos { currentAppInstallation { accessScopes { handle } } }`);
   const scopes = new Set((access?.currentAppInstallation?.accessScopes || []).map((s: any) => s.handle));
@@ -97,6 +120,13 @@ export async function leerPendientesSucursal(ids: string[], filtro: FiltroPedido
   }
   const lineas: PendienteId[] = [], avisos: string[] = [];
   const etiquetadas: PendienteId[] = [];
+  const exclusiones: ExclusionPedido[] = [];
+  function excluir(ordenId: string, orden: string, pago: string, motivo: string, alcance: 'orden' | 'preparacion' = 'orden') {
+    const aviso = `${orden}: ${alcance === 'orden' ? 'excluida del Excel' : 'preparación excluida del Excel'}. ${motivo}. Pago: ${estadoPagoPedido(pago)}.`;
+    if (exclusiones.some(e => e.aviso === aviso)) return;
+    exclusiones.push({ ordenId, orden, pago: estadoPagoPedido(pago), motivo, aviso, alcance });
+    avisos.push(aviso);
+  }
   const vistos = new Set<string>();
   let n = 0;
   for (const id of [...new Set(ids)]) {
@@ -107,17 +137,18 @@ export async function leerPendientesSucursal(ids: string[], filtro: FiltroPedido
       const o = data?.order;
       if (!o) throw new Error(`No pude leer la orden ${id.split('/').pop()}. Revisá permisos o antigüedad; no se descarga un pedido incompleto.`);
       const tags = (o.tags || []).map((t: string) => t.trim().toLowerCase());
-      const soloRevision = !!filtro.revisarTag && tags.includes(filtro.revisarTag);
+      const soloRevision = !soloDiagnostico && !!filtro.revisarTag && tags.includes(filtro.revisarTag);
       if (o.cancelledAt || o.closed || !filtro.estadosPago.includes(o.displayFinancialStatus) || tags.some((t: string) => filtro.excluirTags.includes(t) && t !== filtro.revisarTag)) {
-        avisos.push(`${o.name}: excluida por estar cancelada/cerrada, estado de pago ${o.displayFinancialStatus} o etiqueta ${filtro.excluirTags.join('/')}.`); break;
+        excluir(id, o.name, o.displayFinancialStatus, motivosExclusionOrden(o, filtro).join(' · '));
+        if (!soloDiagnostico) break;
       }
-      if (soloRevision && !after) avisos.push(`${o.name}: excluida del Excel por etiqueta «${filtro.revisarTag}». Sus pendientes de iD se consultan solo para advertir pedidos mixtos; revisá manualmente lo ya comprado antes de cambiar la etiqueta.`);
+      if (soloRevision && !after) excluir(id, o.name, o.displayFinancialStatus, `Etiqueta «${filtro.revisarTag}»; revisar lo ya comprado antes de cambiarla`);
       const conn = o.fulfillmentOrders;
       const next = cursor(conn, after);
       for (const fo of conn.nodes) {
         if (!mismaSucursal(fo.assignedLocation?.name, filtro.ubicacion)) continue;
         idEncontrado = true;
-        if (!['OPEN', 'IN_PROGRESS'].includes(fo.status)) { avisos.push(`${o.name}: preparación de ${filtro.etiqueta} en estado ${fo.status}; revisar, no incluida.`); continue; }
+        if (!['OPEN', 'IN_PROGRESS'].includes(fo.status)) { excluir(id, o.name, o.displayFinancialStatus, `Preparación de ${filtro.etiqueta} en estado ${fo.status}; esta preparación no se incluye`, 'preparacion'); continue; }
         let page: string | null = null;
         do {
           const d: any = await shopifyGraphQL(filtro.linesQuery, { id: fo.id, after: page });
@@ -137,11 +168,11 @@ export async function leerPendientesSucursal(ids: string[], filtro: FiltroPedido
         } while (page);
       }
       after = next;
-      if (!after && !idEncontrado) avisos.push(`${o.name}: sin preparación visible asignada a ${filtro.etiqueta}; no incluida.`);
+      if (!after && !idEncontrado) excluir(id, o.name, o.displayFinancialStatus, `Sin preparación visible asignada a ${filtro.etiqueta}`);
     } while (after);
     progreso?.(++n);
   }
-  return { lineas, avisos, etiquetadas };
+  return { lineas, avisos, etiquetadas, exclusiones };
 }
 
 export function leerPlantillaId(original: Uint8Array): PlantillaId {
