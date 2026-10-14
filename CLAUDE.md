@@ -185,6 +185,9 @@ Tiene que servir para **todos** los proveedores.
 
 ### Armado de pedido iD (24-sep-2026)
 
+- Corrección 14-oct-2026: la plantilla Le Coq incluye columnas numéricas distintas para calzado (`044`, `046`, `048`, `050`) y ropa (`44`, `46`, `48`, `50`). Antes de normalizar, distinguirlas por categoría usando la regla existente esCalzadoLeCoq: calzado usa la columna con cero inicial y ropa la otra cuando ambas existen. No resolver por disponibilidad ni elegir la primera: el guion de la columna correcta sigue siendo sin stock. Duplicados reales siguen pendientes; una única columna mantiene compatibilidad. Se conserva la regla calzado Shopify +1 para pedir (43→044, 45→046, 47→048, 49→050), no +1,5. Converse mantiene sus tablas y ropa/letras no se convierten.
+- La referencia del artículo es siempre el código exacto de etiquetas/SKU y el talle; diferencias de nombre comercial no impiden el cruce. El nombre del proveedor solo clasifica calzado/ropa, no vincula productos. Reproducción con PlantillaPedido (9).xlsx: FLY NET PRO LFO0125241, VELOCE ACTION LFN9924029, STRIDER LFO0125230 y SOUNDBREAKER LFO0125222. Tests pedidoIdLeCoq.test.ts, incluyendo exportación a la celda original y preservación del ZIP; fixture local opcional PEDIDO_ID_LECOQ_TEMPLATE. Sin cambios a Shopify ni a los filtros de órdenes/sucursal.
+
 - PlantillaPedido (33) usa etiquetas XML con prefijo `x:` (x:sheet, x:c, x:row, x:f, x:v). Leer y editar ambos formatos con/sin prefijo, conservar namespace al insertar cantidades y calcPr. El fallo «No se pudo ubicar la hoja original» era una búsqueda que solo aceptaba sheet sin prefijo. Cubrir lectura, cantidades previas, celdas omitidas y cachés de fórmulas; verificar preservación de imágenes/estilos con plantilla real.
 
 - Pestaña nueva `PedidoId.tsx`, colores habituales (Wanda corrigió la transcripción: NO pidió rosado). Reposición anterior se conserva aparte.

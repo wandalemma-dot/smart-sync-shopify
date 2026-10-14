@@ -3,7 +3,7 @@ import * as XLSX from 'xlsx';
 import { unzipSync, zipSync, strFromU8, strToU8 } from 'fflate';
 import { shopifyGraphQL, mismaSucursal } from './shopify';
 import { normalizarTalle } from './plantillaPedido';
-import { converseTablaInfo, talleMatches, talleShopifyLeCoq, STOCK_LOCATION } from './syncLogic';
+import { converseTablaInfo, esCalzadoLeCoq, talleMatches, talleShopifyLeCoq, STOCK_LOCATION } from './syncLogic';
 import { unidadesPorPackId } from './packsId';
 import { extraerCodigo } from './reposicionLogic';
 
@@ -161,6 +161,20 @@ export function leerPlantillaId(original: Uint8Array): PlantillaId {
   return { original, articulos, sheetPath, limpiar, previas };
 }
 
+function celdasLeCoq(articulo: ArticuloPedido): CeldaPedido[] {
+  // La misma hoja trae 048 (calzado) y 48 (ropa). Normalizarlas antes de
+  // distinguir la categoría producía dos coincidencias y descartaba el pedido.
+  // Elegir por encabezado, nunca por stock: un guion sigue siendo agotado.
+  return articulo.celdas.filter(c => {
+    if (!/^\d+$/.test(c.raw) || Number(c.raw) < 30) return true;
+    const conCero = c.raw.startsWith('0');
+    const tieneOtraCategoria = articulo.celdas.some(otra =>
+      /^\d+$/.test(otra.raw) && Number(otra.raw) === Number(c.raw) && otra.raw.startsWith('0') !== conCero);
+    if (!tieneOtraCategoria) return true;
+    return conCero === esCalzadoLeCoq(articulo.nombre, normalizarTalle(c.raw, 'lecoq'));
+  });
+}
+
 export function cruzarPedido(lineas: PendienteId[], plantilla: PlantillaId, avisos: string[] = [], ordenes = 0): ResultadoArmado {
   const groups = new Map<string, FilaArmado>();
   for (const l of lineas) {
@@ -179,7 +193,7 @@ export function cruzarPedido(lineas: PendienteId[], plantilla: PlantillaId, avis
         if (info.origen === 'default') { motivo = 'Falta confirmar la tabla de talle Converse.'; matches = []; }
         else matches = a.celdas.filter(c => talleMatches(info.tabla[normalizarTalle(c.raw, marca)] ?? '__sin_equivalencia__', l.talle));
       } else {
-        matches = a.celdas.filter(c => {
+        matches = (marca === 'lecoq' ? celdasLeCoq(a) : a.celdas).filter(c => {
           const size = normalizarTalle(c.raw, marca);
           return talleMatches(marca === 'lecoq' ? talleShopifyLeCoq(size, a.nombre) : size, l.talle);
         });
