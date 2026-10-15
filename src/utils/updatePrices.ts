@@ -96,17 +96,28 @@ export async function aplicarPrecios(
     }).filter((v) => v.price !== undefined || v.inventoryItem !== undefined);
     if (variants.length === 0) continue;
 
+    const porVariante = new Map<string, typeof variants[number]>();
+    let conflicto = false;
+    for (const v of variants) {
+      const anterior = porVariante.get(v.id);
+      if (anterior && JSON.stringify(anterior) !== JSON.stringify(v)) conflicto = true;
+      porVariante.set(v.id, v);
+    }
+    const unicas = [...porVariante.values()];
+
     try {
-      const data = await shopifyGraphQL<any>(BULK_UPDATE, { productId, variants });
-      const ue = data?.productVariantsBulkUpdate?.userErrors || [];
+      if (conflicto) throw new Error('La misma variante tiene precios o costos contradictorios. Volvé a analizar antes de aplicar.');
+      const data = await shopifyGraphQL<any>(BULK_UPDATE, { productId, variants: unicas });
+      if (!Array.isArray(data?.productVariantsBulkUpdate?.userErrors)) throw new Error('Shopify no confirmó la actualización. Volvé a analizar antes de reintentar.');
+      const ue = data.productVariantsBulkUpdate.userErrors;
       if (ue.length) {
-        fallidas += lista.length;
+        fallidas += unicas.length;
         errores.push(`${lista[0].title || productId}: ${ue.map((e: any) => e.message).join('; ')}`);
       } else {
-        actualizadas += lista.length;
+        actualizadas += unicas.length;
       }
     } catch (e: any) {
-      fallidas += lista.length;
+      fallidas += unicas.length;
       errores.push(`${lista[0].title || productId}: ${e?.message || 'error'}`);
     }
     hechas += lista.length;

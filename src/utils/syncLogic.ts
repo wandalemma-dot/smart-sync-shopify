@@ -324,6 +324,24 @@ export function canonName(slug: string): string {
   return slug.split('-').map(tok => COLOR_SYNONYMS[tok] || tok).join('-');
 }
 
+export function codigoOrchard(titulo: string, modelos: Record<string, { descCod?: string; artType?: string }>): string | undefined {
+  const nombre = `-${canonName(slugify(titulo))}-`;
+  const contiene = (texto: string, parte: string) => !!parte && `-${texto}-`.includes(`-${parte}-`);
+  const candidatos = Object.entries(modelos).filter(([, p]) =>
+    nombre.includes('-orchard-') && !!p.artType && nombre.includes(`-${p.artType}-`) &&
+    !!p.descCod && nombre.includes(`-${canonName(p.descCod)}-`));
+  if (!candidatos.length) return undefined;
+  // Un modelo completo (No More Tears Washed) prevalece sobre su base,
+  // pero dos nombres independientes en el mismo título requieren revisión.
+  candidatos.sort((a, b) => (b[1].descCod?.length || 0) - (a[1].descCod?.length || 0));
+  const [codigo, mejor] = candidatos[0];
+  if (candidatos.slice(1).some(([, p]) => p.artType !== mejor.artType ||
+    canonName(p.descCod!) === canonName(mejor.descCod!) || !contiene(canonName(mejor.descCod!), canonName(p.descCod!)))) {
+    throw new Error(`Orchard: ${titulo} coincide con varios modelos del Excel. Revisá sus nombres antes de sincronizar.`);
+  }
+  return codigo;
+}
+
 // Traduce nombres de colores del inglés al español dentro de un texto.
 // Las frases de varias palabras (ej "army green") van primero.
 const COLOR_ES: [RegExp, string][] = [
@@ -1423,6 +1441,7 @@ export async function processFiles(
   // Mapear Shopify contra el ExcelMap
   for (const prod of shopifyProducts) {
     const tags = String(prod.tags || '').toLowerCase();
+    const orchardCodigo = config.brand === 'orchard' ? codigoOrchard(prod.title, excelMap) : undefined;
     
     for (const [cod, provData] of Object.entries(excelMap)) {
       let match = false;
@@ -1434,13 +1453,7 @@ export async function processFiles(
          // Comparamos contra el nombre del Excel del proveedor, exigiendo que
          // el título contenga la marca ("orchard"), el tipo (remera/buzo/…) y el
          // nombre. Canonizamos colores EN/ES para que "Black" ↔ "Negro" coincidan.
-         const titleCanon = canonName(slugify(prod.title));
-         const dCod = canonName(provData.descCod || '');
-         const aType = provData.artType || '';
-         match = !!dCod
-           && titleCanon.includes('orchard')
-           && (!aType || titleCanon.includes(aType))
-           && titleCanon.includes(dCod);
+         match = cod === orchardCodigo;
       } else if (config.brand === 'ntf' || config.brand === 'reebok' || config.brand === 'kappa' || config.brand === 'crocs') {
          const codigo = cod.toLowerCase();
          match = tags.split(',').some(t => t.trim() === codigo)
