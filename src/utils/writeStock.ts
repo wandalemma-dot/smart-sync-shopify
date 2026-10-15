@@ -390,7 +390,8 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
         conversionDudosa.add(handle);
         const sku = String(d.skuPorTalle?.[size] || '');
         const skuProveedor = String(d.skuProveedorPorTalle?.[size] || sku);
-        const motivoNoCrear = config.brand === 'reebok'
+        const altaConCodigo = config.brand === 'reebok' || (config.brand === 'kappa' && !config.kappaCalzado);
+        const motivoNoCrear = altaConCodigo
           ? !idByHandle[handle] ? 'No se pudo leer el producto en Shopify.'
           : opcionesPorHandle[handle] !== 1 ? 'El producto tiene varias opciones o no se pudo leer su opción de talle.'
           : live.length >= 100 ? 'Revisar el catálogo completo de variantes de este producto.'
@@ -409,8 +410,8 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
           handle,
           productId: motivoNoCrear ? '' : idByHandle[handle] || '',
           motivoNoCrear,
-          ...(config.brand === 'reebok' ? { sku, skuProveedor,
-            barcode: config.reebokCalzado && /^\d{8,14}$/.test(sku) ? sku : '' } : {}),
+          ...(altaConCodigo ? { sku, skuProveedor,
+            barcode: (config.brand === 'kappa' || config.reebokCalzado) && /^\d{8,14}$/.test(sku) ? sku : '' } : {}),
           opcion: opcionByHandle[handle] || 'Talle',
           precio: Number(d.publicPrice) || 0,
           costo: Number(d.costFinal) || 0,
@@ -728,7 +729,7 @@ export async function crearTallesFaltantes(
       return v;
     });
     try {
-      // Releer antes del alta Reebok: una segunda confirmación no debe duplicar talles.
+      // Releer antes del alta con código proveedor: no duplicar talles al reintentar.
       if (lista.some(f => f.skuProveedor)) {
         const fresh = await shopifyGraphQL<any>(PRODUCTS_BY_HANDLE, {
           q: `handle:${JSON.stringify(lista[0].handle)}`, loc: plan.locationId,

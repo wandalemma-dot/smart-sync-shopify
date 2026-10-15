@@ -48,6 +48,8 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ## 1. Qué hace la app
 
+- 15-oct-2026: habilitar alta de talles faltantes SOLO Kappa Indumentaria. Reutiliza controles Reebok: producto identificado, opción única, variantes completas (<100), precio/costo y SKU válidos, ningún talle existente con otro código. EAN en SKU y barcode; sin EAN usar SKU proveedor y barcode vacío. Agregar códigos proveedor a etiquetas sin reemplazarlas; releer antes de crear para evitar duplicados. Precio Público y costo Mayorista con descuento del archivo, stock exclusivamente DISTRINANDO. Selección y confirmación manual existentes; publicar no crea variantes. Kappa Calzado/Crocs siguen pendientes. Tests kappaTallesFaltantes.test.ts con Shopify simulado.
+
 - 15-oct-2026: Kappa Calzado Promo 40% 006 14-10.xlsx trae columna N «DISPONIBLE», sin «(INMEDIATO)». Aceptar ambos encabezados para calzado, normalizando espacios; exigir una única columna válida, nunca usar TOTAL PARES ni asumir cero si falta. Indumentaria conserva DISPONIBLE. Precios, EAN, talles y exclusión de packs sin cambios. Prueba real optativa KAPPA_PROMO_TEMPLATE en kappaLogic.test.ts.
 
 ### Crocs Calzado (9-oct-2026)
