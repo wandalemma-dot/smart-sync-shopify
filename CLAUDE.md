@@ -48,6 +48,8 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ## 1. Qué hace la app
 
+- 15-oct-2026: Kappa Calzado Promo 40% 006 14-10.xlsx trae columna N «DISPONIBLE», sin «(INMEDIATO)». Aceptar ambos encabezados para calzado, normalizando espacios; exigir una única columna válida, nunca usar TOTAL PARES ni asumir cero si falta. Indumentaria conserva DISPONIBLE. Precios, EAN, talles y exclusión de packs sin cambios. Prueba real optativa KAPPA_PROMO_TEMPLATE en kappaLogic.test.ts.
+
 ### Crocs Calzado (9-oct-2026)
 
 - Nombre comercial de nuevas altas: empieza por `Crocs`, sin prefijo `Calzado` (ej. Crocs Classic Mary Jane Clog Negro). El tipo de producto sigue siendo Calzado; no deducirlo de la primera palabra del título. Aplica a vista previa, CSV y alta; no renombra productos ya existentes.

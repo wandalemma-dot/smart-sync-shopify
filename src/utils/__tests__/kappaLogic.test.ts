@@ -16,6 +16,21 @@ const config={brand:'kappa',kappaCalzado:true,sheetName:'CALZADO'} as const;
 const file=(rows:unknown[][])=>{const w=XLSX.utils.book_new();XLSX.utils.book_append_sheet(w,XLSX.utils.aoa_to_sheet(rows),'CALZADO');return {name:'Kappa.xlsx',arrayBuffer:async()=>XLSX.write(w,{type:'array',bookType:'xlsx'})} as File;};
 beforeEach(()=>{graphql.mockReset().mockImplementation(async(q:string)=>q.includes('locations(')?{locations:{edges:[{node:{id:'loc',name:'DISTRINANDO SA (Reebok - Kappa)'}}]}}:{products:{edges:[],pageInfo:{hasNextPage:false}}});});
 describe('Kappa carga',()=>{
+ it('acepta DISPONIBLE en promo de calzado, conserva cantidades y nunca toma TOTAL PARES',()=>{
+  const hs=[...h];hs[5]=' DISPONIBLE ';hs.push('TOTAL PARES');
+  const row=[...r,999];
+  expect(parseKappa([hs,row],true,'AR').productos).toEqual(parseKappa([h,r],true,'AR').productos);
+  hs[5]='OTRO';expect(()=>parseKappa([hs,row],true,'AR')).toThrow('falta DISPONIBLE');
+  expect(()=>parseKappa([[...h,'DISPONIBLE'],[...r,20]],true,'AR')).toThrow('varias columnas');
+ });
+ it.skipIf(!process.env.KAPPA_PROMO_TEMPLATE)('lee la promo real con DISPONIBLE',async()=>{
+  const b=readFileSync(process.env.KAPPA_PROMO_TEMPLATE!);
+  const f={name:'promo.xlsx',arrayBuffer:async()=>b.buffer.slice(b.byteOffset,b.byteOffset+b.byteLength)} as File;
+  const rows=await leerKappa(f,true);const result=parseKappa(rows,true,'AR');
+  expect(result.productos['K11001-K989'].sizes['34']).toBe(1);
+  expect(Object.keys(result.productos).length).toBeGreaterThan(100);
+  expect(result.avisos.some(a=>a.includes('pack excluido'))).toBe(true);
+ });
  it('Reebok indumentaria también excluye packs antes de procesar talles',()=>{
   const headers=['SKU','Modelo color','Descripción del artículo','GRUPO','Stock x SKU','Mayorista con descuento','Precio Público','UDM'];
   const individual=['R-S','R','LOGO - S','T-SHIRT',1,100,200,'Unidades'];

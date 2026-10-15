@@ -19,7 +19,9 @@ export function parseKappa(rows: unknown[][], calzado: boolean, sistema: 'EU'|'A
  const hs=rows[h].map(norm);
  const c=(name:string)=>{const i=hs.indexOf(name);if(i<0)throw new Error(`Kappa: falta ${name}.`);return i;};
  const skuC=c('SKU'),modeloC=c('MODELO COLOR'),descC=c('DESCRIPCION DEL ARTICULO'),eanC=c('EAN'),udmC=c('UDM');
- const stockC=c(calzado?'DISPONIBLE (INMEDIATO)':'DISPONIBLE'),costC=c('MAYORISTA CON DESCUENTO'),priceC=c('PUBLICO'),listaC=c('MAYORISTA UNITARIO'),dtoC=c('DESCUENTO'),generoC=c('GENERO');
+ const stockCols=hs.flatMap((name,i)=>(name==='DISPONIBLE'||(calzado&&name==='DISPONIBLE (INMEDIATO)'))?[i]:[]);
+ if(stockCols.length!==1)throw new Error(stockCols.length?'Kappa: hay varias columnas de disponibilidad. Revisá cuál corresponde al stock antes de sincronizar.':`Kappa: falta ${calzado?'DISPONIBLE o DISPONIBLE (INMEDIATO)':'DISPONIBLE'}.`);
+ const stockC=stockCols[0],costC=c('MAYORISTA CON DESCUENTO'),priceC=c('PUBLICO'),listaC=c('MAYORISTA UNITARIO'),dtoC=c('DESCUENTO'),generoC=c('GENERO');
  const productos:Record<string,KappaProducto>={},avisos:string[]=[];
  const incompletos=new Set<string>();
  const presentes=new Set<string>(),protegidos=new Set<string>(),identificadores=new Set<string>();
