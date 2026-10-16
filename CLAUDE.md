@@ -48,6 +48,9 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ## 1. Qué hace la app
 
+- 16-oct-2026 talles faltantes: nuevos talles de productos existentes heredan precio de venta común de las variantes actuales de Shopify, no precio proveedor. Costo/stock siguen del proveedor. Si hay precios distintos, inválidos, ninguno o catálogo incompleto (100 variantes), bloquear alta para revisión. Releer producto y comprobar precio antes de crear en TODAS las marcas; si cambió desde simulación pedir reanalizar. No cambiar precios de variantes anteriores.
+
+
 - 16-oct-2026 Reebok/Kappa: etiqueta EXACTA del modelo + talle de Shopify permite cruce independiente de SKU/barcode, para calzado e indumentaria. Usar sizes ya convertidos por parser (Reebok AR, Kappa conserva talle); normalizar solo mayúsculas/espacios y decimales coma/punto. No inferir equivalencias US/UK adicionales ni usar etiquetas SKU como vínculo de variante. Sin etiqueta exacta conservar cruce anterior por SKU. Etiqueta prevalece sobre SKU cambiado. Bloquear modelos duplicados o talles ambiguos; releer etiqueta/talles en simulación de stock, no crear faltantes si modelo cambió. No reescribir SKU/barcode de existentes.
 
 

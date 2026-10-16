@@ -985,7 +985,7 @@ export default function App() {
                           {/* Crear los talles que faltan. Vienen destildados a propósito. */}
                           <p style={{ fontSize: '0.78rem', opacity: 0.85, margin: '0.5rem 0' }}>
                             Puedo <strong>crear estos talles</strong> en el producto, con su stock, precio y costo
-                            (los del archivo del proveedor). En Reebok y Kappa Indumentaria se conserva el SKU original o el EAN, cuando viene informado.
+                            (stock y costo del proveedor; precio igual al de las variantes existentes en Shopify). En Reebok y Kappa Indumentaria se conserva el SKU original o el EAN, cuando viene informado.
                             Vienen <strong>destildados</strong> a propósito:
                             un "no ubicado" no siempre es un talle que falta — a veces es una conversión que salió mal,
                             y ahí estaríamos inventando un talle. <strong>Mirá la lista y tildá los que correspondan.</strong>

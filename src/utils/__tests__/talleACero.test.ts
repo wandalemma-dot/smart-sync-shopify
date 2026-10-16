@@ -149,7 +149,7 @@ describe('talles que el proveedor ya no tiene', () => {
   });
 
   it('sigue escribiendo normalmente los talles que sí vienen en el Excel', async () => {
-    responder([variante('40', 5)]);
+    responder([{ ...variante('40', 5), price: '89900' }]);
     const plan = await planStockWrite(resultado({ '8': 12 }), cfg('converse'));
     const cambio = plan.changes.find((c) => c.talle === '40');
     expect(cambio?.current).toBe(5);
@@ -288,15 +288,15 @@ describe('productos con el talle corrido', () => {
 
   it('las filas de "no ubicados" llevan lo necesario para crear el talle', async () => {
     // El 42 del proveedor (US 42 no está en la tabla 1 -> queda tal cual) no
-    // existe en la tienda. Esa fila tiene que traer precio y costo del archivo.
-    responder([variante('40', 5)]);
+    // existe en la tienda. La fila conserva precio de Shopify y costo del archivo.
+    responder([{ ...variante('40', 5), price: '89900' }]);
     const plan = await planStockWrite(
       { excelMap: { a99999c: { foundInShopify: true, shopifyHandle: 'zapa', title: 'Chuck', sizes: { '8': 5, '99': 3 }, publicPrice: 109900, costFinal: 44710 } }, enPeligro: [] } as any,
       cfg('converse'),
     );
     const fila = plan.notFound.find((r) => r.talleProveedor === '99');
     expect(fila).toBeDefined();
-    expect(fila!.precio).toBe(109900);
+    expect(fila!.precio).toBe(89900);
     expect(fila!.costo).toBe(44710);
     expect(fila!.opcion).toBe('Talle');
   });

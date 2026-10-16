@@ -30,11 +30,11 @@ beforeEach(() => {
 });
 it.each([ean, ''])('crea XL con código exacto, costo, precio, sucursal y etiquetas: %s', async barcode => {
   const p = await plan(barcode); const row = p.notFound[0];
-  expect(row).toMatchObject({ productId: code, motivoNoCrear: '', talle: 'XL', sku: barcode || code + '-XL', skuProveedor: code + '-XL', barcode, desired: 1, costo: 600, precio: 29999 });
+  expect(row).toMatchObject({ productId: code, motivoNoCrear: '', talle: 'XL', sku: barcode || code + '-XL', skuProveedor: code + '-XL', barcode, desired: 1, costo: 600, precio: 100 });
   expect(graphql.mock.calls.some(([q]) => q.includes('mutation'))).toBe(false);
   expect(await crearTallesFaltantes(p, [row])).toMatchObject({ written: 1, failed: 0 });
   const input = graphql.mock.calls.find(([q]) => q.includes('productVariantsBulkCreate'))![1];
-  expect(input.variants[0]).toEqual({ optionValues: [{ name: 'XL', optionName: 'Talle' }], inventoryItem: { tracked: true, sku: barcode || code + '-XL', cost: '600' }, inventoryQuantities: [{ locationId: 'distri', availableQuantity: 1 }], price: '29999', ...(barcode ? { barcode } : {}) });
+  expect(input.variants[0]).toEqual({ optionValues: [{ name: 'XL', optionName: 'Talle' }], inventoryItem: { tracked: true, sku: barcode || code + '-XL', cost: '600' }, inventoryQuantities: [{ locationId: 'distri', availableQuantity: 1 }], price: '100', ...(barcode ? { barcode } : {}) });
   expect(graphql.mock.calls.find(([q]) => q.includes('tagsAdd'))![1]).toEqual({ id: code, tags: [code, code + '-XL'] });
 });
 it('encuentra XL por etiqueta aunque cambie el SKU', async () => {
@@ -72,4 +72,15 @@ it('precios y stock reconocen XL con código físico distinto', async () => {
   const result = await processFiles(file(), null, null, cfg);
   expect(result.updatesToApply).toEqual([expect.objectContaining({ variantId: 'fisico', newPrice: 29999 })]);
   expect((await planStockWrite(result, cfg)).notFound).toEqual([]);
+});
+
+it('no permite crear cuando las variantes tienen precios distintos', async () => {
+  const otra = variant('otra', 'M'); otra.node.price = '200'; product.variants.edges.push(otra);
+  const p = await plan();
+  expect(p.notFound[0]).toMatchObject({ productId: '', motivoNoCrear: expect.stringContaining('precio único') });
+});
+it('si cambió el precio después de simular no crea al precio anterior', async () => {
+  const p = await plan(); product.variants.edges[0].node.price = '200';
+  expect(await crearTallesFaltantes(p, p.notFound)).toMatchObject({ written: 0, failed: 1, errors: [expect.stringContaining('cambió su precio')] });
+  expect(graphql.mock.calls.some(([q]) => q.includes('mutation'))).toBe(false);
 });

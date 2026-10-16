@@ -115,6 +115,7 @@ const PRODUCTS_BY_HANDLE = `
               node {
                 id
                 sku
+                price
                 title
                 inventoryItem {
                   id
@@ -185,6 +186,14 @@ async function getLocationId(name: string): Promise<string | null> {
   const edges: any[] = data?.locations?.edges || [];
   const loc = edges.find((e) => mismaSucursal(e.node.name, name));
   return loc ? loc.node.id : null;
+}
+
+export function precioComunVariantes(variants: { price?: string | number }[]): number | null {
+  if (!variants.length || variants.length >= 100) return null;
+  const precios = variants.map(v => Number(v.price));
+  if (precios.some(p => !Number.isFinite(p) || p <= 0)) return null;
+  const centavos = new Set(precios.map(p => Math.round(p * 100)));
+  return centavos.size === 1 ? [...centavos][0] / 100 : null;
 }
 
 // PASO 1 — Calcula el plan (no escribe nada).
@@ -403,7 +412,8 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
         const sku = String(d.skuPorTalle?.[size] || '');
         const skuProveedor = String(d.skuProveedorPorTalle?.[size] || sku);
         const altaConCodigo = config.brand === 'reebok' || (config.brand === 'kappa' && !config.kappaCalzado);
-        const motivoNoCrear = altaConCodigo
+        const precioExistente = precioComunVariantes(live);
+        const motivoNoCrear = precioExistente === null ? 'Revisar precios: las variantes existentes no tienen un precio único válido o falta leer el catálogo completo.' : altaConCodigo
           ? !idByHandle[handle] ? 'No se pudo leer el producto en Shopify.'
           : opcionesPorHandle[handle] !== 1 ? 'El producto tiene varias opciones o no se pudo leer su opción de talle.'
           : live.length >= 100 ? 'Revisar el catálogo completo de variantes de este producto.'
@@ -425,7 +435,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
           ...(altaConCodigo ? { sku, skuProveedor,
             barcode: (config.brand === 'kappa' || config.reebokCalzado) && /^\d{8,14}$/.test(sku) ? sku : '' } : {}),
           opcion: opcionByHandle[handle] || 'Talle',
-          precio: Number(d.publicPrice) || 0,
+          precio: precioExistente ?? 0,
           costo: Number(d.costFinal) || 0,
         });
         continue;
@@ -741,8 +751,8 @@ export async function crearTallesFaltantes(
       return v;
     });
     try {
-      // Releer antes del alta con código proveedor: no duplicar talles al reintentar.
-      if (lista.some(f => f.skuProveedor)) {
+      // Releer todos los productos antes del alta: el precio debe seguir coincidiendo.
+      {
         const fresh = await shopifyGraphQL<any>(PRODUCTS_BY_HANDLE, {
           q: `handle:${JSON.stringify(lista[0].handle)}`, loc: plan.locationId,
         });
@@ -751,22 +761,28 @@ export async function crearTallesFaltantes(
         if (!product || product.options?.length !== 1 || live.length >= 100) {
           throw new Error('No se pudo verificar el producto. Volvé a simular antes de crear.');
         }
+        const precioVigente = precioComunVariantes(live);
+        if (precioVigente === null || lista.some(f => Math.round(Number(f.precio) * 100) !== Math.round(precioVigente * 100))) {
+          throw new Error('El producto tiene precios diferentes o cambió su precio. Volvé a simular antes de crear.');
+        }
         const sizes = new Set<string>();
         const skus = new Set<string>();
         for (const f of lista) {
-          if (!f.sku || !f.skuProveedor || f.opcion !== product.options[0].name ||
-              sizes.has(f.talle) || skus.has(f.sku) ||
-              live.some((v: any) => talleMatches(f.talle, v.title) || v.sku === f.sku || v.sku === f.skuProveedor)) {
+          if ((f.skuProveedor && !f.sku) || (f.opcion || 'Talle') !== product.options[0].name ||
+              sizes.has(f.talle) || (!!f.sku && skus.has(f.sku)) ||
+              live.some((v: any) => talleMatches(f.talle, v.title) || (!!f.sku && v.sku === f.sku) || (!!f.skuProveedor && v.sku === f.skuProveedor))) {
             throw new Error(`El talle ${f.talle} ya existe o cambió su identificación. Volvé a simular.`);
           }
-          sizes.add(f.talle); skus.add(f.sku);
+          sizes.add(f.talle); if (f.sku) skus.add(f.sku);
         }
         // Agregar, sin reemplazar las etiquetas existentes. Si falla, no crear sin identificación.
+        if (lista.some(f => f.skuProveedor)) {
         const tagged = await shopifyGraphQL<any>(ADD_SUPPLIER_TAGS, {
           id: productId, tags: [...new Set(lista.flatMap(f => [f.code, f.skuProveedor!]))],
         });
         if (!tagged?.tagsAdd?.node?.id || tagged.tagsAdd.userErrors?.length) {
           throw new Error(tagged?.tagsAdd?.userErrors?.[0]?.message || 'No se pudieron guardar los códigos del proveedor.');
+        }
         }
       }
       const data = await shopifyGraphQL<any>(CREATE_VARIANTS, { productId, variants });
