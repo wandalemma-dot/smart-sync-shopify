@@ -44,8 +44,8 @@ describe('Catálogos de Kappa Indumentaria y Crocs',()=>{
   products=[p('K1-B','Kappa','Remera Kappa',[v('9999999999999','S'),v('K1-B-M','M')]),p('K2-B','Kappa','Remera Kappa',[v('K2-B-L','L')])];
   const result=await processFiles(file([hK,rK,pack],kCfg.sheetName),null,null,kCfg);
   const plan=await planStockWrite(result,kCfg);
-  expect(plan.notFound).toHaveLength(1);expect(plan.changes.map(c=>c.sku)).toEqual(['K1-B-M']);
-  expect((await planStockWrite(result,{...kCfg,kappaCalzado:true})).changes).toEqual([]);
+  expect(plan.notFound).toHaveLength(0);expect(plan.changes.map(c=>c.sku)).toEqual(['9999999999999','K1-B-M']);
+  await expect(planStockWrite(result,{...kCfg,kappaCalzado:true})).rejects.toThrow('categoría Kappa');
  });
  it('Crocs separa agotados de modelos pendientes por costo, packs, accesorios o talle doble infantil',async()=>{
   const pending=(code:string)=>{const r=[...rC];r[0]=code+'-M8/W10';r[1]=code;return r;};

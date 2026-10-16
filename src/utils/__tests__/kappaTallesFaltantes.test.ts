@@ -37,9 +37,9 @@ it.each([ean, ''])('crea XL con código exacto, costo, precio, sucursal y etique
   expect(input.variants[0]).toEqual({ optionValues: [{ name: 'XL', optionName: 'Talle' }], inventoryItem: { tracked: true, sku: barcode || code + '-XL', cost: '600' }, inventoryQuantities: [{ locationId: 'distri', availableQuantity: 1 }], price: '29999', ...(barcode ? { barcode } : {}) });
   expect(graphql.mock.calls.find(([q]) => q.includes('tagsAdd'))![1]).toEqual({ id: code, tags: [code, code + '-XL'] });
 });
-it('bloquea XL existente con otro código', async () => {
+it('encuentra XL por etiqueta aunque cambie el SKU', async () => {
   product.variants.edges.push(variant('otro', 'XL'));
-  expect((await plan()).notFound[0]).toMatchObject({ productId: '', motivoNoCrear: expect.stringContaining('ya existe') });
+  const p = await plan(); expect(p.notFound).toEqual([]); expect(p.changes).toEqual(expect.arrayContaining([expect.objectContaining({ talle: 'XL', desired: 1 })]));
 });
 it('no crea si alguien agregó XL después de simular', async () => {
   const p = await plan(); product.variants.edges.push(variant('otro', 'XL'));
@@ -48,11 +48,28 @@ it('no crea si alguien agregó XL después de simular', async () => {
 });
 it('bloquea productos con varias opciones', async () => {
   product.options.push({ name: 'Color' });
-  expect((await plan()).notFound[0]).toMatchObject({ productId: '', motivoNoCrear: expect.stringContaining('varias opciones') });
+  await expect(plan()).rejects.toThrow('revisar opciones');
 });
 it('no crea sin guardar primero los códigos del proveedor', async () => {
   const p = await plan(); const read = graphql.getMockImplementation()!;
   graphql.mockImplementation(async (q, v) => q.includes('tagsAdd') ? { tagsAdd: { node: null, userErrors: [{ message: 'Sin permiso' }] } } : read(q, v));
   expect(await crearTallesFaltantes(p, p.notFound)).toMatchObject({ written: 0, failed: 1 });
   expect(graphql.mock.calls.some(([q]) => q.includes('productVariantsBulkCreate'))).toBe(false);
+});
+
+it('rechaza duplicados antes de proponer precios o crear talles', async () => {
+  product.variants.edges.push(variant('fisico1', 'XL'), variant('fisico2', 'xl'));
+  await expect(plan()).rejects.toThrow('ambiguos');
+  expect(graphql.mock.calls.some(([q]) => q.includes('mutation'))).toBe(false);
+});
+it('revalida la etiqueta al volver a leer stock', async () => {
+  const result = await processFiles(file(), null, null, cfg);
+  product.tags = ['OTRO'];
+  await expect(planStockWrite(result, cfg)).rejects.toThrow('cambió la etiqueta');
+});
+it('precios y stock reconocen XL con código físico distinto', async () => {
+  product.variants.edges.push(variant('fisico', 'XL'));
+  const result = await processFiles(file(), null, null, cfg);
+  expect(result.updatesToApply).toEqual([expect.objectContaining({ variantId: 'fisico', newPrice: 29999 })]);
+  expect((await planStockWrite(result, cfg)).notFound).toEqual([]);
 });

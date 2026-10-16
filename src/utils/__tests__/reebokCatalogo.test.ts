@@ -57,11 +57,11 @@ describe('Unión Reebok Calzado', () => {
     }]});
     expect(graphql.mock.calls.find(([q])=>q.includes('tagsAdd'))![1]).toEqual({id:code,tags:[code,`${code}-6.5`]});
   });
-  it('bloquea un talle existente con código distinto y explica por qué', async()=>{
+  it('encuentra el talle existente con SKU cambiado por etiqueta', async()=>{
     products=[product(code,[variant('codigo-ajeno','36')])];
     const f=file('30.xlsx',[row()]);
     const plan=await planStockWrite(await processFiles(f,null,null,cfg),cfg);
-    expect(plan.notFound[0]).toMatchObject({productId:'',motivoNoCrear:expect.stringContaining('ya existe')});
+    expect(plan.notFound).toEqual([]); expect(plan.changes).toEqual(expect.arrayContaining([expect.objectContaining({talle:'36',desired:5})]));
   });
   it('revisa otra vez antes de crear y evita duplicar por una segunda confirmación', async()=>{
     products=[product(code,[variant(`${code}-5.5`,'35')])];
@@ -105,13 +105,13 @@ describe('Unión Reebok Calzado', () => {
     expect(plan.locationId).toBe('distri');
     expect(graphql.mock.calls.every(([q])=>!q.includes('mutation'))).toBe(true);
   });
-  it('con talles nuevos pendientes conserva EAN desconocidos, SKU ajenos y un talle AR que sí está en la lista', async () => {
+  it('con etiqueta y talle reconoce SKU cambiados y mantiene el barrido de ausentes', async () => {
     products=[product(code,[variant('7791234567890','40'),variant('otro','41'),variant(`${code}-4`,'36')])];
     const f1=file('30.xlsx',[row()]), f2=file('40.xlsx',[row('10','43',1,'RBK1100010473')]);
     const res=await processFiles(f1,null,null,cfg,null,[{file:f1,sheetName:'Calzado'},{file:f2,sheetName:'Calzado'}]);
     const plan=await planStockWrite(res,cfg);
-    expect(plan.notFound).toHaveLength(1);
-    expect(plan.changes).toEqual([]);
+    expect(plan.notFound).toHaveLength(0);
+    expect(plan.changes.map(c=>[c.talle,c.desired])).toEqual([['36',5],['40',0],['41',0]]);
   });
   const archivosSmash=['RBK Calzado 006 40% 05-10 (3).xlsx','Reebok Calzado 001 30%  07-10 (1).xlsx'];
   it.skipIf(!archivosSmash.every(n=>existsSync(`C:/Users/maxim/Downloads/${n}`)))('reproduce Smash Edge con las dos planillas adjuntas del 9-oct',async()=>{

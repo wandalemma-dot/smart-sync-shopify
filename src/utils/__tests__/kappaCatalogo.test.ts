@@ -38,8 +38,8 @@ describe('Kappa Calzado: ausencias del catálogo vigente',()=>{
   products=[product('K1-B',[variant('1234567890123','40'),variant('1234567890124','39')])];
   const result=await processFiles(file([h,row]),null,null,config);
   const plan=await planStockWrite(result,config);
-  expect(plan.notFound).toHaveLength(1);
-  expect(plan.changes.map(c=>[c.talle,c.desired])).toEqual([['39',0]]);
+  expect(plan.notFound).toHaveLength(0);
+  expect(plan.changes.map(c=>[c.talle,c.desired])).toEqual([['40',2],['39',0]]);
  });
  it('revalida la marca y códigos de los modelos ausentes al simular',async()=>{
   products=[product('K2-C')];
@@ -53,7 +53,7 @@ describe('Kappa Calzado: ausencias del catálogo vigente',()=>{
  it('no aplica barrido con configuración de indumentaria ni sin cobertura',async()=>{
   products=[product('K2-C')];
   const result=await processFiles(file([h,row]),null,null,config);
-  expect((await planStockWrite(result,{...config,kappaCalzado:false})).changes).toEqual([]);
+  await expect(planStockWrite(result,{...config,kappaCalzado:false})).rejects.toThrow('categoría Kappa');
   delete result.kappaCobertura;
   expect((await planStockWrite(result,config)).changes).toEqual([]);
  });

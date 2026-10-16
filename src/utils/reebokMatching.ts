@@ -1,11 +1,13 @@
+import { mismoTalleEtiqueta } from './tallePorEtiqueta';
 // El modelo ya se identificó por código/etiqueta o EAN exacto.
 // No cambiar SKU de existentes. Admitir el código anterior al cargar la nueva lista.
 export function coincideVarianteReebok(
-  data: { skuPorTalle?: Record<string, string>; skuProveedorPorTalle?: Record<string, string> },
+  data: { matchPorEtiqueta?: boolean; skuPorTalle?: Record<string, string>; skuProveedorPorTalle?: Record<string, string> },
   size: string,
   variant: { sku?: string; title?: string },
   calzado: boolean,
 ) {
+  if (data.matchPorEtiqueta) return mismoTalleEtiqueta(size, variant.title);
   if (!calzado) return variant.sku === data.skuPorTalle?.[size];
   const sku = String(variant.sku || '').trim();
   if (!sku) return false;

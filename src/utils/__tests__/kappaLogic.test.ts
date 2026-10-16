@@ -83,7 +83,7 @@ describe('Kappa carga',()=>{
  });
  it('stock y precios solo cambian variantes del archivo en Distrinando',async()=>{
   const variant=(sku:string,id:string,title:string)=>({node:{id,title,sku,price:'100',inventoryItem:{id:'i'+id,unitCost:{amount:'50'},inventoryLevel:{quantities:[{name:'available',quantity:5}]},mar:{quantities:[{name:'available',quantity:9}]}}}});
-  const product={id:'p',handle:'kappa',title:'Kappa Classic',vendor:'Kappa',tags:['K1-B'],variants:{edges:[variant('07799087201358','v','39'),variant('otro','v2','38')]}};
+  const product={id:'p',handle:'kappa',title:'Kappa Classic',vendor:'Kappa',tags:['K1-B'],variants:{edges:[variant('07799087201358','v','40'),variant('otro','v2','38')]}};
   graphql.mockImplementation(async(q:string)=>q.includes('locations(')?{locations:{edges:[{node:{id:'loc',name:'DISTRINANDO SA (Reebok - Kappa)'}},{node:{id:'mar',name:'DEPOSITO MARTINEZ'}}]}}:{products:{edges:[{node:product}],pageInfo:{hasNextPage:false}}});
   const result=await processFiles(file([h,r]),null,null,config);
   expect(result.updatesToApply.map(u=>u.variantId)).toEqual(['v']);expect(result.enPeligro).toEqual([]);

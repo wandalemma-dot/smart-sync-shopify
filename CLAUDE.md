@@ -48,6 +48,9 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ## 1. Qué hace la app
 
+- 16-oct-2026 Reebok/Kappa: etiqueta EXACTA del modelo + talle de Shopify permite cruce independiente de SKU/barcode, para calzado e indumentaria. Usar sizes ya convertidos por parser (Reebok AR, Kappa conserva talle); normalizar solo mayúsculas/espacios y decimales coma/punto. No inferir equivalencias US/UK adicionales ni usar etiquetas SKU como vínculo de variante. Sin etiqueta exacta conservar cruce anterior por SKU. Etiqueta prevalece sobre SKU cambiado. Bloquear modelos duplicados o talles ambiguos; releer etiqueta/talles en simulación de stock, no crear faltantes si modelo cambió. No reescribir SKU/barcode de existentes.
+
+
 - 16-oct-2026 Martínez: proteger costo por variante con stockMartinez > 0 al analizar, para todas las marcas. Propuesta conserva costo guardado y no genera cambio solo por costo proveedor. Escritura omite inventoryItem.cost incluso seleccionando todos o marcando manualmente; CSV precios conserva costo guardado en protegidas. Precio sigue seleccionable, inicialmente destildado. Umbral/margen iD usa costo guardado de Martínez; sin stock usa nuevo. Si costo guardado es cero/desconocido no inventar margen ni reemplazarlo. Mostrar unidades y costo protegido también sin cambios.
 
 

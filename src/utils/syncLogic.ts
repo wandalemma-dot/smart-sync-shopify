@@ -1,3 +1,4 @@
+import { etiquetaModelo, validarTallesEtiqueta } from './tallePorEtiqueta';
 import { precioExistente, margenPct } from './margen';
 import { parseCrocs, leerCrocs, coincideVarianteCrocs } from './crocsLogic';
 import { ausenteCrocs, codigosCrocs, type CrocsCobertura } from './crocsCatalogo';
@@ -742,7 +743,7 @@ export async function processFiles(
   let reebokCobertura: ReebokCobertura | undefined;
   let kappaCobertura: KappaCobertura | undefined;
   let crocsCobertura: CrocsCobertura | undefined;
-  const excelMap: Record<string, { tablaTalle?: string, sizeConversion?: SizeConversion, wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyTags?: string, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number, costoMargen?: number, usaListaPrecios?: boolean, skuPorTalle?: Record<string, string>, skuProveedorPorTalle?: Record<string, string>, whslDelArchivo?: boolean, unidadesPorPack?: number }> = {};
+  const excelMap: Record<string, { tablaTalle?: string, sizeConversion?: SizeConversion, wholesale: number, publicPrice?: number, sizes: Record<string, number>, foundInShopify: boolean, title: string, vendor?: string, shopifyHandle?: string, shopifyTags?: string, matchPorEtiqueta?: boolean, shopifyVariants?: any[], descCod?: string, artType?: string, costFinal?: number, costoMargen?: number, usaListaPrecios?: boolean, skuPorTalle?: Record<string, string>, skuProveedorPorTalle?: Record<string, string>, whslDelArchivo?: boolean, unidadesPorPack?: number }> = {};
 
   if (config.brand === 'bloque' && /\.xlsx?$/i.test(providerFile.name)) {
     // Bloque en Excel (ej. la preventa de Protec).
@@ -1479,6 +1480,11 @@ export async function processFiles(
       }
 
       if (match) {
+        if (config.brand === 'reebok' || config.brand === 'kappa') {
+          if (provData.foundInShopify && provData.shopifyHandle !== prod.handle) throw new Error(`${cod}: más de un producto coincide; revisar etiquetas antes de sincronizar.`);
+          provData.matchPorEtiqueta = etiquetaModelo(tags, cod);
+          if (provData.matchPorEtiqueta) validarTallesEtiqueta(Object.keys(provData.sizes), prod.variants.edges.map(v => v.node), cod);
+        }
         if (config.brand === 'crocs' || config.brand === 'kappa' || (config.brand === 'reebok' && config.reebokCalzado)) {
           if (provData.foundInShopify && provData.shopifyHandle !== prod.handle) throw new Error(`Reebok ${cod}: más de un producto coincide; revisar duplicados antes de cargar.`);
           for (const size of Object.keys(provData.sizes)) {

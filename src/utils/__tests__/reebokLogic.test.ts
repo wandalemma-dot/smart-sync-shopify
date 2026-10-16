@@ -54,7 +54,7 @@ describe('Reebok indumentaria', () => {
   });
   it('actualiza precios del SKU incluido y propone cero al talle ausente de la lista vigente (regla 8-oct)', async () => {
     const product = { id: 'p', handle: 'r', title: 'Remera Reebok', tags: ['RBK2100'], options: [{name: 'Talle'}], variants: { edges: ['S', 'M'].map(s => ({ node: {
-      id: s, title: s === 'S' ? 'Small' : 'Medium', sku: `RBK2100-${s}`, price: '100',
+      id: s, title: s, sku: `RBK2100-${s}`, price: '100',
       inventoryItem: { id: `i-${s}`, unitCost: { amount: '50' }, inventoryLevel: { quantities: [{ name: 'available', quantity: 10 }] } },
     } })) } };
     graphql.mockImplementation(async (q: string) => q.includes('locations(')

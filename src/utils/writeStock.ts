@@ -1,3 +1,4 @@
+import { etiquetaModelo, validarTallesEtiqueta } from './tallePorEtiqueta';
 import { coincideVarianteCrocs } from './crocsLogic';
 import { coincideVarianteKappa } from './kappaLogic';
 import { ausenteKappa, codigosKappa, coincideCategoriaKappa, varianteIndividualKappa } from './kappaCatalogo';
@@ -188,6 +189,7 @@ async function getLocationId(name: string): Promise<string | null> {
 
 // PASO 1 — Calcula el plan (no escribe nada).
 export async function planStockWrite(result: SyncResult, config: SyncConfig): Promise<StockPlan> {
+  if (config.brand === 'kappa' && result.kappaCobertura && result.kappaCobertura.categoria !== (config.kappaCalzado ? 'calzado' : 'indumentaria')) throw new Error('Cambió la categoría Kappa. Volvé a analizar el archivo.');
   const kappaCategoria = config.kappaCalzado ? 'calzado' : 'indumentaria';
   const kappaCobertura = config.brand === 'kappa' && result.kappaCobertura?.categoria === kappaCategoria ? result.kappaCobertura : undefined;
   const crocsCobertura = config.brand === 'crocs' ? result.crocsCobertura : undefined;
@@ -313,12 +315,22 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
     cubiertasPorHandle.get(handle)!.add(invId);
   };
 
-  for (const { cod, d } of entries as { cod: string; d: any }[]) {
+  for (let { cod, d } of entries as { cod: string; d: any }[]) {
     const handle = d.shopifyHandle as string;
     const live = liveByHandle[handle] || [];
     // Como ya existe en Shopify, mostramos el título REAL de Shopify (no el del Excel).
     const shopTitle = titleByHandle[handle] || d.title;
     const code = cod.toUpperCase(); // código del proveedor (Código Item del Excel)
+    if (config.brand === 'reebok' || config.brand === 'kappa') {
+      const etiquetaVigente = etiquetaModelo(tagsByHandle[handle] || '', cod);
+      if (d.matchPorEtiqueta && !etiquetaVigente) throw new Error(`${code}: cambió la etiqueta del modelo. Volvé a analizar.`);
+      d = { ...d, matchPorEtiqueta: etiquetaVigente };
+      if (etiquetaVigente) {
+        if (opcionesPorHandle[handle] > 1 || live.length >= 100) throw new Error(`${code}: revisar opciones o catálogo completo de talles antes de sincronizar.`);
+        validarTallesEtiqueta(Object.keys(d.sizes || {}), live, code);
+      }
+    }
+
     // Converse: el proveedor manda talles US; Shopify los tiene en ARG. Convertimos
     // usando la tabla que indica la etiqueta del producto (TABLA DE TALLE CONVERSE X).
     // La tabla sale del CÓDIGO (maestro de curvas del proveedor). La etiqueta

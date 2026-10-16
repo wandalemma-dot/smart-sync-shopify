@@ -1,3 +1,4 @@
+import { mismoTalleEtiqueta } from './tallePorEtiqueta';
 import { simplificarColores } from './coloresComerciales';
 import { codigosKappa, type KappaCobertura } from './kappaCatalogo';
 import * as XLSX from 'xlsx';
@@ -80,6 +81,7 @@ export function parseKappa(rows: unknown[][], calzado: boolean, sistema: 'EU'|'A
   const cobertura:KappaCobertura={categoria:calzado?'calzado':'indumentaria',modelosPresentes:[...presentes],modelosProtegidos:[...protegidos],identificadoresPresentes:[...identificadores]};
   return {productos,avisos,cobertura};
 }
-export function coincideVarianteKappa(data: {skuPorTalle?:Record<string,string>;skuProveedorPorTalle?:Record<string,string>},size:string,v:{sku?:string}) {
+export function coincideVarianteKappa(data: {matchPorEtiqueta?:boolean;skuPorTalle?:Record<string,string>;skuProveedorPorTalle?:Record<string,string>},size:string,v:{sku?:string;title?:string}) {
+ if(data.matchPorEtiqueta)return mismoTalleEtiqueta(size,v.title);
  const sku=String(v.sku||'').trim();return !!sku&&(sku===data.skuPorTalle?.[size]||sku===data.skuProveedorPorTalle?.[size]);
 }
