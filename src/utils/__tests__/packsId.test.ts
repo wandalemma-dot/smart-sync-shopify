@@ -1,8 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as XLSX from 'xlsx';
 import Papa from 'papaparse';
+import { aplicarPrecios } from '../updatePrices';
 import { unidadesPorPackId } from '../packsId';
-import { buildMatrixProducts, downloadMatrixCSV, processFiles } from '../syncLogic';
+import { buildMatrixProducts, downloadMatrixCSV, downloadUpdateCSV, processFiles } from '../syncLogic';
 
 const { graphql, download } = vi.hoisted(() => ({ graphql: vi.fn(), download: vi.fn() }));
 vi.mock('../shopify', () => ({ shopifyGraphQL: graphql, mismaSucursal: (a: string, b: string) => a === b }));
@@ -100,4 +101,31 @@ describe.each(['lecoq', 'converse'] as const)('precios por par: %s', brand => {
     expect(res.updatesToApply).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'PRICE', newCost: 6208.5, newPrice: esperado })]));
     expect(graphql.mock.calls.every(([q]) => !q.includes('mutation'))).toBe(true);
   });
+  it.each([3000, 9000, 0])('protege solo el talle en Martínez y calcula margen con costo guardado %s', async costo => {
+    graphql.mockImplementation(async (q: string) => q.includes('locations(')
+      ? { locations: { edges: ['ID (Converse - Le Coq Sportif)', 'DEPOSITO MARTINEZ'].map(name => ({ node: { id: name, name } })) } }
+      : { products: { edges: [{ node: { id: 'p', handle: 'medias', title: 'Medias', tags: ['LAN0226024P'], variants: { edges: [2, 0].map((stock, i) => ({ node: {
+        id: 'v' + i, title: String(i), sku: 'LAN0226024P-' + i, price: '12000', inventoryItem: { id: 'i' + i, unitCost: { amount: String(costo) }, mar: { quantities: [{ name: 'available', quantity: stock }] } },
+      } })) } } }], pageInfo: { hasNextPage: false } } });
+    const res = await processFiles(plantilla(), null, null, config);
+    const protegida = res.updatesToApply.find(u => u.variantId === 'v0')!;
+    const libre = res.updatesToApply.find(u => u.variantId === 'v1')!;
+    expect(protegida).toMatchObject({ costoProtegido: true, stockMartinez: 2, oldCost: costo, newCost: costo, newPrice: costo === 9000 ? 15900 : 12000, sinCambios: costo !== 9000 });
+    expect(protegida.margenId).toBe(costo === 0 ? null : (1 - costo / (12000 / 1.21)) * 100);
+    expect(libre).toMatchObject({ costoProtegido: false, newCost: 6208.5, newPrice: 15900 });
+    vi.stubGlobal('confirm', () => true);
+    try { downloadUpdateCSV(res, config); } finally { vi.unstubAllGlobals(); }
+    const csv = Papa.parse<Record<string, string>>(download.mock.calls[0][0], { header: true, skipEmptyLines: true }).data;
+    const protegidaCsv = csv.find(row => row['Variant SKU'] === protegida.sku);
+    if (protegidaCsv) expect(protegidaCsv['Cost per item']).toBe(String(costo));
+    graphql.mockReset().mockResolvedValue({ productVariantsBulkUpdate: { userErrors: [] } });
+    await aplicarPrecios([protegida, libre]); // Equivale a seleccionar ambas.
+    const enviadas = graphql.mock.calls[0][1].variants;
+    expect(enviadas.find((v: any) => v.id === 'v0')).not.toHaveProperty('inventoryItem');
+    expect(enviadas.find((v: any) => v.id === 'v1')).toHaveProperty('inventoryItem.cost');
+    graphql.mockClear();
+    expect(await aplicarPrecios([protegida], { precio: false, costo: true })).toMatchObject({ actualizadas: 0, fallidas: 0 });
+    expect(graphql).not.toHaveBeenCalled();
+  });
+
 });

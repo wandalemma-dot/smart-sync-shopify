@@ -82,7 +82,7 @@ export async function aplicarPrecios(
       // sin tocar el precio de venta (o al revés).
       if (opciones.precio && u.newPrice !== undefined) v.price = String(u.newPrice);
       // El costo va dentro de inventoryItem (no pisa nada más del ítem).
-      if (opciones.costo && u.newCost !== undefined && u.newCost > 0) {
+      if (opciones.costo && !u.costoProtegido && !(Number(u.stockMartinez) > 0) && u.newCost !== undefined && u.newCost > 0) {
         v.inventoryItem = { cost: String(Math.round(u.newCost)) };
       }
       return v;

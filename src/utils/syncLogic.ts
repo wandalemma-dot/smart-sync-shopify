@@ -62,6 +62,7 @@ export interface MissingProduct {
 export interface UpdateAction {
   type: 'PRICE' | 'STOCK';
   margenId?: number | null;
+  costoProtegido?: boolean;
   variantId: string;
   inventoryItemId?: string;
   handle: string;
@@ -1528,11 +1529,14 @@ export async function processFiles(
            // nueva estaba en 0 y quedaba afuera.)
            const costoActual = (variant as any).cost !== undefined && (variant as any).cost !== ''
              ? parseFloat((variant as any).cost) : 0;
-           const proposedPrice = precioExistente(config.brand, variantPrice, calculatedCost, calculatedPrice);
+           const stockMartinez = Number((variant as any).stockMartinez) || 0;
+           const costoProtegido = stockMartinez > 0;
+           const costoParaMargen = costoProtegido ? costoActual : calculatedCost;
+           const proposedPrice = precioExistente(config.brand, variantPrice, costoParaMargen, calculatedPrice);
            const cambiaPrecio = proposedPrice > 0 && proposedPrice !== variantPrice;
            // Comparamos EN CENTAVOS. Antes se comparaba al peso y un costo que
            // en Shopify era 27561.63 se veía distinto de 27561.63 calculado.
-           const cambiaCosto = calculatedCost > 0
+           const cambiaCosto = !costoProtegido && calculatedCost > 0
              && Math.round(costoActual * 100) !== Math.round(calculatedCost * 100);
 
            if (provData.wholesale > 0) {
@@ -1550,10 +1554,11 @@ export async function processFiles(
                 sku,
                 oldPrice: variantPrice,
                 newPrice: proposedPrice,
-                margenId: config.brand === 'converse' || config.brand === 'lecoq' ? margenPct(variantPrice, calculatedCost) : undefined,
+                margenId: config.brand === 'converse' || config.brand === 'lecoq' ? margenPct(variantPrice, costoParaMargen) : undefined,
                 oldCost: costoActual,
-                newCost: calculatedCost,
-                stockMartinez: Number((variant as any).stockMartinez) || 0,
+                newCost: costoProtegido ? costoActual : calculatedCost,
+                costoProtegido,
+                stockMartinez,
                 title: String(prod.title || ''),
                 optionName: 'Talle',
                 optionValue: String(variant.title || ''),
@@ -1713,7 +1718,7 @@ export function downloadUpdateCSV(result: SyncResult, config: SyncConfig) {
       u.optionValue || '',
       u.sku,
       u.newPrice ?? '',
-      u.newCost ?? '',
+      u.costoProtegido || (u.stockMartinez || 0) > 0 ? u.oldCost ?? '' : u.newCost ?? '',
     ];
     csvContent += row.map(escapeCSV).join(',') + '\n';
   });

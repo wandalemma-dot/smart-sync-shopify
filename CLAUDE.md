@@ -48,6 +48,9 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ## 1. Qué hace la app
 
+- 16-oct-2026 Martínez: proteger costo por variante con stockMartinez > 0 al analizar, para todas las marcas. Propuesta conserva costo guardado y no genera cambio solo por costo proveedor. Escritura omite inventoryItem.cost incluso seleccionando todos o marcando manualmente; CSV precios conserva costo guardado en protegidas. Precio sigue seleccionable, inicialmente destildado. Umbral/margen iD usa costo guardado de Martínez; sin stock usa nuevo. Si costo guardado es cero/desconocido no inventar margen ni reemplazarlo. Mostrar unidades y costo protegido también sin cambios.
+
+
 - 16-oct-2026 iD: existentes Converse/Le Coq solo proponen cambio de precio con margen ACTUAL y costo NUEVO estrictamente menor al 50%, descontando IVA 21% de venta. Desde 50% conservar precio aunque cambie costo. Precio cero permite inicializar. No modificar fórmulas ni altas; básicos conservan sugerido, sujetos al umbral para cambiar existentes. Avisar bajo margen incluso sin cambios; propuesta no garantiza alcanzar 50%. Otras marcas sin cambios.
 
 

@@ -568,7 +568,7 @@ export default function App() {
                   <> Las <strong style={{ color: '#6ee7b7' }}>{sinCambios(result).length} variantes</strong> sin cambios de precio ni costo: no se tocan.</>
                 )}
               </p>
-              {result.updatesToApply.some(u => u.margenId != null && u.margenId < 50) && <p role="status" style={{ color: '#fbbf24', fontWeight: 'bold' }}>Atención: {result.updatesToApply.filter(u => u.margenId != null && u.margenId < 50).length} variantes tienen margen menor al 50% con el precio actual y el costo nuevo.</p>}
+              {result.updatesToApply.some(u => u.margenId != null && u.margenId < 50) && <p role="status" style={{ color: '#fbbf24', fontWeight: 'bold' }}>Atención: {result.updatesToApply.filter(u => u.margenId != null && u.margenId < 50).length} variantes tienen margen menor al 50% con el precio actual y el costo que corresponde (guardado si hay stock en Martínez).</p>}
               {/* Qué se toca */}
               <div style={{ display: 'flex', gap: '18px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '0.7rem', fontSize: '0.9rem' }}>
                 <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -595,7 +595,7 @@ export default function App() {
               {actualizacionesAplicables(result).some(u => (u.stockMartinez || 0) > 0) && (
                 <p style={{ fontSize: '0.8rem', color: '#fbbf24', marginTop: 0 }}>
                   📦 Los que ya tienen stock en <strong>Martínez</strong> vienen <strong>destildados</strong>: ese stock
-                  ya lo compraste al costo viejo. Si igual querés cambiarles el precio, tildalos a mano.
+                  ya lo compraste al costo viejo. Podés marcar su precio; el costo queda protegido incluso al marcar todos.
                 </p>
               )}
               {(() => {
@@ -644,10 +644,10 @@ export default function App() {
                         </td>
                         <td style={{ padding: '6px 10px' }}>
                           {u.title}
-                          {u.margenId != null && u.margenId < 50 && <div style={{ color: '#fbbf24', fontSize: '0.8rem' }}>Margen con precio actual y costo nuevo: {u.margenId.toFixed(2)}% — menor al 50%.</div>}
+                          {u.margenId != null && u.margenId < 50 && <div style={{ color: '#fbbf24', fontSize: '0.8rem' }}>Margen con precio actual y costo {enMartinez ? 'guardado' : 'nuevo'}: {u.margenId.toFixed(2)}% — menor al 50%.</div>}
                           {enMartinez && (
                             <div style={{ fontSize: '0.7rem', color: '#fbbf24' }}>
-                              📦 Ya está en Martínez ({u.stockMartinez}) — no se le cambia el precio
+                              📦 En Martínez: {u.stockMartinez} unidades — costo protegido
                             </div>
                           )}
                         </td>
@@ -656,7 +656,7 @@ export default function App() {
                           <span style={{ opacity: 0.6 }}>{u.oldPrice}</span> → <strong style={{ color: '#60a5fa' }}>{tocarPrecio ? u.newPrice : '(sin tocar)'}</strong>
                         </td>
                         <td style={{ padding: '6px', textAlign: 'center', opacity: tocarCosto ? 1 : 0.35 }}>
-                          <span style={{ opacity: 0.6 }}>{u.oldCost ?? '—'}</span> → <strong style={{ color: '#34d399' }}>{tocarCosto ? u.newCost : '(sin tocar)'}</strong>
+                          <span style={{ opacity: 0.6 }}>{u.oldCost ?? '—'}</span> → <strong style={{ color: '#34d399' }}>{enMartinez ? 'costo protegido' : tocarCosto ? u.newCost : '(sin tocar)'}</strong>
                         </td>
                         <td style={{ padding: '6px', textAlign: 'center', fontWeight: 'bold', color: m === null ? undefined : m >= 50 ? '#34d399' : m >= 40 ? '#f59e0b' : '#f87171' }}>
                           {m === null ? '—' : `${m.toFixed(1)}%`}
@@ -668,7 +668,7 @@ export default function App() {
                     {sinCambios(result).slice(0, 300).map((u, i) => (
                       <tr key={`s${i}`} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: 'rgba(16,185,129,0.10)', color: '#6ee7b7' }}>
                         <td style={{ padding: '6px' }}>—</td>
-                        <td style={{ padding: '6px 10px' }}>{u.title}{u.margenId != null && u.margenId < 50 && <div style={{ color: '#fbbf24' }}>Margen menor al 50%; el precio calculado ya coincide.</div>}</td>
+                        <td style={{ padding: '6px 10px' }}>{u.title}{(u.stockMartinez || 0) > 0 && <div style={{ color: '#fbbf24' }}>En Martínez: {u.stockMartinez} unidades — costo protegido.</div>}{u.margenId != null && u.margenId < 50 && <div style={{ color: '#fbbf24' }}>Margen menor al 50%; el precio calculado ya coincide.</div>}</td>
                         <td style={{ padding: '6px', textAlign: 'center' }}>{u.optionValue}</td>
                         <td style={{ padding: '6px', textAlign: 'center' }}>{u.oldPrice}</td>
                         <td style={{ padding: '6px', textAlign: 'center' }}>{u.oldCost ?? '—'}</td>
@@ -678,7 +678,7 @@ export default function App() {
                   </tbody>
                 </table>
               </div>
-              {result.updatesToApply.some(u => u.margenId !== undefined) && <p style={{ color: '#fbbf24' }}>Converse y Le Coq: solo se propone cambiar el precio si el margen actual con el costo nuevo es menor al 50% (venta sin IVA). Los costos se revisan por separado. Se conserva la fórmula de precios; la propuesta puede seguir debajo del 50%.</p>}
+              {result.updatesToApply.some(u => u.margenId !== undefined) && <p style={{ color: '#fbbf24' }}>Converse y Le Coq: solo se propone cambiar el precio si el margen con el precio actual es menor al 50% (venta sin IVA). Con stock en Martínez se usa y conserva el costo guardado; sin stock se usa el nuevo. Se conserva la fórmula de precios; la propuesta puede seguir debajo del 50%.</p>}
               <label style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '0.9rem' }}>
                 <input type="checkbox" checked={precioConfirm} onChange={e => setPrecioConfirm(e.target.checked)} />
                 Revisé la lista y quiero <strong>&nbsp;aplicar estos precios y costos&nbsp;</strong> en Shopify.
