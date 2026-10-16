@@ -48,6 +48,9 @@ No es programadora: explicale en castellano simple, sin jerga.
 
 ## 1. Qué hace la app
 
+- 16-oct-2026 iD: existentes Converse/Le Coq solo proponen cambio de precio con margen ACTUAL y costo NUEVO estrictamente menor al 50%, descontando IVA 21% de venta. Desde 50% conservar precio aunque cambie costo. Precio cero permite inicializar. No modificar fórmulas ni altas; básicos conservan sugerido, sujetos al umbral para cambiar existentes. Avisar bajo margen incluso sin cambios; propuesta no garantiza alcanzar 50%. Otras marcas sin cambios.
+
+
 - 15-oct-2026 Orchard: OC y OCULTISM son buzos distintos en Orchard stock (1).xlsx. Comparar nombres por palabras completas, con marca y tipo; no usar subcadenas (OC coincidía dentro de OCULTISM y duplicaba IDs en precios). Priorizar descripción completa sobre su base (No More Tears Washed frente a No More Tears); nombres independientes o equivalentes ambiguos bloquean análisis. Actualización de precios deduplica IDs con valores idénticos y rechaza contradicciones en los campos elegidos; respuesta incompleta no cuenta como éxito. No cambia fórmula de precios/costos. Prueba real ORCHARD_TEMPLATE en orchardPrecios.test.ts.
 
 - 15-oct-2026: habilitar alta de talles faltantes SOLO Kappa Indumentaria. Reutiliza controles Reebok: producto identificado, opción única, variantes completas (<100), precio/costo y SKU válidos, ningún talle existente con otro código. EAN en SKU y barcode; sin EAN usar SKU proveedor y barcode vacío. Agregar códigos proveedor a etiquetas sin reemplazarlas; releer antes de crear para evitar duplicados. Precio Público y costo Mayorista con descuento del archivo, stock exclusivamente DISTRINANDO. Selección y confirmación manual existentes; publicar no crea variantes. Kappa Calzado/Crocs siguen pendientes. Tests kappaTallesFaltantes.test.ts con Shopify simulado.

@@ -90,14 +90,14 @@ describe.each(['lecoq', 'converse'] as const)('precios por par: %s', brand => {
     const sinPrecio = await processFiles(plantilla('SOCKS X6', 0), null, null, config);
     expect(buildMatrixProducts(sinPrecio, config)[0].variants[0]).toMatchObject({ price: 0, cost: 0 });
   });
-  it('propone el costo unitario para un producto existente sin escribir en Shopify', async () => {
+  it.each([[89900, 89900], [15024.57, 15024.57], [15024.56, 15900], [0, 15900]])('precio actual %s: respeta margen con costo unitario nuevo', async (actual, esperado) => {
     graphql.mockImplementation(async (q: string) => q.includes('locations(')
       ? { locations: { edges: ['ID (Converse - Le Coq Sportif)', 'DEPOSITO MARTINEZ'].map(name => ({ node: { id: name, name } })) } }
       : { products: { edges: [{ node: { id: 'p', handle: 'medias', title: 'Medias', tags: ['LAN0226024P'], variants: { edges: [{ node: {
-        id: 'v', title: 'TU', sku: 'LAN0226024P-TU', price: '89900', inventoryItem: { id: 'i', unitCost: { amount: '38492.70' } },
+        id: 'v', title: 'TU', sku: 'LAN0226024P-TU', price: String(actual), inventoryItem: { id: 'i', unitCost: { amount: '38492.70' } },
       } }] } } }], pageInfo: { hasNextPage: false } } });
     const res = await processFiles(plantilla(), null, null, config);
-    expect(res.updatesToApply).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'PRICE', newCost: 6208.5, newPrice: 15900 })]));
+    expect(res.updatesToApply).toEqual(expect.arrayContaining([expect.objectContaining({ type: 'PRICE', newCost: 6208.5, newPrice: esperado })]));
     expect(graphql.mock.calls.every(([q]) => !q.includes('mutation'))).toBe(true);
   });
 });

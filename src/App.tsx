@@ -565,9 +565,10 @@ export default function App() {
                 Cambia <strong>solo precio y costo</strong> de {actualizacionesAplicables(result).length} variantes.
                 No toca fotos, descripciones ni canales de venta (a diferencia de importar un CSV).
                 {sinCambios(result).length > 0 && (
-                  <> Las <strong style={{ color: '#6ee7b7' }}>{sinCambios(result).length} en verde</strong> ya están bien: no se tocan.</>
+                  <> Las <strong style={{ color: '#6ee7b7' }}>{sinCambios(result).length} variantes</strong> sin cambios de precio ni costo: no se tocan.</>
                 )}
               </p>
+              {result.updatesToApply.some(u => u.margenId != null && u.margenId < 50) && <p role="status" style={{ color: '#fbbf24', fontWeight: 'bold' }}>Atención: {result.updatesToApply.filter(u => u.margenId != null && u.margenId < 50).length} variantes tienen margen menor al 50% con el precio actual y el costo nuevo.</p>}
               {/* Qué se toca */}
               <div style={{ display: 'flex', gap: '18px', flexWrap: 'wrap', alignItems: 'center', marginBottom: '0.7rem', fontSize: '0.9rem' }}>
                 <label style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -643,6 +644,7 @@ export default function App() {
                         </td>
                         <td style={{ padding: '6px 10px' }}>
                           {u.title}
+                          {u.margenId != null && u.margenId < 50 && <div style={{ color: '#fbbf24', fontSize: '0.8rem' }}>Margen con precio actual y costo nuevo: {u.margenId.toFixed(2)}% — menor al 50%.</div>}
                           {enMartinez && (
                             <div style={{ fontSize: '0.7rem', color: '#fbbf24' }}>
                               📦 Ya está en Martínez ({u.stockMartinez}) — no se le cambia el precio
@@ -665,15 +667,18 @@ export default function App() {
                     {/* Al final, en verde: las que ya están bien y NO se tocan */}
                     {sinCambios(result).slice(0, 300).map((u, i) => (
                       <tr key={`s${i}`} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', background: 'rgba(16,185,129,0.10)', color: '#6ee7b7' }}>
-                        <td style={{ padding: '6px 10px' }}>✅ {u.title}</td>
+                        <td style={{ padding: '6px' }}>—</td>
+                        <td style={{ padding: '6px 10px' }}>{u.title}{u.margenId != null && u.margenId < 50 && <div style={{ color: '#fbbf24' }}>Margen menor al 50%; el precio calculado ya coincide.</div>}</td>
                         <td style={{ padding: '6px', textAlign: 'center' }}>{u.optionValue}</td>
                         <td style={{ padding: '6px', textAlign: 'center' }}>{u.oldPrice}</td>
                         <td style={{ padding: '6px', textAlign: 'center' }}>{u.oldCost ?? '—'}</td>
+                        <td style={{ padding: '6px', textAlign: 'center', color: (u.margenId ?? 100) < 50 ? '#fbbf24' : undefined }}>{margenPct(u.oldPrice ?? 0, u.newCost ?? 0)?.toFixed(2) ?? '—'}%</td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
+              {result.updatesToApply.some(u => u.margenId !== undefined) && <p style={{ color: '#fbbf24' }}>Converse y Le Coq: solo se propone cambiar el precio si el margen actual con el costo nuevo es menor al 50% (venta sin IVA). Los costos se revisan por separado. Se conserva la fórmula de precios; la propuesta puede seguir debajo del 50%.</p>}
               <label style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '0.9rem' }}>
                 <input type="checkbox" checked={precioConfirm} onChange={e => setPrecioConfirm(e.target.checked)} />
                 Revisé la lista y quiero <strong>&nbsp;aplicar estos precios y costos&nbsp;</strong> en Shopify.

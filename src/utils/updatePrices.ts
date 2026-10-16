@@ -50,14 +50,7 @@ export function sinCambios(result: SyncResult): UpdateAction[] {
   return result.updatesToApply.filter((u) => u.type === 'PRICE' && u.sinCambios);
 }
 
-// IVA para calcular el margen (el precio de venta lo incluye).
-export const IVA = 1.21;
-
-// Margen que queda con ese precio y costo. Es lo que Wanda mira para decidir.
-export function margenPct(precio: number, costo: number): number | null {
-  if (!precio || precio <= 0 || !costo || costo <= 0) return null;
-  return (1 - costo / (precio / IVA)) * 100;
-}
+export { IVA, margenPct } from './margen';
 
 export interface OpcionesPrecio {
   precio: boolean; // actualizar el precio de venta

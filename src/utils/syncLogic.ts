@@ -1,3 +1,4 @@
+import { precioExistente, margenPct } from './margen';
 import { parseCrocs, leerCrocs, coincideVarianteCrocs } from './crocsLogic';
 import { ausenteCrocs, codigosCrocs, type CrocsCobertura } from './crocsCatalogo';
 import { parseKappa, leerKappa, coincideVarianteKappa } from './kappaLogic';
@@ -60,6 +61,7 @@ export interface MissingProduct {
 
 export interface UpdateAction {
   type: 'PRICE' | 'STOCK';
+  margenId?: number | null;
   variantId: string;
   inventoryItemId?: string;
   handle: string;
@@ -1526,7 +1528,8 @@ export async function processFiles(
            // nueva estaba en 0 y quedaba afuera.)
            const costoActual = (variant as any).cost !== undefined && (variant as any).cost !== ''
              ? parseFloat((variant as any).cost) : 0;
-           const cambiaPrecio = calculatedPrice > 0 && calculatedPrice !== variantPrice;
+           const proposedPrice = precioExistente(config.brand, variantPrice, calculatedCost, calculatedPrice);
+           const cambiaPrecio = proposedPrice > 0 && proposedPrice !== variantPrice;
            // Comparamos EN CENTAVOS. Antes se comparaba al peso y un costo que
            // en Shopify era 27561.63 se veía distinto de 27561.63 calculado.
            const cambiaCosto = calculatedCost > 0
@@ -1546,7 +1549,8 @@ export async function processFiles(
                 handle: prod.handle,
                 sku,
                 oldPrice: variantPrice,
-                newPrice: calculatedPrice,
+                newPrice: proposedPrice,
+                margenId: config.brand === 'converse' || config.brand === 'lecoq' ? margenPct(variantPrice, calculatedCost) : undefined,
                 oldCost: costoActual,
                 newCost: calculatedCost,
                 stockMartinez: Number((variant as any).stockMartinez) || 0,
