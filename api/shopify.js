@@ -30,6 +30,9 @@ const ALLOWED_MUTATIONS = [
   // que es lo que evita crear duplicados: el 36 corrido y el 35 nuevo.
   'productVariantsBulkCreate',
   'tagsAdd', // conservar códigos originales al agregar talles Reebok
+  // Después de crear talles faltantes, los ubica en su lugar (35, 36.5, 37…)
+  // en vez de dejarlos al final. Solo reordena; no cambia precio, SKU ni stock.
+  'productOptionsReorder',
 ];
 
 const SHOP = 'indy-com-ar.myshopify.com';
@@ -45,6 +48,9 @@ const API_VERSION_INFORMES = '2026-07';
 function versionPara(query) {
   const esMutacion = /\bmutation\b/i.test(query);
   if (!esMutacion && /\bshopifyqlQuery\b/.test(query)) return API_VERSION_INFORMES;
+  // Reordenar talles: operación validada contra el esquema 2026-07. Solo cambia
+  // el orden de los valores de la opción; el resto de las escrituras sigue en 2024-04.
+  if (esMutacion && /\bproductOptionsReorder\b/.test(query)) return API_VERSION_INFORMES;
   return API_VERSION;
 }
 

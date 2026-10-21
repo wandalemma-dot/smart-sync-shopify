@@ -62,7 +62,7 @@ export default function App() {
     setFaltantesLoading(true); setFaltantesDone(null);
     try {
       const res = await crearTallesFaltantes(stockPlan, filas);
-      setFaltantesDone(`Talles creados ${res.written} · fallidos ${res.failed}` + (res.errors.length ? ` · ${res.errors.slice(0, 2).join(' | ')}` : ''));
+      setFaltantesDone(`Talles creados ${res.written} · fallidos ${res.failed}` + (res.errors.length ? ` · ${res.errors.slice(0, 2).join(' | ')}` : '') + (res.avisos?.length ? ` · ${res.avisos.slice(0, 2).join(' | ')}` : ''));
       setFaltantesConfirm(false);
     } catch (e: any) {
       alert('Error creando los talles: ' + e.message);

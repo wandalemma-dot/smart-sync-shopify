@@ -95,6 +95,8 @@ export interface WriteResult {
   written: number;
   failed: number;
   errors: string[];
+  /** Avisos que no son fallas (ej. talles creados que no se pudieron ordenar). */
+  avisos?: string[];
 }
 
 const LOCATIONS_QUERY = `query { locations(first: 50) { edges { node { id name } } } }`;
@@ -162,6 +164,45 @@ const CREATE_VARIANTS = `
     }
   }
 `;
+
+// Ordena los valores de la opción Talle. Shopify reordena las variantes según
+// ese orden. No toca precios, SKU ni stock.
+const REORDER_OPTION = `
+  mutation OrdenarTalles($productId: ID!, $options: [OptionReorderInput!]!) {
+    productOptionsReorder(productId: $productId, options: $options) {
+      userErrors { field message }
+    }
+  }
+`;
+
+const ORDEN_LETRAS = ['XXXS', 'XXS', 'XS', 'S', 'M', 'L', 'XL', 'XXL', 'XXXL', 'XXXXL'];
+function posicionLetra(t: string): number {
+  const v = t.trim().toUpperCase();
+  const n = v.match(/^([2-5])XL$/);
+  return ORDEN_LETRAS.indexOf(n ? 'X'.repeat(Number(n[1])) + 'L' : v);
+}
+
+/**
+ * Orden natural de los talles de un producto: numéricos de menor a mayor
+ * (35, 36.5, 37…) o letras XS…XXL. Si mezcla tipos o hay un talle que no se
+ * sabe ubicar (C6/7, TU, Izquierdo), devuelve null: no se adivina el orden.
+ */
+export function ordenarTalles(talles: string[]): string[] | null {
+  const valores = [...new Set(talles.map(t => String(t).trim()))];
+  if (valores.length < 2) return null;
+  const num = (t: string) => /^\d+([.,]\d+)?$/.test(t) ? Number(t.replace(',', '.')) : NaN;
+  if (valores.every(t => Number.isFinite(num(t)))) {
+    const nums = valores.map(num);
+    if (new Set(nums).size !== nums.length) return null;
+    return valores.sort((a, b) => num(a) - num(b));
+  }
+  if (valores.every(t => posicionLetra(t) >= 0)) {
+    const pos = valores.map(posicionLetra);
+    if (new Set(pos).size !== pos.length) return null;
+    return valores.sort((a, b) => posicionLetra(a) - posicionLetra(b));
+  }
+  return null;
+}
 
 const ADD_SUPPLIER_TAGS = `
   mutation EtiquetarTalles($id: ID!, $tags: [String!]!) {
@@ -734,6 +775,7 @@ export async function crearTallesFaltantes(
   let written = 0;
   let failed = 0;
   const errors: string[] = [];
+  const avisos: string[] = [];
   let hechas = 0;
   const total = filas.length;
 
@@ -750,6 +792,8 @@ export async function crearTallesFaltantes(
       if (f.costo && f.costo > 0) v.inventoryItem.cost = String(f.costo);
       return v;
     });
+    let live: any[] = [];
+    let opcionNombre = 'Talle';
     try {
       // Releer todos los productos antes del alta: el precio debe seguir coincidiendo.
       {
@@ -757,7 +801,8 @@ export async function crearTallesFaltantes(
           q: `handle:${JSON.stringify(lista[0].handle)}`, loc: plan.locationId,
         });
         const product = fresh?.products?.edges?.find((e: any) => e.node.id === productId)?.node;
-        const live = (product?.variants?.edges || []).map((e: any) => e.node);
+        live = (product?.variants?.edges || []).map((e: any) => e.node);
+        opcionNombre = product?.options?.[0]?.name || 'Talle';
         if (!product || product.options?.length !== 1 || live.length >= 100) {
           throw new Error('No se pudo verificar el producto. Volvé a simular antes de crear.');
         }
@@ -797,6 +842,22 @@ export async function crearTallesFaltantes(
         written += creadas;
         failed += lista.length - creadas;
         if (creadas !== lista.length) errors.push(`${lista[0].title}: alta incompleta; volvé a simular.`);
+        // Dejar los talles nuevos en su lugar (35, 36.5, 37…), no al final.
+        // Si no se puede, el talle ya quedó creado: solo se avisa.
+        if (creadas === lista.length) {
+          const orden = ordenarTalles([...live.map((v: any) => v.title), ...lista.map(f => f.talle)]);
+          if (orden) {
+            try {
+              const r = await shopifyGraphQL<any>(REORDER_OPTION, {
+                productId, options: [{ name: opcionNombre, values: orden.map(name => ({ name })) }],
+              });
+              const err = r?.productOptionsReorder?.userErrors?.[0]?.message;
+              if (!r?.productOptionsReorder || err) throw new Error(err || 'sin respuesta');
+            } catch (e: any) {
+              avisos.push(`${lista[0].title}: talles creados, pero no se pudieron ordenar (${e?.message || 'error'}).`);
+            }
+          }
+        }
       }
     } catch (err: any) {
       failed += lista.length;
@@ -806,7 +867,7 @@ export async function crearTallesFaltantes(
     onProgress?.(hechas, total);
   }
 
-  return { written, failed, errors };
+  return { written, failed, errors, avisos };
 }
 
 // PASO 2 — Escribe de verdad, en lotes. Solo cantidades.
