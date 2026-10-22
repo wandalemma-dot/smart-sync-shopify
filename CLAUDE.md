@@ -1159,3 +1159,8 @@ encontraron así y no se habrían visto de otra forma.
 ### Orden de talles creados (21-oct-2026)
 - Pedido de Wanda/gax: al crear talles faltantes («No ubicados»), ubicarlos en su lugar (35, 36.5, 37, 38…) y no al final. Después de `productVariantsBulkCreate` exitoso se llama `productOptionsReorder` con todos los talles del producto ordenados (`ordenarTalles()` en `writeStock.ts`). Esa mutación va a la API 2026-07 (validada contra ese esquema); el resto de las escrituras sigue en 2024-04.
 - Solo ordena si todos los talles son numéricos (con medios) o todos letras XS…XXL/2XL. Mezclas, TU, C6/7 u otros valores no reconocidos: no se adivina, queda el orden de Shopify. Si falla el orden, los talles quedan creados y se muestra un aviso, no un fallo. No cambia precio, SKU ni stock. Tests: `ordenTalles.test.ts`.
+
+### Pedidos DISTRINANDO con la lista de Crocs (22-oct-2026)
+- `leerExcelDistrinando` acepta también STOCKPROMOCROCS.xlsx: encabezados «Modelo-Color» (con guion), «Descripción», «UdM», «Disponible», «Tipo de Producto» y «PEDIDO». Hojas ocultas siguen afuera.
+- Packs por UdM excluidos. Calzado: talle web con `talleCrocs` (la misma tabla de la sincronización), validado contra el número final de la descripción; dobles infantiles u otros sin confirmar quedan sin talle y solo se asocian por SKU exacto. Accesorios (Jibbitz) traen SKU = Modelo-Color y se asocian solo por SKU exacto.
+- Archivo real del 22-oct: 809 filas → 722 artículos (393 calzado con talle, 102 calzado sin talle validado, 227 accesorios), 87 packs. Tests `pedidoDistrinandoCrocs.test.ts` (prueba real optativa con `CROCS_PEDIDO_TEMPLATE`).

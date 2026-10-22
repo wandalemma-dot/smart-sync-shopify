@@ -2,6 +2,7 @@ import * as XLSX from 'xlsx';
 import { leerPendientesSucursal, type PendienteId } from './pedidoId';
 import { REEBOK_LOCATION } from './reebokLogic';
 import { talleArReebok } from './reebokCalzado';
+import { talleCrocs } from './crocsTalles';
 import { unzipSync, strFromU8 } from 'fflate';
 
 export const DISTRINANDO_LINES_QUERY = `query PedidoDistrinandoLines($id: ID!, $after: String) {
@@ -30,7 +31,7 @@ export function talleNormalizado(v: string) {
 export interface ArticuloDistrinando {
   id: string; archivoId: string; archivo: string; hoja: string; fila: number; celda: string;
   codigo: string; sku: string; ean: string; titulo: string; talle: string;
-  disponible: number; tope: boolean; marca: 'Reebok' | 'Kappa';
+  disponible: number; tope: boolean; marca: 'Reebok' | 'Kappa' | 'Crocs';
 }
 export interface HojaDistrinando { nombre: string; path: string; limpiar: string[] }
 export interface ArchivoDistrinando {
@@ -65,14 +66,17 @@ export function leerExcelDistrinando(original: Uint8Array, nombre: string, id: s
     if (wb.Workbook?.Sheets?.[index]?.Hidden) return;
     const ws = wb.Sheets[hoja];
     const rows = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, range: 0, defval: '' });
-    const h = rows.findIndex(r => r.some(v => normalizar(v) === 'MODELO COLOR') && r.some(v => normalizar(v) === 'PEDIDO'));
+    // Reebok/Kappa usan «Modelo Color»; Crocs (STOCKPROMOCROCS) usa «Modelo-Color».
+    const h = rows.findIndex(r => r.some(v => ['MODELO COLOR', 'MODELO-COLOR'].includes(normalizar(v))) && r.some(v => normalizar(v) === 'PEDIDO'));
     if (h < 0) return;
     const hs = rows[h].map(normalizar);
     const col = (...names: string[]) => names.map(n => hs.indexOf(n)).find(i => i >= 0) ?? -1;
-    const skuC = col('SKU', 'NUMERO DE ARTICULO'), modelC = col('MODELO COLOR'), descC = col('DESCRIPCION DEL ARTICULO');
+    const crocs = hs.includes('MODELO-COLOR');
+    const skuC = col('SKU', 'NUMERO DE ARTICULO'), modelC = col('MODELO COLOR', 'MODELO-COLOR');
+    const descC = crocs ? col('DESCRIPCION') : col('DESCRIPCION DEL ARTICULO'), tipoC = col('TIPO DE PRODUCTO');
     const stockC = col('DISPONIBLE (INMEDIATO)', 'DISPONIBLE', 'STOCK X SKU', 'STOCK');
     const udmC = col('UDM', 'UNI. MEDIDA', 'UNIDAD DE MEDIDA'), pedidoC = col('PEDIDO'), eanC = col('EAN');
-    if ([skuC, modelC, descC, stockC, udmC, pedidoC].some(c => c < 0)) throw new Error(`${nombre}, ${hoja}: faltan columnas de SKU, modelo, descripción, disponibilidad, UDM o Pedido.`);
+    if ([skuC, modelC, descC, stockC, udmC, pedidoC, ...(crocs ? [tipoC] : [])].some(c => c < 0)) throw new Error(`${nombre}, ${hoja}: faltan columnas de SKU, modelo, descripción, disponibilidad, UDM o Pedido.`);
     const info: HojaDistrinando = { nombre: hoja, path: rutaHoja(zip, index), limpiar: [] };
     p.hojas.push(info);
     const vistos = new Map<string, string>(), eans = new Set<string>();
@@ -86,20 +90,36 @@ export function leerExcelDistrinando(original: Uint8Array, nombre: string, id: s
       if (!sku) continue;
       const desc = String(r[descC] ?? '').trim(), udm = normalizar(r[udmC]);
       const aviso = (s: string) => p.avisos.push(`${nombre} · ${hoja} · fila ${i + 1}: ${sku} — ${s}`);
+      let marca: ArticuloDistrinando['marca'] | null = null, codigo = '', talle = '', exigirTalle = true;
+      if (crocs) {
+        // Crocs: packs por UdM; calzado con el talle web de la misma tabla que la
+        // sincronización, validado contra el número final de la descripción.
+        // Accesorios individuales solo se asocian por SKU exacto.
+        if (/PACK|CURVA|MODULO/.test(udm)) { aviso('pack excluido.'); continue; }
+        marca = 'Crocs';
+        codigo = normalizar(r[modelC]).replace(/-+$/, '');
+        const esCalzado = normalizar(r[tipoC]) === 'CALZADO';
+        // Los accesorios (Jibbitz) traen SKU = Modelo-Color, sin talle.
+        if (!codigo || !(sku.startsWith(codigo + '-') || (!esCalzado && sku === codigo))) { aviso('SKU y Modelo-Color incompatibles; excluido.'); continue; }
+        if (esCalzado) {
+          const mapped = talleCrocs(sku.slice(codigo.length + 1));
+          if (mapped && mapped.talleWeb === normalizar(desc).match(/\s(\d+)$/)?.[1]) talle = mapped.talleWeb;
+        } else exigirTalle = false;
+      } else {
       if (/PACK|CURVA/.test(udm) || /(?:^|[\s-])(?:PACK|CURVA|M\d+U?)(?:[\s-]|$)/.test(sku + ' ' + normalizar(desc))) { aviso('pack/curva excluido.'); continue; }
-      const marca = sku.startsWith('RBK') ? 'Reebok' : /^K\d/.test(sku) ? 'Kappa' : null;
+      marca = sku.startsWith('RBK') ? 'Reebok' : /^K\d/.test(sku) ? 'Kappa' : null;
       if (!marca) { aviso('marca sin identificar; excluido.'); continue; }
-      const codigo = normalizar(r[modelC]).replace(/-+$/, '');
+      codigo = normalizar(r[modelC]).replace(/-+$/, '');
       if (!codigo || !sku.startsWith(codigo + '-')) { aviso('SKU y Modelo Color incompatibles; excluido.'); continue; }
       const suffix = sku.slice(codigo.length + 1).replace(',', '.');
       const ropa = /^(?:X{0,4}[SML]|[2-6]XL|TU|UNICO)$/.test(suffix);
       const calzado = /^(?:\d+(?:\.\d+)?[KW]?|M\d+(?:\.\d+)?\/W\d+(?:\.\d+)?)$/.test(suffix);
       if (!ropa && !calzado) { aviso('no tiene un talle individual; excluido.'); continue; }
-      let talle = '';
       if (ropa || marca === 'Kappa') {
         if (normalizar(desc).endsWith(' ' + suffix)) talle = talleNormalizado(suffix);
       } else talle = talleArReebok(desc, suffix);
       if (calzado && talle && (Number(talle) < 20 || Number(talle) > 55)) talle = '';
+      }
       const rawEAN = r[eanC], eanText = String(rawEAN ?? '').trim();
       const ean = /^0*$/.test(eanText) ? '' : eanText;
       if (ean && (!/^\d{8,14}$/.test(ean) || (typeof rawEAN === 'number' && !Number.isSafeInteger(rawEAN)))) throw new Error(`${nombre}, fila ${i + 1}: EAN inválido; no se redondea.`);
@@ -114,7 +134,7 @@ export function leerExcelDistrinando(original: Uint8Array, nombre: string, id: s
       vistos.set(sku, firma);
       if (ean && eans.has(ean)) throw new Error(`${nombre}, ${hoja}: EAN repetido ${ean}.`);
       if (ean) eans.add(ean);
-      if (!talle) aviso('sin talle AR validado: solo se puede asociar por EAN o SKU de variante exacto.');
+      if (!talle && exigirTalle) aviso('sin talle AR validado: solo se puede asociar por EAN o SKU de variante exacto.');
       p.articulos.push({ id: `${id}:${index}:${i + 1}`, archivoId: id, archivo: nombre, hoja, fila: i + 1, celda,
         codigo, sku, ean, titulo: desc, talle, disponible, tope: stockText.startsWith('+'), marca });
     }
@@ -144,7 +164,7 @@ function candidatosPara(l: PendienteId, articulos: ArticuloDistrinando[]) {
   }
   // Sin EAN en listas antiguas, código exacto del producto + talle AR confirmado.
   // No recurrir a tags si hay un SKU de proveedor explícito que contradice la fila.
-  const proveedorExplicito = /^(RBK|K\d)/.test(sku);
+  const proveedorExplicito = /^(RBK|K\d|C\d+-)/.test(sku);
   const candidatos = articulos.filter(a => !proveedorExplicito && !!talle && a.talle === talle &&
     (tags.includes(a.codigo) || tags.includes(a.sku) || sku === a.codigo) &&
     (!l.vendor || normalizar(l.vendor).includes(normalizar(a.marca))));
