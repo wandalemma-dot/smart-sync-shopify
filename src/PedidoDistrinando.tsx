@@ -42,7 +42,7 @@ export default function PedidoDistrinando() {
   const resumen=archivos.map(p=>({p,qty:filas.filter(f=>f.elegido?.archivoId===p.id).reduce((n,f)=>n+f.pedir,0)}));
   return <section className="glass-panel" style={{padding:'1.5rem',border:'1px solid #6366f1'}}>
     <h2 style={{color:'#a5b4fc',marginTop:0}}>📋 Armado de pedidos DISTRINANDO</h2>
-    <p>Subí las órdenes y las listas de Reebok y Kappa. Cada artículo queda en la columna Pedido de su Excel.</p>
+    <p>Subí las órdenes y las listas de Reebok, Kappa y Crocs. Cada artículo queda en la columna Pedido de su Excel.</p>
     <p style={{opacity:.8}}>Solo cantidades todavía pendientes en <strong>DISTRINANDO SA (Reebok - Kappa)</strong>, en órdenes abiertas pagadas o parcialmente reembolsadas. Excluye canceladas y etiquetas «pedido distrinando» / «solucionar». No modifica Shopify ni envía el pedido al proveedor.</p>
     <div style={{display:'flex',gap:'1rem',flexWrap:'wrap'}}>
       <label className="dropzone" style={{flex:1,minWidth:240}}>1. Export de órdenes de Shopify (.csv)
