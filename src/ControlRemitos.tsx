@@ -15,6 +15,29 @@ import {
 import type { Movimiento, Remito, RenglonRemito, VarianteInfo, FilaControl, TipoFila } from './utils/controlRemitos';
 import { compararConPedido, notaDesdeFilas } from './utils/controlPedido';
 import type { NotaPedido, TipoPedido, FilaPedido } from './utils/controlPedido';
+import { facturaGrupoBlanco, lineasDePagina, notaGrupoBlanco } from './utils/grupoBlanco';
+
+// Cada proveedor trae su factura y su nota de pedido en un formato propio.
+// «Otro proveedor» usa el Excel genérico (el que arma Claude desde las fotos).
+type Proveedor = 'generico' | 'grupoBlanco';
+const PROVEEDORES: { id: Proveedor; nombre: string }[] = [
+  { id: 'generico', nombre: 'Otro proveedor (Excel genérico)' },
+  { id: 'grupoBlanco', nombre: 'Grupo Blanco (Timberland)' },
+];
+
+/** Texto del PDF, página por página y renglón por renglón (PDF.js se carga en index.html). */
+async function paginasPdf(file: File): Promise<string[][]> {
+  const pdfjsLib = (window as any).pdfjsLib;
+  if (!pdfjsLib) throw new Error('No cargó el lector de PDF. Refrescá la página con Ctrl+Shift+R.');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  const paginas: string[][] = [];
+  for (let i = 1; i <= pdf.numPages; i++) {
+    const page = await pdf.getPage(i);
+    paginas.push(lineasDePagina((await page.getTextContent()).items));
+  }
+  return paginas;
+}
 
 interface Foto { nombre: string; mediaType: string; data: string; vista: string }
 
@@ -76,7 +99,9 @@ export default function ControlRemitos() {
   const [personasSel, setPersonasSel] = useState<Set<string>>(new Set());
   const [sucursalSel, setSucursalSel] = useState('');
   const [verOk, setVerOk] = useState(false);
+  const [proveedor, setProveedor] = useState<Proveedor>('generico');
   const [notas, setNotas] = useState<NotaPedido[]>([]);
+  const [avisosNotas, setAvisosNotas] = useState<string[]>([]);
   const [verOkPedido, setVerOkPedido] = useState(false);
 
   // ---------- 1) Fotos ----------
@@ -123,10 +148,15 @@ export default function ControlRemitos() {
     if (!file) return;
     setError(null); setRemito(null); setMovs(null);
     try {
-      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-      const hoja = wb.Sheets[wb.SheetNames[0]];
-      const filas = XLSX.utils.sheet_to_json<unknown[]>(hoja, { header: 1, raw: true, defval: '' });
-      const rem = remitoDesdeFilas(filas);
+      let rem: Remito;
+      if (/\.pdf$/i.test(file.name)) {
+        if (proveedor !== 'grupoBlanco') throw new Error('para leer una factura en PDF elegí primero el proveedor.');
+        rem = facturaGrupoBlanco(await paginasPdf(file));
+      } else {
+        const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+        const hoja = wb.Sheets[wb.SheetNames[0]];
+        rem = remitoDesdeFilas(XLSX.utils.sheet_to_json<unknown[]>(hoja, { header: 1, raw: true, defval: '' }));
+      }
       setRemito(rem);
       if (/^\d{4}-\d{2}-\d{2}$/.test(rem.fecha || '')) {
         setDesde(rem.fecha);
@@ -134,7 +164,7 @@ export default function ControlRemitos() {
         setHasta(h > hoy() ? hoy() : h);
       }
     } catch (e: any) {
-      setError('No pude leer el Excel: ' + e.message);
+      setError('No pude leer la factura: ' + e.message);
     }
   };
 
@@ -144,17 +174,27 @@ export default function ControlRemitos() {
     setError(null);
     const nuevas: NotaPedido[] = [];
     const errores: string[] = [];
+    const avisosN: string[] = [];
     let orden = notas.reduce((m, n) => Math.max(m, n.orden), 0);
     for (const file of [...files]) {
       try {
         const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
-        const filas = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[wb.SheetNames[0]], { header: 1, raw: true, defval: '' });
-        const n = notaDesdeFilas(filas, file.name, ++orden);
+        const filasDe = (nombre: string) => XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[nombre], { header: 1, raw: true, defval: '' });
+        let n: NotaPedido;
+        if (proveedor === 'grupoBlanco') {
+          const visibles = wb.SheetNames.filter((nombre, i) => !wb.Workbook?.Sheets?.[i]?.Hidden);
+          const r = notaGrupoBlanco(visibles.map((nombre) => ({ nombre, filas: filasDe(nombre) })), file.name, ++orden);
+          n = r.nota;
+          avisosN.push(...r.avisos.map((a) => `${file.name}: ${a}`));
+        } else {
+          n = notaDesdeFilas(filasDe(wb.SheetNames[0]), file.name, ++orden);
+        }
         if (!n.fecha) n.fecha = new Date(file.lastModified).toISOString().slice(0, 10);
         nuevas.push(n);
       } catch (e: any) { errores.push(e.message); }
     }
     setNotas((ns) => [...ns, ...nuevas]);
+    setAvisosNotas((a) => [...a, ...avisosN]);
     if (errores.length) setError('No pude leer: ' + errores.join(' · '));
   };
 
@@ -246,8 +286,25 @@ export default function ControlRemitos() {
         bien. <strong>No cambia nada en Shopify.</strong>
       </p>
 
+      <label style={{ fontSize: '0.9rem', display: 'block', margin: '0.6rem 0 0.4rem' }}>
+        <strong>Proveedor</strong>{' '}
+        <select value={proveedor} style={{ ...inputSt, background: 'var(--bg-color)', fontSize: '0.9rem' }}
+          onChange={(e) => { setProveedor(e.target.value as Proveedor); setRemito(null); setMovs(null); setNotas([]); setAvisosNotas([]); setError(null); }}>
+          {PROVEEDORES.map((p) => <option key={p.id} value={p.id}>{p.nombre}</option>)}
+        </select>
+      </label>
+
       {/* ---- 1. FACTURA: Excel (gratis) o fotos (con clave de IA) ---- */}
       <h3 style={{ fontSize: '1rem', marginBottom: '0.5rem' }}>1 · La factura</h3>
+      {proveedor === 'grupoBlanco' ? (
+        <div style={{ background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.3)', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
+          <strong>Factura de Grupo Blanco</strong> <span style={{ opacity: 0.75, fontSize: '0.82rem' }}>(el PDF tal cual lo mandan)</span>
+          <p style={{ fontSize: '0.82rem', opacity: 0.85, margin: '4px 0 8px' }}>
+            La factura viene por curva y sin talles: se controla el total de unidades de cada modelo. Del PDF se lee solo el Original.
+          </p>
+          <input type="file" accept=".pdf" onChange={(e) => { subirExcel(e.target.files?.[0]); e.target.value = ''; }} />
+        </div>
+      ) : (<>
       <div style={{ background: 'rgba(52,211,153,0.08)', border: '1px solid rgba(52,211,153,0.3)', borderRadius: 8, padding: '10px 12px', marginBottom: 12 }}>
         <strong>Opción A · Excel de la factura</strong> <span style={{ opacity: 0.75, fontSize: '0.82rem' }}>(gratis)</span>
         <p style={{ fontSize: '0.82rem', opacity: 0.85, margin: '4px 0 8px' }}>
@@ -274,17 +331,23 @@ export default function ControlRemitos() {
         onClick={leer} disabled={!fotos.length || leyendo}>
         {leyendo ? <><span className="loader"></span> Leyendo el remito (puede tardar 30-60 segundos)…</> : `🔍 Leer remito (${fotos.length} foto${fotos.length === 1 ? '' : 's'})`}
       </button>
+      </>)}
 
       {error && <p style={{ color: '#f87171', fontWeight: 'bold', marginTop: '0.8rem' }}>⚠ {error}</p>}
 
       {/* ---- NOTAS DE PEDIDO ---- */}
       <div style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.3)', borderRadius: 8, padding: '10px 12px', marginTop: 14 }}>
-        <strong>Notas de pedido</strong> <span style={{ opacity: 0.75, fontSize: '0.82rem' }}>(una o varias; Excel con Código o Descripción, Cantidad y, si los tiene, Talle y Costo)</span>
+        <strong>Notas de pedido</strong> <span style={{ opacity: 0.75, fontSize: '0.82rem' }}>
+          {proveedor === 'grupoBlanco'
+            ? '(el Excel de la temporada, con todas sus hojas: se cuenta PEDIDO × unidades por módulo y el costo es $MAYORISTA)'
+            : '(una o varias; Excel con Código o Descripción, Cantidad y, si los tiene, Talle y Costo)'}
+        </span>
         <p style={{ fontSize: '0.82rem', opacity: 0.85, margin: '4px 0 8px' }}>
           Si la factura junta varias notas, subilas todas: se suman. Si un artículo tiene costos distintos, manda la nota más nueva.
           Lo pedido y no facturado no es error: queda como pendiente de entrega.
         </p>
         <input type="file" accept=".xlsx,.xls,.csv" multiple onChange={(e) => { subirNotas(e.target.files); e.target.value = ''; }} />
+        {avisosNotas.map((a, i) => <p key={i} style={{ color: '#fbbf24', fontSize: '0.8rem', margin: '4px 0' }}>⚠ {a}</p>)}
         {notas.length > 0 && (
           <table style={{ marginTop: 8, borderCollapse: 'collapse', fontSize: '0.82rem' }}>
             <tbody>
