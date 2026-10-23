@@ -312,7 +312,7 @@ export default function App() {
 
       {/* ====== PESTAÑAS ====== */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '1.2rem' }}>
-        {([['sync', '🔄 Sincronización'], ['pedido', '📋 Armado de pedido iD'], ['distrinando', '📋 Pedidos DISTRINANDO'], ['reposicion', '📦 Reposición anterior'], ['recuperar', '♻️ Recuperar'], ['remitos', '🧾 Control de remitos']] as const).map(([id, label]) => (
+        {([['sync', '🔄 Sincronización'], ['pedido', '📋 Armado de pedido iD'], ['distrinando', '📋 Pedidos DISTRINANDO'], ['reposicion', '📦 Reposición anterior'], ['recuperar', '♻️ Recuperar'], ['remitos', '🧾 Control de carga']] as const).map(([id, label]) => (
           <button
             key={id}
             onClick={() => setTab(id)}
