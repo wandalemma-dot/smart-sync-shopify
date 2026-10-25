@@ -242,7 +242,7 @@ App web (React + Vite, deploy automático en Vercel desde `main`) con dos pesta�
 | Pestaña | Para qué sirve |
 |---|---|
 | **Sincronización** | Subís el archivo del proveedor → compara contra Shopify → actualiza stock, precios y crea productos nuevos. |
-| **Reposición** | Wanda sube el **export de Órdenes de Shopify** y la app le dice **en qué talle pedir** cada cosa que se vendió. **Solo lectura.** |
+| **Reposición** | Elegís Converse o Le Coq y la app lee de Shopify las **ventas de 15 y 3 días** por modelo y talle, con stock de **Martínez** e **iD**. **Solo lectura.** |
 | **Recuperar** | Recrea productos borrados a partir del texto de una transferencia vieja, **con el mismo SKU**, para que la transferencia vuelva a engancharse. |
 | **Control de remitos** | Foto del remito/factura del proveedor → la IA lo pasa a tabla → compara contra **quién cargó stock** en Shopify en esas fechas. **Solo lectura.** |
 
@@ -464,7 +464,7 @@ el archivo **no cubra con un número** se agrega a `changes` con `desired: 0` y
 producto **entero** cuando su código no aparece en el Excel. Este barrido es el
 caso de al lado: el producto sigue, el talle no.
 
-### 2.1 REPOSICIÓN — desde el export de ventas (vigente desde el 07-sep-2026)
+### 2.1 REPOSICIÓN — desde el export de ventas (07-sep-2026) — REEMPLAZADA el 25-oct-2026, ver «Reposición por ventas»
 
 Wanda baja de Shopify **Órdenes → Exportar**, sube ese CSV, y la app arma el
 pedido con **el talle ya convertido al del proveedor**.
@@ -497,7 +497,7 @@ Código en `src/utils/ventasCsv.ts` + `src/Reposicion.tsx`.
 >
 > 🛡 Tests en `src/utils/__tests__/ventasCsv.test.ts` (incluido ese caso exacto).
 
-### Alertas de Martínez (16-sep-2026)
+### Alertas de Martínez (16-sep-2026) — QUITADAS el 25-oct-2026, ver «Reposición por ventas»
 
 - Reposición suma un apartado independiente para Converse y Le Coq: variantes
   con disponible en Martínez <= 3 y disponible en iD > 0. Incluye cero y negativos.
@@ -1171,3 +1171,9 @@ encontraron así y no se habrían visto de otra forma.
 - Factura sin talle en un modelo (o nota sin talles) → se compara el TOTAL del modelo contra lo pedido en todos los talles. Sin precio en factura o sin costo en nota: no se marca error, se avisa.
 - Base común para todas las marcas, con selector de proveedor arriba («Otro proveedor» = Excel genérico). Lógica `utils/controlPedido.ts`, tests `controlPedido.test.ts`. Solo lectura.
 - Grupo Blanco (Timberland), `utils/grupoBlanco.ts`: factura PDF por CURVA (`161101500010 TB0A2QKNEAC-GREYFIELD SANDAL 1 cv 6 88.947,3684 20% 426.947,37`), unidades = cv × Un.x Cv., sin talles (se compara el modelo completo), precio de LISTA antes de la bonificación (20%); se lee solo la copia Original (el PDF repite Duplicado). Nota = Excel de temporada (TIMB.xlsx, hojas Calzados/Apparel/Accesorios VLP): CODIGO ART, PEDIDO en módulos × PARES X MOD / UNID X CURVA / PACK X, costo $MAYORISTA (= Precio de la factura). En calzado la segunda fila del par (…0020) viene sin pedido y a veces con datos de otro modelo: solo cuentan filas con PEDIDO. Clave = código TB (CODIGO ART / prefijo de la descripción de la factura). Prueba real optativa GRUPO_BLANCO_FACTURA + GRUPO_BLANCO_NOTA en `grupoBlanco.test.ts` (factura 0023-00066655: 16 renglones, 30 cv, 176 u.; TB0A2PDQAMX Timberland Authentic facturado sin estar en la nota).
+
+### Reposición por ventas (25-oct-2026)
+- Pedido de gax: la pestaña «Reposición anterior» se reemplazó entera (export de órdenes CSV + alertas de Martínez quedaron en el historial de git). Ahora se llama «Reposición»: se elige la marca de iD (Converse o Le Coq, nunca la tienda entera) y la app lee las órdenes de Shopify de los últimos 15 días (ventana móvil) y marca las de los últimos 3.
+- Ventas = `currentQuantity` de cada línea (descuenta devoluciones y quitadas); canceladas y de prueba no cuentan. La marca se decide por el vendor de la línea. Modelo = producto de Shopify; se muestran TODOS sus talles con vendidos 15/3 días, stock Martínez y stock iD. Nivel null = sin alta en la sucursal, se muestra «—», no cero.
+- Filtros en pantalla: mínimo de vendidos en 15 días (por defecto 6), solo zapatillas (por defecto sí; por tipo/título/etiqueta TABLA DE TALLE, nunca solo por talle numérico), solo modelos con stock en iD (por defecto sí), orden por 15 o 3 días. Talle a pedir con la misma conversión de siempre (etiqueta manda, sin tabla «a revisar»). Exporta CSV.
+- Lectura: órdenes de a 25 × 30 líneas (orden con más líneas se completa aparte), stock con `productVariants(query: "product_id:A OR …")` de a 15 productos (un lote de productos con variantes anidadas pasaba el costo 1000). THROTTLED se reintenta; cualquier otro error corta sin resultados a medias. Lógica `utils/reposicionVentas.ts`, tests `reposicionVentas.test.ts`. Consultas validadas contra la tienda real el 25-oct (805 órdenes en 15 días).
