@@ -9,7 +9,7 @@ import Reposicion from './Reposicion';
 import PedidoId from './PedidoId';
 import PedidoDistrinando from './PedidoDistrinando';
 import Recuperar from './Recuperar';
-import ControlRemitos from './ControlRemitos';
+import ControlEntregas from './ControlEntregas';
 
 export default function App() {
   // Pestaña activa: sincronización (lo de siempre) o reposición (pedido a iD).
@@ -312,7 +312,7 @@ export default function App() {
 
       {/* ====== PESTAÑAS ====== */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '1.2rem' }}>
-        {([['sync', '🔄 Sincronización'], ['pedido', '📋 Armado de pedido iD'], ['distrinando', '📋 Pedidos DISTRINANDO'], ['reposicion', '📦 Reposición'], ['recuperar', '♻️ Recuperar'], ['remitos', '🧾 Control de carga']] as const).map(([id, label]) => (
+        {([['sync', '🔄 Sincronización'], ['pedido', '📋 Armado de pedido iD'], ['distrinando', '📋 Pedidos DISTRINANDO'], ['reposicion', '📦 Reposición'], ['recuperar', '♻️ Recuperar'], ['remitos', '🧾 Control de entregas']] as const).map(([id, label]) => (
           <button
             key={id}
             onClick={() => setTab(id)}
@@ -328,7 +328,7 @@ export default function App() {
         ))}
       </div>
 
-      {tab === 'distrinando' ? <PedidoDistrinando /> : tab === 'pedido' ? <PedidoId /> : tab === 'remitos' ? <ControlRemitos /> : tab === 'recuperar' ? <Recuperar /> : tab === 'reposicion' ? <Reposicion /> : (<>
+      {tab === 'distrinando' ? <PedidoDistrinando /> : tab === 'pedido' ? <PedidoId /> : tab === 'remitos' ? <ControlEntregas /> : tab === 'recuperar' ? <Recuperar /> : tab === 'reposicion' ? <Reposicion /> : (<>
 
       {!previewReady ? (
         <div className="main-grid">

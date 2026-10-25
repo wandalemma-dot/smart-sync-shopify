@@ -108,7 +108,7 @@ No es programadora: explicale en castellano simple, sin jerga.
 - Wanda cancela faltantes sin reponer inventario. Solo para Converse/Le Coq, al sincronizar iD, los talles agotados o productos ausentes con disponible negativo deben pasar a 0 igual que los positivos. No saltear por total <= 0: una suma cero puede contener talles +1 y -1.
 - No enviar cantidades negativas desde el archivo de iD. Mantener stock positivo informado por el proveedor, sucursal iD, controles de conversión y exclusiones por talles dudosos; nunca tocar Martínez. No cancelar órdenes ni restituir inventario automáticamente. Esto se aplica al confirmar la sincronización, no es un monitor de ventas en tiempo real.
 
-### Control de remitos (30-sep-2026)
+### Control de remitos (30-sep-2026) — REEMPLAZADO el 25-oct-2026 por «Control de entregas» (fotos con IA y quién cargó en Shopify se quitaron de la pantalla)
 
 Pedido de Wanda: controlar que lo que llega del proveedor se cargue bien en
 Shopify, y **quién** lo carga (hubo inconsistencias con cargas de Miguel Galván).
@@ -244,7 +244,7 @@ App web (React + Vite, deploy automático en Vercel desde `main`) con dos pesta�
 | **Sincronización** | Subís el archivo del proveedor → compara contra Shopify → actualiza stock, precios y crea productos nuevos. |
 | **Reposición** | Elegís Converse o Le Coq y la app lee de Shopify las **ventas de 15 y 3 días** por modelo y talle, con stock de **Martínez** e **iD**. **Solo lectura.** |
 | **Recuperar** | Recrea productos borrados a partir del texto de una transferencia vieja, **con el mismo SKU**, para que la transferencia vuelva a engancharse. |
-| **Control de remitos** | Foto del remito/factura del proveedor → la IA lo pasa a tabla → compara contra **quién cargó stock** en Shopify en esas fechas. **Solo lectura.** |
+| **Control de entregas** | Elegís el proveedor, subís la factura y las notas de pedido: controla que todo lo facturado esté pedido, sin pasarse y al mismo costo. **Solo lectura.** |
 
 La app **lee Shopify en vivo**: no hace falta subir el CSV de productos.
 
@@ -1037,8 +1037,7 @@ Solo lectura. No escribe en Shopify ni carga la web externa.
   una **lista blanca**: deja pasar lecturas y **solo estas** escrituras:
   `inventorySetQuantities`, `productSet`, `publishablePublish`,
   `productVariantsBulkUpdate`. **No agregues mutaciones sin pensarlo.**
-- `api/remito.js` también es **público**: gasta la cuenta de Anthropic. Por eso
-  limita cantidad (8) y tamaño de fotos. La clave va SOLO en Vercel.
+- `api/remito.js` (fotos con IA) se BORRÓ el 25-oct-2026: era un endpoint público que gastaba la cuenta de Anthropic.
 - Antecedente: hubo un token y un client secret hardcodeados en el repo público.
   Se rotaron. **Nunca vuelvas a poner un secreto en el código.**
 
@@ -1093,9 +1092,10 @@ src/utils/
   createProducts.ts         Crea productos nuevos
   shopify.ts / csv.ts       Utilidades compartidas
   restockLogic.ts           (viejo, ya no se usa desde la UI)
-  controlRemitos.ts         Control de remitos: historial de ajustes + comparación
-src/ControlRemitos.tsx      UI de la pestaña Control de remitos
-api/remito.js               Lee la foto del remito con IA (ANTHROPIC_API_KEY)
+  controlRemitos.ts         Tipos de factura, Excel genérico y chequeos (lo de Shopify ya no se usa en pantalla)
+  controlPedido.ts          Factura contra notas de pedido
+  grupoBlanco.ts            Lector de factura PDF / nota Excel de Grupo Blanco
+src/ControlEntregas.tsx     UI de la pestaña Control de entregas
 ```
 
 ### Alta de talles faltantes Reebok (9-oct-2026)
@@ -1177,3 +1177,7 @@ encontraron así y no se habrían visto de otra forma.
 - Ventas = `currentQuantity` de cada línea (descuenta devoluciones y quitadas); canceladas y de prueba no cuentan. La marca se decide por el vendor de la línea. Modelo = producto de Shopify; se muestran TODOS sus talles con vendidos 15/3 días, stock Martínez y stock iD. Nivel null = sin alta en la sucursal, se muestra «—», no cero.
 - Filtros en pantalla: mínimo de vendidos en 15 días (por defecto 6), solo zapatillas (por defecto sí; por tipo/título/etiqueta TABLA DE TALLE, nunca solo por talle numérico), solo modelos con stock en iD (por defecto sí), orden por 15 o 3 días. Talle a pedir con la misma conversión de siempre (etiqueta manda, sin tabla «a revisar»). Exporta CSV.
 - Lectura: órdenes de a 25 × 30 líneas (orden con más líneas se completa aparte), stock con `productVariants(query: "product_id:A OR …")` de a 15 productos (un lote de productos con variantes anidadas pasaba el costo 1000). THROTTLED se reintenta; cualquier otro error corta sin resultados a medias. Lógica `utils/reposicionVentas.ts`, tests `reposicionVentas.test.ts`. Consultas validadas contra la tienda real el 25-oct (805 órdenes en 15 días).
+
+### Control de entregas (25-oct-2026)
+- Pedido de gax: la pestaña Control de carga pasa a llamarse **Control de entregas** y queda SOLO factura contra nota de pedido, eligiendo el proveedor arriba (Grupo Blanco primero; «Otro proveedor» = Excel genérico que arma Claude desde las fotos). Se quitaron de la pantalla la lectura de fotos con IA (`api/remito.js` borrado) y el control de quién cargó en Shopify; vuelven desde el historial de git si se piden. `controlRemitos.ts` y sus tests se conservan (tipos, Excel genérico, chequeos).
+- Reglas sin cambios: lo facturado tiene que estar pedido, sin pasarse y al mismo costo (centavos); lo pedido sin facturar es pendiente de entrega; varias notas se suman y manda el costo de la más nueva; factura sin talles compara el modelo completo. Cada proveedor nuevo = un lector propio (como `grupoBlanco.ts`) cuando gax mande factura y nota de ejemplo. Probado con la factura real 0023-00066655 contra TIMB.xlsx (8 ok, 1 no pedido, 3056 u. pendientes de la temporada).
