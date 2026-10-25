@@ -1,174 +1,151 @@
 // ============================================================================
-// PESTAÑA REPOSICIÓN — armar el pedido a iD desde el export de ventas
+// PESTAÑA REPOSICIÓN — qué traer de iD a Martínez según las ventas
 // ----------------------------------------------------------------------------
-// Wanda baja de Shopify el export de órdenes, lo sube acá, y la app le dice qué
-// talle pedirle al proveedor por cada cosa que se vendió.
-//
-// Reemplazó (07-sep-2026) a la versión que leía Shopify en vivo y calculaba
-// stock de Martínez, pedido en camino, etc. Decisión de Wanda: la lista muestra
-// TODO LO VENDIDO, TAL CUAL. No se descuenta nada.
-// La versión vieja está en el historial de git, por si alguna vez se extraña.
-//
-// SOLO LECTURA: esta pestaña no escribe absolutamente nada en Shopify.
+// 25-oct-2026: reemplaza la Reposición anterior (export de órdenes en CSV +
+// alertas de Martínez). Ahora se elige la marca y la app lee las ventas de
+// Shopify de los últimos 15 y 3 días, con el stock de Martínez y de iD por talle.
+// Lógica en utils/reposicionVentas.ts. SOLO LECTURA.
 // ============================================================================
-import { useState, useRef } from 'react';
-import { leerVentasCsv, armarPedidoDesdeVentas, descargarPedidoCSV } from './utils/ventasCsv';
-import type { ResultadoPedido, FilaPedido } from './utils/ventasCsv';
-import AlertasMartinez from './AlertasMartinez';
+import { useRef, useState } from 'react';
+import { consultarReposicion, filtrarModelos, descargarReposicion, MARCAS_ID, DIAS_LARGO, DIAS_CORTO } from './utils/reposicionVentas';
+import type { MarcaId, Progreso, ResultadoReposicionVentas } from './utils/reposicionVentas';
 
 export default function Reposicion() {
-  const [archivo, setArchivo] = useState<File | null>(null);
+  const [marca, setMarca] = useState<MarcaId>('converse');
   const [loading, setLoading] = useState(false);
-  const [leidos, setLeidos] = useState(0);
-  const [res, setRes] = useState<ResultadoPedido | null>(null);
+  const [progreso, setProgreso] = useState<Progreso | null>(null);
+  const [error, setError] = useState('');
+  const [res, setRes] = useState<ResultadoReposicionVentas | null>(null);
+  const [minimo, setMinimo] = useState(6);
+  const [soloCalzado, setSoloCalzado] = useState(true);
+  const [conId, setConId] = useState(true);
+  const [orden, setOrden] = useState<'v15' | 'v3'>('v15');
   const [buscar, setBuscar] = useState('');
-  const [revisionAlertas, setRevisionAlertas] = useState(0);
-  const inputRef = useRef<HTMLInputElement>(null);
+  const solicitud = useRef(0);
 
-  const cargar = async (f: File) => {
-    if (!f) return;
-    if (!/\.csv$/i.test(f.name)) { alert('Subí el archivo .csv que baja Shopify (Órdenes → Exportar).'); return; }
-    setArchivo(f); setRes(null);
-  };
-
-  const armar = async () => {
-    if (!archivo) return;
-    setLoading(true); setRes(null); setLeidos(0);
+  const analizar = async () => {
+    const id = ++solicitud.current;
+    setLoading(true); setError(''); setRes(null); setProgreso(null);
     try {
-      const texto = await archivo.text();
-      const lineas = leerVentasCsv(texto);
-      if (!lineas.length) { alert('No encontré ninguna línea de producto en ese archivo. ¿Es el export de Órdenes?'); return; }
-      setRes(await armarPedidoDesdeVentas(lineas, setLeidos));
-      setRevisionAlertas(n => n + 1);
-    } catch (e: any) {
-      alert('Error armando el pedido: ' + e.message);
+      const r = await consultarReposicion(marca, p => { if (id === solicitud.current) setProgreso(p); });
+      if (id === solicitud.current) setRes(r);
+    } catch (e) {
+      if (id === solicitud.current) setError(e instanceof Error ? e.message : 'No se pudo leer Shopify.');
     } finally {
-      setLoading(false);
+      if (id === solicitud.current) setLoading(false);
     }
   };
 
-  const q = buscar.trim().toUpperCase();
-  const filtrar = (fs: FilaPedido[]) => !q ? fs : fs.filter(f =>
-    (f.codigo || '').includes(q) || f.titulo.toUpperCase().includes(q) || String(f.tallePedido || '').includes(q));
-
-  const th: React.CSSProperties = { textAlign: 'left', padding: '7px 10px', position: 'sticky', top: 0, background: '#1f2937' };
-  const td: React.CSSProperties = { padding: '6px 10px' };
+  const modelos = res ? filtrarModelos(res.modelos, { minimo, soloCalzado, orden, buscar }).filter(m => !conId || m.idStock > 0) : [];
+  const campo: React.CSSProperties = { padding: '8px 10px', borderRadius: 6, background: '#1f2937', color: '#fff', border: '1px solid #64748b' };
+  const th: React.CSSProperties = { textAlign: 'center', padding: '7px 10px', position: 'sticky', top: 0, background: '#1f2937', zIndex: 1 };
+  const td: React.CSSProperties = { padding: '5px 10px', textAlign: 'center' };
+  const stock = (n: number | null) => n === null ? <span style={{ opacity: 0.45 }} title="No está dada de alta en esta sucursal">—</span> : n;
 
   return (
     <div className="glass-panel" style={{ padding: '1.5rem' }}>
-      <h2 style={{ marginTop: 0 }}>📦 Reposición — qué pedirle a iD</h2>
+      <h2 style={{ marginTop: 0 }}>📦 Reposición — qué traer de iD</h2>
       <p style={{ fontSize: '0.9rem', opacity: 0.85, marginTop: 0 }}>
-        Bajá de Shopify <strong>Órdenes → Exportar</strong> y subí ese CSV. Te digo, por cada cosa que se
-        vendió, <strong>en qué talle pedirla</strong>. <strong>No toca nada de tu tienda.</strong>
+        Elegí la marca y te muestro los modelos que más se vendieron en los últimos <strong>{DIAS_LARGO} días</strong> y
+        en los últimos <strong>{DIAS_CORTO} días</strong>, talle por talle, con el stock de <strong>Martínez</strong> y
+        de <strong>iD</strong>. Lee las ventas directo de Shopify. <strong>No toca nada de tu tienda.</strong>
       </p>
 
-      <input ref={inputRef} type="file" accept=".csv" style={{ display: 'none' }}
-        onChange={e => { const f = e.target.files?.[0]; if (f) cargar(f); e.target.value = ''; }} />
-      <div
-        className={`dropzone ${archivo ? 'has-file' : ''}`}
-        onClick={() => inputRef.current?.click()}
-        onDrop={e => { e.preventDefault(); const f = e.dataTransfer.files[0]; if (f) cargar(f); }}
-        onDragOver={e => e.preventDefault()}
-        style={{ cursor: 'pointer', marginBottom: '1rem' }}
-      >
-        <h3>{archivo ? '📄 Archivo de ventas listo' : '📥 Arrastrá o hacé clic: export de Órdenes (.csv)'}</h3>
-        <p>{archivo?.name}</p>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <select aria-label="Marca" value={marca} onChange={e => { setMarca(e.target.value as MarcaId); setRes(null); }} style={campo} disabled={loading}>
+          {(Object.keys(MARCAS_ID) as MarcaId[]).map(m => <option key={m} value={m}>{MARCAS_ID[m]}</option>)}
+        </select>
+        <button className="btn-primary" style={{ background: '#10b981', flex: '1 1 220px' }} onClick={() => void analizar()} disabled={loading}>
+          {loading ? <span className="loader"></span> : '🔍 Analizar ventas'}
+        </button>
       </div>
-
-      <button className="btn-primary" style={{ background: '#10b981', width: '100%' }}
-        onClick={armar} disabled={!archivo || loading}>
-        {loading ? <span className="loader"></span> : '🔍 Armar el pedido'}
-      </button>
-      {loading && leidos > 0 && (
-        <p style={{ fontSize: '0.85rem', opacity: 0.8 }}>Leyendo productos de Shopify: {leidos}…</p>
+      {loading && progreso && (
+        <p role="status" style={{ fontSize: '0.85rem', opacity: 0.8 }}>
+          {progreso.etapa === 'ventas' ? `Leyendo órdenes: ${progreso.hechas}…` : `Leyendo stock: ${progreso.hechas} de ${progreso.total} modelos…`}
+        </p>
       )}
+      {error && <p role="alert" style={{ color: '#fca5a5' }}>No se completó la consulta: {error}</p>}
 
       {res && (
         <div style={{ marginTop: '1.2rem' }}>
-          <div style={{ fontSize: '0.9rem', marginBottom: '0.7rem' }}>
-            🧾 <strong>{res.filas.length}</strong> líneas para pedir ·{' '}
-            <strong>{res.filas.reduce((s, f) => s + f.cantidad, 0)}</strong> unidades
-            {res.revisar.length > 0 && <> · <span style={{ color: '#fb923c' }}>a revisar: <strong>{res.revisar.length}</strong></span></>}
-            {res.ignoradas > 0 && <> · <span style={{ opacity: 0.7 }}>{res.ignoradas} de otras marcas (no son de iD)</span></>}
+          <p style={{ fontSize: '0.85rem', opacity: 0.85 }}>
+            {MARCAS_ID[res.marca]} · {res.ordenes} órdenes con esta marca desde el {new Date(res.desde).toLocaleDateString('es-AR')} ·{' '}
+            {res.modelos.length} modelos vendidos · Consulta: {new Date(res.generadoEn).toLocaleString('es-AR')}
+          </p>
+          {res.avisos.map((a, i) => <p key={i} style={{ fontSize: '0.8rem', color: '#fbbf24', margin: '0.2rem 0' }}>⚠️ {a}</p>)}
+
+          <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', margin: '0.8rem 0', fontSize: '0.85rem' }}>
+            <label>Vendidos en {DIAS_LARGO} días, mínimo{' '}
+              <input type="number" min={1} value={minimo} onChange={e => setMinimo(Math.max(1, Number(e.target.value) || 1))} style={{ ...campo, width: 70 }} />
+            </label>
+            <label>Ordenar por{' '}
+              <select value={orden} onChange={e => setOrden(e.target.value as 'v15' | 'v3')} style={campo}>
+                <option value="v15">Más vendidos en {DIAS_LARGO} días</option>
+                <option value="v3">Más vendidos en {DIAS_CORTO} días</option>
+              </select>
+            </label>
+            <label><input type="checkbox" checked={soloCalzado} onChange={e => setSoloCalzado(e.target.checked)} /> Solo zapatillas</label>
+            <label><input type="checkbox" checked={conId} onChange={e => setConId(e.target.checked)} /> Solo modelos con stock en iD</label>
+            <input type="text" value={buscar} onChange={e => setBuscar(e.target.value)} placeholder="🔎 Buscar modelo o código" style={{ ...campo, flex: '1 1 200px' }} />
           </div>
 
-          <input type="text" value={buscar} onChange={e => setBuscar(e.target.value)}
-            placeholder="🔎 Buscar por código, producto o talle"
-            style={{ width: '100%', padding: '8px 10px', marginBottom: '0.6rem', borderRadius: 6,
-              border: '1px solid rgba(255,255,255,0.15)', background: 'rgba(0,0,0,0.25)', color: 'inherit', fontSize: '0.85rem' }} />
-
-          <div style={{ maxHeight: '460px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8 }}>
-            <table style={{ width: '100%', fontSize: '0.84rem', borderCollapse: 'collapse' }}>
-              <thead>
-                <tr>
-                  <th style={th}>Producto</th>
-                  <th style={th}>Código</th>
-                  <th style={{ ...th, textAlign: 'center' }}>Talle en tu tienda</th>
-                  <th style={{ ...th, textAlign: 'center' }}>Talle a pedir</th>
-                  <th style={{ ...th, textAlign: 'center' }}>Escala</th>
-                  <th style={{ ...th, textAlign: 'center' }}>Cantidad</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtrar(res.filas).map((f, i) => (
-                  <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                    <td style={td}>
-                      {f.titulo}
-                      <div style={{ fontSize: '0.7rem', opacity: 0.6 }}>{f.marca === 'lecoq' ? 'Le Coq Sportif' : 'Converse'}</div>
-                    </td>
-                    <td style={{ ...td, fontFamily: 'monospace', opacity: 0.85 }}>{f.codigo || '—'}</td>
-                    <td style={{ ...td, textAlign: 'center', opacity: 0.7 }}>{f.talleAr}</td>
-                    <td style={{ ...td, textAlign: 'center', fontWeight: 'bold', color: '#34d399', fontSize: '1rem' }}>{f.tallePedido}</td>
-                    <td style={{ ...td, textAlign: 'center', fontSize: '0.72rem', opacity: 0.7 }}>{f.escala}</td>
-                    <td style={{ ...td, textAlign: 'center', fontWeight: 'bold' }}>{f.cantidad}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          <button className="btn-primary" style={{ background: '#f59e0b', marginTop: '0.8rem' }}
-            onClick={() => descargarPedidoCSV(res)}>
-            📥 Exportar CSV
-          </button>
-
-          {res.revisar.length > 0 && (
-            <div style={{ marginTop: '1.2rem', padding: '0.9rem', border: '1px solid #fb923c', borderRadius: 8, background: 'rgba(251,146,60,0.10)' }}>
-              <strong style={{ color: '#fb923c' }}>⚠️ A revisar ({res.revisar.length}) — no pude saber qué talle pedir</strong>
-              <p style={{ fontSize: '0.8rem', opacity: 0.85, margin: '0.4rem 0' }}>
-                Estos se vendieron, pero no supe a qué talle del proveedor corresponden.
-                <strong> No los adivino a propósito:</strong> el mismo talle de tu tienda da un talle distinto
-                según el modelo, así que inventarlo sería hacerte pedir el par equivocado.
-              </p>
-              <div style={{ maxHeight: '240px', overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 6 }}>
-                <table style={{ width: '100%', fontSize: '0.8rem', borderCollapse: 'collapse' }}>
-                  <thead>
-                    <tr>
-                      <th style={th}>Producto</th>
-                      <th style={th}>Código</th>
-                      <th style={{ ...th, textAlign: 'center' }}>Talle</th>
-                      <th style={{ ...th, textAlign: 'center' }}>Cant</th>
-                      <th style={th}>Por qué</th>
+          {modelos.length === 0 ? <p>No hay modelos con estos filtros. Probá bajar el mínimo de ventas.</p> : <>
+            <p style={{ fontSize: '0.85rem' }}>
+              <strong>{modelos.length}</strong> modelos ·{' '}
+              <strong>{modelos.reduce((s, m) => s + m.vendidos15, 0)}</strong> vendidos en {DIAS_LARGO} días ·{' '}
+              <strong>{modelos.reduce((s, m) => s + m.vendidos3, 0)}</strong> en {DIAS_CORTO} días
+            </p>
+            <div style={{ maxHeight: 620, overflowY: 'auto', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8 }}>
+              <table style={{ width: '100%', fontSize: '0.84rem', borderCollapse: 'collapse' }}>
+                <thead><tr>
+                  <th style={{ ...th, textAlign: 'left' }}>Talle tienda</th>
+                  <th style={th}>Talle iD</th>
+                  <th style={th}>Vendidos {DIAS_LARGO} días</th>
+                  <th style={th}>Vendidos {DIAS_CORTO} días</th>
+                  <th style={th}>Stock Martínez</th>
+                  <th style={th}>Stock iD</th>
+                </tr></thead>
+                {modelos.map(m => (
+                  <tbody key={m.productId}>
+                    <tr style={{ borderTop: '3px solid #94a3b8', background: 'rgba(148,163,184,0.12)' }}>
+                      <td style={{ ...td, textAlign: 'left' }} colSpan={2}>
+                        <strong>{m.titulo}</strong>
+                        <div style={{ fontSize: '0.72rem', opacity: 0.7, fontFamily: 'monospace' }}>{m.codigo || 'Sin código'}
+                          {m.estado !== 'ACTIVE' && <span style={{ color: '#fbbf24', fontFamily: 'inherit' }}> · {m.estado === 'DRAFT' ? 'Borrador' : 'Archivado'}</span>}
+                        </div>
+                        {m.aviso && <div style={{ fontSize: '0.72rem', color: '#fbbf24' }}>{m.aviso}</div>}
+                      </td>
+                      <td style={{ ...td, fontWeight: 'bold', fontSize: '1rem' }}>{m.vendidos15}</td>
+                      <td style={{ ...td, fontWeight: 'bold', fontSize: '1rem' }}>{m.vendidos3}</td>
+                      <td style={{ ...td, fontWeight: 'bold' }}>{m.martinez}</td>
+                      <td style={{ ...td, fontWeight: 'bold', color: '#34d399' }}>{m.idStock}</td>
                     </tr>
-                  </thead>
-                  <tbody>
-                    {res.revisar.map((f, i) => (
-                      <tr key={i} style={{ borderTop: '1px solid rgba(255,255,255,0.06)' }}>
-                        <td style={td}>{f.titulo}</td>
-                        <td style={{ ...td, fontFamily: 'monospace', opacity: 0.85 }}>{f.codigo || '—'}</td>
-                        <td style={{ ...td, textAlign: 'center' }}>{f.talleAr}</td>
-                        <td style={{ ...td, textAlign: 'center' }}>{f.cantidad}</td>
-                        <td style={{ ...td, fontSize: '0.75rem', opacity: 0.85 }}>{f.motivo}</td>
+                    {m.variantes.map(v => (
+                      <tr key={v.id} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', opacity: v.vendidos15 || (v.idStock ?? 0) > 0 ? 1 : 0.55 }}>
+                        <td style={{ ...td, textAlign: 'left' }}>{v.talle}</td>
+                        <td style={td}>{v.tallePedido
+                          ? <>{v.tallePedido}{v.escala && v.escala !== '—' && <span style={{ fontSize: '0.7rem', opacity: 0.6 }}> {v.escala}</span>}</>
+                          : <span style={{ color: '#fbbf24' }} title={v.motivo}>a revisar</span>}</td>
+                        <td style={{ ...td, fontWeight: v.vendidos15 ? 'bold' : undefined }}>{v.vendidos15 || ''}</td>
+                        <td style={{ ...td, fontWeight: v.vendidos3 ? 'bold' : undefined }}>{v.vendidos3 || ''}</td>
+                        <td style={{ ...td, color: v.martinez !== null && v.martinez <= 0 ? '#fca5a5' : undefined }}>{stock(v.martinez)}</td>
+                        <td style={{ ...td, color: (v.idStock ?? 0) > 0 ? '#34d399' : undefined }}>{stock(v.idStock)}</td>
                       </tr>
                     ))}
                   </tbody>
-                </table>
-              </div>
+                ))}
+              </table>
             </div>
-          )}
+            <p style={{ fontSize: '0.75rem', opacity: 0.7 }}>
+              Vendidos = unidades vendidas menos devoluciones; no cuenta órdenes canceladas. «—» = el talle no está dado de alta en esa sucursal.
+              «a revisar» = no se pudo saber el talle de iD (no se adivina).
+            </p>
+            <button className="btn-primary" style={{ background: '#f59e0b', marginTop: '0.4rem' }} onClick={() => descargarReposicion(modelos, res.marca)}>
+              📥 Exportar lo que se ve (CSV)
+            </button>
+          </>}
         </div>
       )}
-      <AlertasMartinez revision={revisionAlertas} />
     </div>
   );
 }
