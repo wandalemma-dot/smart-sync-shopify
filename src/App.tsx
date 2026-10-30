@@ -820,6 +820,7 @@ export default function App() {
                   📍 Sucursal: <strong>{stockPlan.locationName}</strong> · Cambios: <strong style={{ color: '#f59e0b' }}>{stockPlan.changes.length}</strong> · Sin cambios: {stockPlan.unchanged}
                   {stockPlan.notFound.length > 0 && <> · No ubicados: {stockPlan.notFound.length}</>}
                   {stockPlan.sinActivar.length > 0 && <> · <span style={{ color: '#c084fc' }}>Sin alta en la sucursal: <strong>{stockPlan.sinActivar.length}</strong></span></>}
+                  {stockPlan.excluidos.length > 0 && <> · <span style={{ color: '#38bdf8' }}>🚫 Excluidos por etiqueta NO SINCRONIZAR: <strong>{stockPlan.excluidos.length}</strong></span></>}
                   {stockPlan.changes.some(c => c.motivo) && (
                     <> · <span style={{ color: '#f87171' }}>🗑️ A poner en 0 (el proveedor ya no los tiene): <strong>{stockPlan.changes.filter(c => c.motivo).length}</strong></span></>
                   )}
@@ -829,6 +830,13 @@ export default function App() {
                     </span></>
                   )}
                 </div>
+                {stockPlan.excluidos.length > 0 && (
+                  <details style={{ marginBottom: '0.6rem', fontSize: '0.85rem' }}>
+                    <summary style={{ cursor: 'pointer', color: '#38bdf8' }}>🚫 No se les toca el stock (etiqueta NO SINCRONIZAR en Shopify): {stockPlan.excluidos.length}</summary>
+                    {stockPlan.excluidos.map(e => <p key={e.handle} style={{ margin: '0.2rem 0' }}>{e.code ? `${e.code} — ` : ''}{e.title}</p>)}
+                    <p style={{ opacity: 0.75 }}>Para volver a sincronizarlos, sacales la etiqueta en Shopify y simulá de nuevo.</p>
+                  </details>
+                )}
                 {/* Buscador: para poder confirmar qué pasó con UN producto puntual.
                     Filtra solo lo que se ve; NO cambia lo que se escribe. */}
                 <input
@@ -1152,7 +1160,7 @@ export default function App() {
                 })()}
 
                 {stockPlan.changes.length === 0 ? (
-                  (stockPlan.unchanged === 0 && stockPlan.notFound.length === 0) ? (
+                  (stockPlan.unchanged === 0 && stockPlan.notFound.length === 0 && stockPlan.excluidos.length === 0) ? (
                     <p style={{ marginTop: '0.8rem', padding: '0.8rem', background: 'rgba(245,158,11,0.12)', border: '1px solid #f59e0b', borderRadius: '6px' }}>
                       ⚠️ No encontré en Shopify ninguno de esos productos. Casi siempre es porque el SKU del proveedor no coincide con el de Shopify (o la sucursal). Revisá el SKU.
                     </p>
