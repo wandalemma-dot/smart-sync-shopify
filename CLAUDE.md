@@ -1178,6 +1178,7 @@ encontraron así y no se habrían visto de otra forma.
 - Curva de 10 pares: 39×1, 40×2, 41×2, 42×2, 43×2, 44×1. Título «Zapatillas Servant {Modelo} {Color inglés} {Color castellano}».
 - SKU y código de barras = lo que lee el escáner de gax en la caja: `{código}%{talle}` (ej. SV0603%41). EXCEPCIÓN pedida por gax: SV0700 usa `$` (SV0700$41); no «corregirlo».
 - 31-oct se crearon por API los 10 modelos del remito 00002-00000001 (SV0200, SV0201, SV0600-0603, SV0700-0703), 100 pares, fotos de la NDP/catálogo. SV0703 no está en la NDP: lista 63.200 confirmada por gax.
+- 🔴 Trampa (31-oct): la web (Next.js en Vercel) lee el canal «Indy Headless 05» (Publication 226645541107). Hay que publicar ahí el PRODUCTO y también cada VARIANTE (`publishablePublish` con el id de la variante). Con el producto publicado y las variantes no, la web muestra $0 y «agotado» aunque Shopify tenga precio y stock.
 
 ### Reposición por ventas (25-oct-2026)
 - Pedido de gax: la pestaña «Reposición anterior» se reemplazó entera (export de órdenes CSV + alertas de Martínez quedaron en el historial de git). Ahora se llama «Reposición»: se elige la marca de iD (Converse o Le Coq, nunca la tienda entera) y la app lee las órdenes de Shopify de los últimos 15 días (ventana móvil) y marca las de los últimos 3.
