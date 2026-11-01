@@ -89,6 +89,18 @@ export interface StockPlan {
   // corrido. No se escriben. Van separadas de `unchangedRows` a propósito: no
   // es que no tengan cambios, es que no se pueden aplicar todavía.
   apartadosPorCorrido: StockRow[];
+  // Productos con la etiqueta NO SINCRONIZAR: no se les escribe stock ni se
+  // los barre a cero. Solo se muestran para que se vea que se saltearon.
+  excluidos: { handle: string; title: string; code: string }[];
+}
+
+// Etiqueta que Wanda/gax le pone a un producto en Shopify para que la
+// actualización de stock NO lo toque (ej. un modelo ya pedido a iD que se
+// tiene que seguir vendiendo aunque el proveedor se haya quedado sin talles).
+export const ETIQUETA_NO_SINCRONIZAR = 'NO SINCRONIZAR';
+export function tieneEtiquetaNoSincronizar(tags: string | string[] | null | undefined): boolean {
+  const lista = Array.isArray(tags) ? tags : String(tags || '').split(',');
+  return lista.some(t => String(t).trim().replace(/\s+/g, ' ').toUpperCase() === ETIQUETA_NO_SINCRONIZAR);
 }
 
 export interface WriteResult {
@@ -249,18 +261,18 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
   const locName = STOCK_LOCATION[config.brand];
   const locId = await getLocationId(locName);
   if (!locId) {
-    return { locationName: locName, locationId: null, locationFound: false, changes: [], unchanged: 0, unchangedRows: [], notFound: [], sinActivar: [], talleCorrido: [], apartadosPorCorrido: [] };
+    return { locationName: locName, locationId: null, locationFound: false, changes: [], unchanged: 0, unchangedRows: [], notFound: [], sinActivar: [], talleCorrido: [], apartadosPorCorrido: [], excluidos: [] };
   }
 
   // Productos que ya matchearon contra Shopify (tienen handle). Guardamos el
   // código del proveedor (la clave del excelMap) para mostrarlo en la tabla.
-  const entries = Object.entries(result.excelMap)
+  let entries = Object.entries(result.excelMap)
     .filter(([, d]: [string, any]) => d.foundInShopify && d.shopifyHandle)
     .map(([cod, d]) => ({ cod, d }));
 
   // También traemos los productos que el proveedor YA NO LISTA: a esos les vamos
   // a poner el stock en 0 (no los borramos).
-  const handlesPeligro = ((config.brand === 'reebok' && !cobertura) || (config.brand === 'kappa' && !kappaCobertura) || (config.brand === 'crocs' && !crocsCobertura) ? [] : result.enPeligro || []).map((p) => p.handle);
+  let handlesPeligro = ((config.brand === 'reebok' && !cobertura) || (config.brand === 'kappa' && !kappaCobertura) || (config.brand === 'crocs' && !crocsCobertura) ? [] : result.enPeligro || []).map((p) => p.handle);
   const tituloPeligro = new Map((result.enPeligro || []).map((p) => [p.handle, p.titulo]));
   const codigoPeligro = new Map((result.enPeligro || []).map((p) => [p.handle, p.codigo || '']));
 
@@ -292,6 +304,22 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
       opcionByHandle[p.handle] = String(p.options?.[0]?.name || 'Talle');
       opcionesPorHandle[p.handle] = p.options?.length || 0;
     }
+  }
+
+  // NO SINCRONIZAR: se apartan ANTES de todo (stock, barrido de talles, ceros
+  // de productos ausentes, talles faltantes y corridos). Se relee en vivo, así
+  // que poner o sacar la etiqueta vale con solo volver a simular.
+  const excluidos: StockPlan['excluidos'] = [];
+  for (const handle of handles) {
+    if (!tieneEtiquetaNoSincronizar(tagsByHandle[handle])) continue;
+    const entry = entries.find(e => e.d.shopifyHandle === handle);
+    excluidos.push({ handle, title: titleByHandle[handle] || entry?.d.title || tituloPeligro.get(handle) || handle,
+      code: (entry?.cod || codigoPeligro.get(handle) || '').toUpperCase() });
+  }
+  if (excluidos.length) {
+    const fuera = new Set(excluidos.map(e => e.handle));
+    entries = entries.filter(e => !fuera.has(e.d.shopifyHandle));
+    handlesPeligro = handlesPeligro.filter(h => !fuera.has(h));
   }
 
   const changes: StockChange[] = [];
@@ -656,7 +684,7 @@ export async function planStockWrite(result: SyncResult, config: SyncConfig): Pr
 
   return {
     locationName: locName, locationId: locId, locationFound: true,
-    changes, unchanged: unchangedRows.length, unchangedRows, notFound, sinActivar, talleCorrido, apartadosPorCorrido,
+    changes, unchanged: unchangedRows.length, unchangedRows, notFound, sinActivar, talleCorrido, apartadosPorCorrido, excluidos,
   };
 }
 
