@@ -9,7 +9,15 @@ export default function handler(req, res) {
     res.setHeader('Set-Cookie', sessionCookie('', true));
     return res.status(200).json({ authenticated: false });
   }
-  if (!validSecret(process.env.APP_ACCESS_KEY)) return res.status(503).json({ error: 'Falta configurar el acceso seguro en Vercel.' });
+  if (!validSecret(process.env.APP_ACCESS_KEY)) {
+    const missing = !process.env.APP_ACCESS_KEY;
+    return res.status(503).json({
+      code: missing ? 'APP_ACCESS_KEY_MISSING' : 'APP_ACCESS_KEY_TOO_SHORT',
+      error: missing
+        ? 'El servidor no recibe la clave de acceso. Guardala en Vercel para Production y actualizá el despliegue.'
+        : 'La clave guardada en Vercel tiene menos de 32 caracteres. Guardá una clave más larga y actualizá el despliegue.',
+    });
+  }
   if (!sameSecret(req.body?.key, process.env.APP_ACCESS_KEY)) return res.status(401).json({ error: 'Clave de acceso incorrecta.' });
   res.setHeader('Set-Cookie', sessionCookie(makeSession()));
   return res.status(200).json({ authenticated: true, readOnly: true });
