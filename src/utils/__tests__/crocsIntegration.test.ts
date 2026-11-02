@@ -76,7 +76,8 @@ describe('Crocs integrado en sincronización', () => {
     expect(p.sizes).toEqual({'31':5}); expect(p.sizeConversion?.['31']).toEqual({arg:'29-30',us:'J1',cm:'20'});
   });
 
-  const path='C:/Users/maxim/Downloads/STOCKPROMOCROCS (1).xlsx';
+  // Las listas reales se prueban solo con una ruta explícita, como las otras marcas.
+  const path=process.env.CROCS_TEMPLATE || '';
   it.skipIf(!existsSync(path))('archivo real: toda alta conserva costo N, base L, SKU y talla respaldada',()=>{
     const w=XLSX.read(readFileSync(path)), rows=XLSX.utils.sheet_to_json<unknown[]>(w.Sheets.Sheet1,{header:1});
     const result=parseCrocs(rows), products=Object.values(result.productos);

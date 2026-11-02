@@ -1185,3 +1185,9 @@ encontraron así y no se habrían visto de otra forma.
 ### Etiqueta NO SINCRONIZAR (30-oct-2026)
 - Pedido de gax: un modelo pedido completo a iD tiene que seguir vendiéndose aunque el proveedor se quede sin talles. Con la etiqueta `NO SINCRONIZAR` en Shopify (mayúsculas/espacios no importan), `planStockWrite()` aparta el producto ANTES de todo: no se le escribe stock, no se barren talles a cero, no se lo apaga como «ya no lo lista», y no entra en no ubicados/sin alta/corridos. Vale para todas las marcas; se relee en vivo al simular, así que poner o sacar la etiqueta alcanza con volver a simular. La simulación muestra los excluidos aparte. Precios y altas no cambian.
 - 🔴 **Sacarle la etiqueta del CÓDIGO no sirve para excluirlo:** si el SKU empieza con el código lo sigue encontrando, y si no lo encuentra en Converse/Le Coq lo toma como ausente y propone poner en 0 TODOS sus talles de iD. Tests `noSincronizar.test.ts`.
+
+### Automatización ID en revisión (2-nov-2026)
+- Nueva fase de seguridad: el proxy exige autenticación y bloquea TODAS las mutaciones. Esto reemplaza la descripción antigua del endpoint público de la sección 5 cuando se despliegue esta revisión. Sin secreto configurado falla cerrado.
+- Preparado ejecutor privado en nube, con descarga de ID y simulación usando las reglas existentes. No está activo hasta configurar secretos, desplegar y probar en el ejecutor remoto. Horarios pedidos: 8, 12, 16 y 20 Argentina. Prueba actual solo Converse; no analizar Le Coq en esta prueba por pedido del usuario.
+- No enviar pedidos a ID ni crear pedidos en Shopify. No escribir stock ni precios ni crear productos. La fase de aplicación futura necesita aprobación del plan exacto y validación en servidor; no restaurar el proxy de mutaciones.
+- Ver automation/README.md para accesos pendientes y tratamiento seguro de secretos. Nunca publicar informes ni Excel en el repositorio público.

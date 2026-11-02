@@ -1,58 +1,9 @@
-// Proxy hacia Shopify.
-//
-// SEGURIDAD:
-// 1) El token de admin YA NO está escrito acá. Se lee de la variable de entorno
-//    SHOPIFY_ADMIN_TOKEN (la "caja fuerte" de Vercel).
-// 2) La puerta está cerrada: este endpoint SOLO deja pasar lecturas (queries).
-//    Cualquier mutación (crear, borrar, cambiar precios/stock) se rechaza.
-//    Cuando agreguemos "escribir stock", sumamos esa única operación a
-//    ALLOWED_MUTATIONS y nada más.
-
-const ALLOWED_MUTATIONS = [
-  'inventorySetQuantities', // escribir stock (cantidades)
-  'metafieldsSet',             // guardar Size Conversion de productos nuevos
-  'productSet',                // crear productos nuevos
-  'publishablePublish',        // publicar productos en un canal (Point of Sale)
-  // Actualiza precio y costo de variantes y, desde el 29-ago-2026, también
-  // RENOMBRA el talle de las variantes con el talle corrido (botón aparte, con
-  // su confirmación). Renombrar no mueve stock: la mercadería se queda en la
-  // misma variante, que pasa a llamarse como corresponde.
-  'productVariantsBulkUpdate',
-  // Da de alta una variante en una sucursal (y le pone la cantidad). Sin esto,
-  // Shopify rechaza escribirle stock: "The specified inventory item is not
-  // stocked at the location". Se usa SOLO desde el botón aparte que Wanda
-  // confirma a mano; nunca dentro de la escritura normal de stock.
-  'inventoryActivate',
-  // Crea talles que faltan en un producto que YA existe ("No ubicados"): el
-  // proveedor tiene el talle y en Shopify la variante no está. Se usa SOLO
-  // desde el botón aparte, con las filas que Wanda dejó tildadas.
-  // ⚠ Los productos con el TALLE CORRIDO nunca llegan ahí (se apartan antes),
-  // que es lo que evita crear duplicados: el 36 corrido y el 35 nuevo.
-  'productVariantsBulkCreate',
-  'tagsAdd', // conservar códigos originales al agregar talles Reebok
-  // Después de crear talles faltantes, los ubica en su lugar (35, 36.5, 37…)
-  // en vez de dejarlos al final. Solo reordena; no cambia precio, SKU ni stock.
-  'productOptionsReorder',
-];
-
+// Proxy autenticado. Fase de revisión: todas las mutaciones están bloqueadas.
+import { allowedOrigin, identity, noStore } from '../server/access.js';
+import { inspectReadQuery } from '../server/read-policy.js';
 const SHOP = 'indy-com-ar.myshopify.com';
-
-// Versión de la API de Shopify. El resto de la app sigue en 2024-04 (ver
-// «Pendientes» en CLAUDE.md: hay que migrarla antes del 1-ene-2027).
-// Las consultas de informes (shopifyqlQuery, usado por «Control de remitos»
-// para leer QUIÉN cargó stock) solo existen desde 2025-10, así que SOLO esas
-// lecturas van a una versión nueva. Nada que escriba pasa por acá.
 const API_VERSION = '2024-04';
 const API_VERSION_INFORMES = '2026-07';
-
-function versionPara(query) {
-  const esMutacion = /\bmutation\b/i.test(query);
-  if (!esMutacion && /\bshopifyqlQuery\b/.test(query)) return API_VERSION_INFORMES;
-  // Reordenar talles: operación validada contra el esquema 2026-07. Solo cambia
-  // el orden de los valores de la opción; el resto de las escrituras sigue en 2024-04.
-  if (esMutacion && /\bproductOptionsReorder\b/.test(query)) return API_VERSION_INFORMES;
-  return API_VERSION;
-}
 
 // ---- TOKEN ----
 // Preferimos "client credentials": la app pide el token sola con el Client ID +
@@ -81,7 +32,7 @@ async function obtenerToken() {
     });
     const data = await r.json();
     if (!r.ok || !data.access_token) {
-      throw new Error('No pude obtener el token con Client ID/Secret: ' + JSON.stringify(data).slice(0, 200));
+      throw new Error('No se pudo obtener la credencial de Shopify.');
     }
     const duraSeg = Number(data.expires_in) || 24 * 60 * 60;
     tokenCache = { valor: data.access_token, vence: Date.now() + duraSeg * 1000 };
@@ -95,45 +46,33 @@ async function obtenerToken() {
   return fijo;
 }
 
-function isAllowed(query) {
-  if (typeof query !== 'string' || !query.trim()) return false;
-  const hasMutation = /\bmutation\b/i.test(query);
-  if (!hasMutation) return true; // las lecturas siempre están permitidas
-  // Si es una mutación, solo se permite si es una de las de la lista blanca.
-  return ALLOWED_MUTATIONS.length > 0 && ALLOWED_MUTATIONS.some((m) => query.includes(m));
-}
-
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method Not Allowed' });
+  noStore(res);
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+  const who = identity(req);
+  if (!who) return res.status(401).json({ error: 'Autenticación requerida.' });
+  if (who === 'user' && !allowedOrigin(req)) return res.status(403).json({ error: 'Origen no permitido.' });
+  if (!String(req.headers?.['content-type'] || '').toLowerCase().startsWith('application/json')) {
+    return res.status(415).json({ error: 'Se requiere JSON.' });
   }
-
-  let token;
-  try {
-    token = await obtenerToken();
-  } catch (e) {
-    return res.status(500).json({ error: e.message });
-  }
-
   const { query, variables } = req.body || {};
-  if (!isAllowed(query)) {
-    return res.status(403).json({ error: 'Operación no permitida por seguridad (solo lectura).' });
-  }
-
+  if (variables != null && (typeof variables !== 'object' || Array.isArray(variables))) return res.status(400).json({ error: 'Variables inválidas.' });
+  let policy;
+  try { policy = inspectReadQuery(query, who === 'automation'); }
+  catch { return res.status(403).json({ error: 'Solo se permite una consulta de lectura autorizada. Escrituras bloqueadas.' }); }
   try {
-    const response = await fetch(`https://${SHOP}/admin/api/${versionPara(query)}/graphql.json`, {
+    const token = await obtenerToken();
+    const version = policy.reports ? API_VERSION_INFORMES : API_VERSION;
+    const response = await fetch('https://' + SHOP + '/admin/api/' + version + '/graphql.json', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Shopify-Access-Token': token,
-      },
+      headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': token },
       body: JSON.stringify({ query, variables }),
+      signal: AbortSignal.timeout(45000),
+      redirect: 'error',
     });
-
-    const data = await response.json();
-    return res.status(200).json(data);
-  } catch (error) {
-    console.error('Shopify API Error:', error);
-    return res.status(500).json({ error: 'Failed to fetch from Shopify' });
+    if (!response.ok) return res.status(502).json({ error: 'Shopify no pudo responder a la consulta.' });
+    return res.status(200).json(await response.json());
+  } catch {
+    return res.status(502).json({ error: 'No se pudo consultar Shopify. Revisá la configuración del servidor.' });
   }
 }

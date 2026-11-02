@@ -14,7 +14,7 @@ vi.mock('../shopify', async importOriginal => ({ ...await importOriginal<typeof 
 
 const pag = <T,>(nodes: T[], endCursor: string | null = null) => ({ nodes, pageInfo: { hasNextPage: !!endCursor, endCursor } });
 const linea = (variant: string, q = 1, vendor = 'Converse', product = 'P1') => ({ currentQuantity: q, vendor, variant: { id: variant }, product: { id: product } });
-const orden = (createdAt: string, lineas: ReturnType<typeof linea>[], extra: Partial<OrdenVenta> = {}): OrdenVenta =>
+const orden = (createdAt: string, lineas: OrdenVenta['lineItems']['nodes'], extra: Partial<OrdenVenta> = {}): OrdenVenta =>
   ({ id: 'o' + createdAt, createdAt, cancelledAt: null, test: false, lineItems: pag(lineas), ...extra });
 const nivel = (quantity: number) => ({ quantities: [{ name: 'available', quantity }] });
 const variante = (id: string, talle: string, mar: number | null, idl: number | null) => ({

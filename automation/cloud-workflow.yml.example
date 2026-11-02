@@ -1,0 +1,50 @@
+# Install only in a PRIVATE repository after the live authenticated preflight passes.
+# Keep STOCK_AUTOMATION_ENABLED unset until the first supervised cloud run succeeds.
+name: Simulación de stock ID
+on:
+  workflow_dispatch:
+  schedule:
+    # Buenos Aires UTC-3: 08:00, 12:00, 16:00, 20:00.
+    - cron: '0 11,15,19,23 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: indy-stock-preview
+  cancel-in-progress: false
+jobs:
+  preview:
+    if: github.event.repository.private == true && (github.event_name == 'workflow_dispatch' || vars.STOCK_AUTOMATION_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Verify pinned source
+        env:
+          SOURCE_COMMIT: ${{ vars.STOCK_SOURCE_COMMIT }}
+        run: |
+          [[ "$SOURCE_COMMIT" =~ ^[0-9a-f]{40}$ ]] || { echo 'Configure the reviewed source commit'; exit 1; }
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          repository: wandalemma-dot/smart-sync-shopify
+          ref: ${{ vars.STOCK_SOURCE_COMMIT }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+          cache: npm
+      - run: npm ci --ignore-scripts
+      - run: npx playwright install --with-deps chromium
+      - name: Download and simulate (read only)
+        env:
+          ID_USERNAME: ${{ secrets.ID_USERNAME }}
+          ID_PASSWORD: ${{ secrets.ID_PASSWORD }}
+          AUTOMATION_READ_TOKEN: ${{ secrets.AUTOMATION_READ_TOKEN }}
+          STOCK_SOURCE_COMMIT: ${{ vars.STOCK_SOURCE_COMMIT }}
+          STOCK_BRANDS: ${{ vars.STOCK_BRANDS || 'converse' }}
+        run: npx tsx automation/preview.ts
+      - name: Save private report
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: stock-simulation-${{ github.run_id }}
+          path: automation-runs/reports/
+          if-no-files-found: error
+          retention-days: 7
