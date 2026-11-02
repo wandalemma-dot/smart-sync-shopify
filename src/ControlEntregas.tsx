@@ -91,7 +91,7 @@ export default function ControlEntregas() {
         const filasDe = (nombre: string) => XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[nombre], { header: 1, raw: true, defval: '' });
         let n: NotaPedido;
         if (proveedor === 'grupoBlanco') {
-          const visibles = wb.SheetNames.filter((nombre, i) => !wb.Workbook?.Sheets?.[i]?.Hidden);
+          const visibles = wb.SheetNames.filter((_, i) => !wb.Workbook?.Sheets?.[i]?.Hidden);
           const r = notaGrupoBlanco(visibles.map((nombre) => ({ nombre, filas: filasDe(nombre) })), file.name, ++orden);
           n = r.nota;
           avisosN.push(...r.avisos.map((a) => `${file.name}: ${a}`));
