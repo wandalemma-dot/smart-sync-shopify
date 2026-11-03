@@ -1,6 +1,7 @@
 # Stock ID
 
-El flujo de Converse usa `preview.ts` para descargar y simular, `apply-id.mjs` para
+El flujo corre cada cuatro horas para Converse y Le Coq Sportif. Cada marca usa
+su propio Excel e informe. Usa `preview.ts` para descargar y simular, `apply-id.mjs` para
 aplicar cantidades y crear talles habilitados, y `verify-id.ts` para volver a
 comparar Shopify con el mismo Excel. El paso de escritura presenta el token de
 lectura y una identidad OIDC temporal de la ejecución privada. La app web usa

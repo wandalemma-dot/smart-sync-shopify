@@ -55,6 +55,17 @@ describe('operaciones de ID', () => {
     await expect(apply(payload,actor,query)).rejects.toThrow();
     expect(query.mock.calls.every(([doc]) => doc.startsWith('query'))).toBe(true);
   });
+  it('permite Le Coq solo para productos de Le Coq y detecta un cambio de marca antes de escribir', async () => {
+    const { query, product } = shop();
+    product.vendor = 'Le Coq Sportif';
+    const lecoq = { ...plan, brand: 'lecoq' };
+    const receipt = await prepare(lecoq, actor, query);
+    await expect(apply({ ...batch(receipt, 'stock'), plan: lecoq }, actor, query)).resolves.toMatchObject({ written: 1 });
+    product.vendor = 'Converse';
+    await expect(apply({ ...batch(receipt, 'sizes'), plan: lecoq }, actor, query)).rejects.toThrow();
+    await expect(prepare({ ...plan, brand: 'otra' }, actor, query)).rejects.toThrow();
+    expect(query.mock.calls.filter(([doc]) => doc.startsWith('mutation'))).toHaveLength(1);
+  });
   it('bloquea anónimos, el token de lectura solo y una sesión en otro origen', async () => {
     shop();
     const read = 'reader-test-'.repeat(4);
