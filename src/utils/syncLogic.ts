@@ -1,4 +1,5 @@
 import { etiquetaModelo, validarTallesEtiqueta } from './tallePorEtiqueta';
+import { codigoStockId } from './codigoStockId';
 import { precioExistente, margenPct } from './margen';
 import { parseCrocs, leerCrocs, coincideVarianteCrocs } from './crocsLogic';
 import { ausenteCrocs, codigosCrocs, type CrocsCobertura } from './crocsCatalogo';
@@ -1441,15 +1442,19 @@ export async function processFiles(
 
   const updatesToApply: UpdateAction[] = [];
   const handlesMatcheados = new Set<string>(); // para detectar los que ya no manda el proveedor
+  const codigosId = config.brand === 'converse' || config.brand === 'lecoq' ? Object.keys(excelMap) : null;
 
   // Mapear Shopify contra el ExcelMap
   for (const prod of shopifyProducts) {
     const tags = String(prod.tags || '').toLowerCase();
     const orchardCodigo = config.brand === 'orchard' ? codigoOrchard(prod.title, excelMap) : undefined;
+    const codigoId = codigosId && codigoStockId(prod.handle, tags, prod.variants.edges.map(v => String(v.node.sku || '')), codigosId);
     
     for (const [cod, provData] of Object.entries(excelMap)) {
       let match = false;
-      if (config.brand === 'bloque') {
+      if (codigosId) {
+         match = cod === codigoId;
+      } else if (config.brand === 'bloque') {
          match = prod.variants.edges.some((v) => v.node.sku?.toLowerCase() === cod);
       } else if (config.brand === 'orchard') {
          // Match POR NOMBRE: el título de Shopify tiene la forma
@@ -1466,7 +1471,7 @@ export async function processFiles(
              return sku === codigo || sku.startsWith(`${codigo}-`) || ((config.brand === 'kappa' || (config.brand === 'reebok' && config.reebokCalzado)) && Object.values(provData.skuPorTalle || {}).includes(String(v.node.sku || '')));
            });
       } else {
-         // Converse / Le Coq: matchea por etiqueta (código en tags) O por el SKU
+         // Para las marcas restantes: matchea por etiqueta (código en tags) O por el SKU
          // de las variantes que EMPIEZA con el código. Ignoramos espacios y guiones
          // para que agarre cualquier formato: "A15206C-055", "A15206C 37.5", etc.
          const cl = cod.toLowerCase();
