@@ -4,6 +4,8 @@
 La sesión humana confirma las filas de la simulación. Cada cuatro horas, el ejecutor privado procesa
 Converse y Le Coq Sportif, cada marca con su propio Excel, simulación y verificación. Acredita
 su identidad con GitHub Actions y aplica su simulación fresca. El proxy GraphQL sigue siendo de lectura.
+Si varios artículos de ID comparten prefijo, identificar el modelo por SKU delimitado o etiqueta completa.
+Después de crear talles, volver a simular con el mismo Excel para cubrir los ceros recién habilitados.
 
 > **Leé esto ANTES de tocar código.** Acá están las reglas de negocio reales de
 > la tienda. Varias no son deducibles del código a simple vista, y ya se
