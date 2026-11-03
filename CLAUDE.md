@@ -1,7 +1,8 @@
 # Guía del proyecto — Sincronización de Stock e Inventario (INDY)
 
 **Stock de ID.** Los botones de cantidades y talles habilitados usan `/api/id-stock`.
-La sesión humana confirma las filas de la simulación. El ejecutor privado de Converse acredita
+La sesión humana confirma las filas de la simulación. Cada cuatro horas, el ejecutor privado procesa
+Converse y Le Coq Sportif, cada marca con su propio Excel, simulación y verificación. Acredita
 su identidad con GitHub Actions y aplica su simulación fresca. El proxy GraphQL sigue siendo de lectura.
 
 > **Leé esto ANTES de tocar código.** Acá están las reglas de negocio reales de
