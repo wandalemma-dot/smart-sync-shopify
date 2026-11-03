@@ -91,7 +91,6 @@ function sign(plan,receipt,actor) {
 }
 export async function prepare(plan,actor,query) {
   canonical(plan);
-  if(actor.startsWith('bot:')) requirePlan(plan.brand==='converse','El bot solo puede procesar Converse.');
   await checkLocation(plan,query);
   for(const rows of batches(plan.stock,50)) await checkStock(rows,plan,query);
   for(const rows of byProduct(plan.sizes)) await checkSizes(rows,plan,query);
