@@ -31,7 +31,13 @@ export async function downloadIdStock(brand, directory) {
     // Le Coq offers other channels as well. Never use the first Select button.
     const channel = page.getByRole('heading', { name: 'DISPONIBLE', exact: true });
     await channel.waitFor();
-    await channel.locator('..').getByRole('button', { name: 'Seleccionar', exact: true }).click();
+    // ID puts the label in an inner div and the action in the surrounding card.
+    const card = channel.locator('..').locator('..');
+    const select = card.getByRole('button', { name: 'Seleccionar', exact: true });
+    if (await card.getByRole('heading').count() !== 1 || await select.count() !== 1) {
+      throw new Error('Tarjeta DISPONIBLE ambigua. Se cancela sin elegir otro canal.');
+    }
+    await select.click();
     await page.getByRole('button', { name: 'DISPONIBLE', exact: true }).waitFor();
     // The empty order must remain non-submittable. Never fill quantity fields.
     if (await page.getByRole('button', { name: 'Enviar pedido', exact: true }).isEnabled()) {
