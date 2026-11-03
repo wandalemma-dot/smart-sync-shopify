@@ -1,7 +1,7 @@
 import { useState, useRef } from 'react';
 import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, downloadInventoryCSV, autoConverseTable, problemaTablaConverse, tituloNuevoConverse } from './utils/syncLogic';
 import type { SyncConfig, SyncResult } from './utils/syncLogic';
-import { planStockWrite, executeStockWrite, activarEnSucursal, enderezarTallesCorridos, crearTallesFaltantes } from './utils/writeStock';
+import { planStockWrite, activarEnSucursal, enderezarTallesCorridos, crearTallesFaltantes } from './utils/writeStock';
 import type { StockPlan } from './utils/writeStock';
 import { createProducts } from './utils/createProducts';
 import { aplicarPrecios, actualizacionesAplicables, sinCambios, margenPct } from './utils/updatePrices';
@@ -36,9 +36,6 @@ export default function App() {
   // ---- ESCRITURA DE STOCK EN SHOPIFY (simular -> confirmar -> escribir) ----
   const [stockPlan, setStockPlan] = useState<StockPlan | null>(null);
   const [stockPlanning, setStockPlanning] = useState(false);
-  const [stockWriting, setStockWriting] = useState(false);
-  const [writeConfirm, setWriteConfirm] = useState(false);
-  const [writeDone, setWriteDone] = useState<string | null>(null);
   // Buscador del simulador: filtra las 3 tablas por código, producto o talle.
   // Es SOLO visual: no cambia lo que se escribe en Shopify.
   const [stockBuscar, setStockBuscar] = useState('');
@@ -169,7 +166,7 @@ export default function App() {
 
   const handleSimulateStock = async () => {
     if (!result) return;
-    setStockPlanning(true); setStockPlan(null); setWriteDone(null); setWriteConfirm(false);
+    setStockPlanning(true); setStockPlan(null);
     try {
       const plan = await planStockWrite(result, config);
       setStockPlan(plan);
@@ -178,20 +175,6 @@ export default function App() {
       alert('Error simulando: ' + e.message);
     } finally {
       setStockPlanning(false);
-    }
-  };
-
-  const handleWriteStock = async () => {
-    if (!stockPlan || stockPlan.changes.length === 0) return;
-    setStockWriting(true); setWriteDone(null);
-    try {
-      const res = await executeStockWrite(stockPlan);
-      setWriteDone(`Escritos ${res.written} · fallidos ${res.failed}` + (res.errors.length ? ` · ${res.errors.slice(0, 2).join('; ')}` : ''));
-      setStockPlan(null); setWriteConfirm(false);
-    } catch (e: any) {
-      alert('Error escribiendo: ' + e.message);
-    } finally {
-      setStockWriting(false);
     }
   };
 
@@ -205,7 +188,7 @@ export default function App() {
 
   // --- Lógica central de cada archivo, reutilizada por drag & drop y por clic ---
   const invalidateAnalysis = () => {
-    setResult(null); setPreviewReady(false); setStockPlan(null); setWriteConfirm(false); setWriteDone(null);
+    setResult(null); setPreviewReady(false); setStockPlan(null);
     setCreateConfirm(false); setCreateDone(null); setPrecioConfirm(false); setPrecioDone(null);
     setAltaConfirm(false); setAltaDone(null); setFaltantesConfirm(false); setFaltantesDone(null);
     setCorridoConfirm(false); setCorridoDone(null); setCrearTalle({}); setNoCrear({}); setExcluidas({});
@@ -504,7 +487,7 @@ export default function App() {
             <button
               className="btn-success"
               style={{ background: '#dc2626', marginLeft: '10px' }}
-              disabled={stockPlanning || stockWriting || creating || precioLoading || altaLoading || faltantesLoading || corridoLoading}
+              disabled={stockPlanning || creating || precioLoading || altaLoading || faltantesLoading || corridoLoading}
               onClick={invalidateAnalysis}
             >
               ❌ Cancelar
@@ -804,13 +787,13 @@ export default function App() {
             );
           })()}
 
-          {/* ====== ESCRIBIR STOCK DIRECTO EN SHOPIFY ====== */}
+          {/* ====== SIMULACIÓN DE STOCK ====== */}
           <div style={{ marginTop: '2rem', padding: '1rem', border: '1px solid #10b981', borderRadius: '8px', background: 'rgba(16,185,129,0.06)' }}>
-            <h3 style={{ color: '#10b981', marginTop: 0 }}>✍️ Escribir stock directo en Shopify</h3>
+            <h3 style={{ color: '#10b981', marginTop: 0 }}>Simulación de stock en Shopify</h3>
             <p style={{ fontSize: '0.85rem', opacity: 0.85, marginTop: 0 }}>
-              Primero simulá: te muestro exactamente qué cambiaría, sin tocar nada. Recién si tildás la confirmación, se escribe.
+              Compará el stock actual de la sucursal con las cantidades del proveedor.
             </p>
-            <button className="btn-primary" style={{ background: '#3b82f6' }} onClick={handleSimulateStock} disabled={stockPlanning || stockWriting}>
+            <button className="btn-primary" style={{ background: '#3b82f6' }} onClick={handleSimulateStock} disabled={stockPlanning}>
               {stockPlanning ? <span className="loader"></span> : '🧪 Simular (ver qué cambiaría)'}
             </button>
 
@@ -879,7 +862,7 @@ export default function App() {
                       {fCambios.length > 0 && (
                         <>
                           <div style={{ fontSize: '0.85rem', margin: '0.4rem 0', color: '#f59e0b' }}>
-                            ✍️ <strong>Se van a cambiar ({fCambios.length}{q ? ` de ${stockPlan.changes.length}` : ''})</strong>
+                            <strong>Cambios propuestos ({fCambios.length}{q ? ` de ${stockPlan.changes.length}` : ''})</strong>
                           </div>
                           <div style={caja}>
                             <table style={tabla}>
@@ -1168,29 +1151,10 @@ export default function App() {
                     <p style={{ marginTop: '0.8rem', padding: '0.8rem', background: 'rgba(16,185,129,0.1)', borderRadius: '6px' }}>✅ El stock ya coincide con el proveedor. Nada para escribir.</p>
                   )
                 ) : (
-                  <>
-                    <label style={{ display: 'flex', gap: '8px', alignItems: 'center', marginTop: '0.8rem', fontSize: '0.9rem' }}>
-                      <input type="checkbox" checked={writeConfirm} onChange={e => setWriteConfirm(e.target.checked)} />
-                      Entiendo que esto va a <strong>&nbsp;modificar el stock real&nbsp;</strong> en Shopify.
-                    </label>
-                    <button
-                      className="btn-primary"
-                      style={{ background: writeConfirm ? '#dc2626' : '#6b7280', marginTop: '0.6rem' }}
-                      onClick={handleWriteStock}
-                      disabled={!writeConfirm || stockWriting}
-                    >
-                      {stockWriting ? <span className="loader"></span> : `✍️ Escribir ${stockPlan.changes.length} cambios en Shopify`}
-                    </button>
-                    {stockBuscar.trim() && (
-                      <div style={{ fontSize: '0.75rem', opacity: 0.7, marginTop: '0.3rem' }}>
-                        El buscador es solo para mirar: se escriben los {stockPlan.changes.length} cambios completos.
-                      </div>
-                    )}
-                  </>
+                  <p role="status">Simulación lista para revisar. El stock de Shopify sigue igual.</p>
                 )}
               </div>
             )}
-            {writeDone && <p style={{ marginTop: '0.8rem', color: '#10b981', fontWeight: 'bold' }}>✅ {writeDone}</p>}
           </div>
 
           <div style={{ marginTop: '30px', display: 'flex', flexDirection: 'column', gap: '15px', alignItems: 'center' }}>
