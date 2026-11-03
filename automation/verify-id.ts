@@ -1,14 +1,17 @@
 import { appendFile, readFile } from 'node:fs/promises';
 import { protectTransport, simulate } from './preview';
 import { idPlan } from '../src/utils/idStockClient.js';
+import { jobBrand } from './stock-brand.mjs';
 
 const root = 'automation-runs/reports';
-const report = JSON.parse(await readFile(root + '/converse-simulation.json', 'utf8'));
+const brand = jobBrand();
+const report = JSON.parse(await readFile(`${root}/${brand}-simulation.json`, 'utf8'));
+if (report.brand !== brand || report.provenance?.brand !== brand) throw Error('La simulación pertenece a otra marca.');
 const restore = await protectTransport(process.env.AUTOMATION_READ_TOKEN || '');
 try {
-  await simulate('converse', 'automation-runs/source/converse.xlsx', root + '/verificacion', report.provenance);
-  const fresh = JSON.parse(await readFile(root + '/verificacion/converse-simulation.json', 'utf8'));
-  const remaining = idPlan('converse', fresh.plan);
+  await simulate(brand, `automation-runs/source/${brand}.xlsx`, root + '/verificacion', report.provenance);
+  const fresh = JSON.parse(await readFile(`${root}/verificacion/${brand}-simulation.json`, 'utf8'));
+  const remaining = idPlan(brand, fresh.plan);
   const text = 'Comparación final con el mismo Excel: ' + remaining.stock.length +
     ' diferencias de cantidad y ' + remaining.sizes.length + ' talles habilitados pendientes.';
   console.log(text);
