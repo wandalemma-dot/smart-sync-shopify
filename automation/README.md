@@ -1,4 +1,12 @@
-# Stock ID: primera fase, solo simulación
+# Stock ID
+
+El flujo de Converse usa `preview.ts` para descargar y simular, `apply-id.mjs` para
+aplicar cantidades y crear talles habilitados, y `verify-id.ts` para volver a
+comparar Shopify con el mismo Excel. El paso de escritura presenta el token de
+lectura y una identidad OIDC temporal de la ejecución privada. La app web usa
+su sesión y la confirmación del operador para las mismas dos operaciones.
+
+## Referencia histórica de la primera fase de simulación
 
 Esta implementación todavía necesita configurar secretos, desplegar la protección y validar una ejecución en la nube. No activar el horario antes de esa prueba. El código no contiene un camino de aprobación ni de escritura.
 
