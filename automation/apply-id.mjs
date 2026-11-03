@@ -16,6 +16,39 @@ async function call(body) {
   const { value } = await response.json();
   return idRequest(body,{url:endpoint,headers:{Authorization:'Bearer '+process.env.AUTOMATION_READ_TOKEN,'X-Stock-Workflow':value}});
 }
+async function writeRows(plan, receipt, action, simulation) {
+  const indices = plan[action].map((_, index) => index);
+  const result = await applyRows(plan, receipt, action, indices, call, async entry => {
+    log[action] += entry.written;
+    log.operations.push({ ...entry, simulation });
+    await writeFile(root + brand + '-resultado.json', JSON.stringify(log, null, 2));
+  });
+  if (result.error) throw Error(result.error);
+}
+
+// Al crear el último talle faltante, la regla de ID recién entonces permite
+// poner a cero los talles ausentes del Excel en ese mismo producto.
+async function completarTallesAusentes(plan, report) {
+  const { protectTransport, simulate } = await import('./preview.ts');
+  const destination = root + 'despues-de-altas';
+  const restore = await protectTransport(process.env.AUTOMATION_READ_TOKEN);
+  try {
+    await simulate(brand, 'automation-runs/source/' + brand + '.xlsx', destination, report.provenance);
+  } finally {
+    restore();
+  }
+  const fresh = JSON.parse(await readFile(destination + '/' + brand + '-simulation.json', 'utf8'));
+  if (fresh.inputSha256 !== report.inputSha256 || fresh.plan.locationId !== plan.locationId ||
+      Date.now() - Date.parse(report.provenance.downloadedAt) > 900000) throw Error('El Excel o la sucursal cambiaron, o venció la simulación.');
+  const conAlta = new Set(plan.sizes.map(row => row.handle));
+  const iniciales = new Set(plan.stock.map(row => row.inventoryItemId));
+  const changes = fresh.plan.changes.filter(row => conAlta.has(row.handle) && !iniciales.has(row.inventoryItemId) &&
+    row.desired === 0 && row.motivo === 'El proveedor ya no tiene este talle');
+  if (!changes.length) return;
+  const ceros = idPlan(brand, { ...fresh.plan, changes, notFound: [] });
+  const { receipt } = await call({ mode: 'prepare', plan: ceros });
+  await writeRows(ceros, receipt, 'stock', fresh.planHash);
+}
 async function main() {
   if(process.env.GITHUB_REPOSITORY!=='wandalemma-dot/indy-stock-automation' || process.env.GITHUB_REF!=='refs/heads/main' ||
     !['schedule','workflow_dispatch'].includes(process.env.GITHUB_EVENT_NAME) || !process.env.AUTOMATION_READ_TOKEN || !process.env.ACTIONS_ID_TOKEN_REQUEST_TOKEN) throw Error('Ejecutor no configurado.');
@@ -38,13 +71,9 @@ async function main() {
     return;
   }
   for(const action of ['stock','sizes']) {
-    const result=await applyRows(plan,receipt,action,plan[action].map((_,i)=>i),call,async entry=>{
-      log[action]+=entry.written;
-      log.operations.push(entry);
-      await writeFile(root+brand+'-resultado.json',JSON.stringify(log,null,2));
-    });
-    if(result.error) { log.errors.push(result.error);throw Error(result.error); }
+    await writeRows(plan, receipt, action, planHash);
   }
+  if (log.sizes > 0) await completarTallesAusentes(plan, report);
 }
 try { await main(); }
 catch(e) { if(!log.errors.length)log.errors.push(String(e.message).slice(0,400));process.exitCode=1; }
