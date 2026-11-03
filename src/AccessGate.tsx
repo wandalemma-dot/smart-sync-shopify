@@ -23,7 +23,7 @@ export default function AccessGate({ children }: { children: ReactNode }) {
   }
   if (authenticated) return <>
     <div role="status" style={{ padding: 12, background: '#fff3cd', color: '#332700' }}>
-      Modo de revisión: podés analizar y simular. Las escrituras en Shopify están bloqueadas en el servidor.
+      Para actualizar el stock de ID, simulá los cambios y confirmalos en el panel de stock.
       <button style={{ marginLeft: 16 }} onClick={async () => {
         const r = await fetch('/api/session', { method: 'DELETE' });
         if (r.ok) setAuthenticated(false);
