@@ -4,6 +4,11 @@ import { ordenarTalles } from '../src/utils/ordenTalles.js';
 
 const VENDORS = { converse: 'Converse', lecoq: 'Le Coq Sportif' };
 const normal = value => String(value ?? '').trim().replace(/\s+/g, ' ').toUpperCase();
+function normalizedSize(value) {
+  const name = normal(value);
+  if (['UNICO', 'ÚNICO', 'U', 'TU', 'DEFAULT TITLE', ''].includes(name)) return 'UNICO';
+  return /^\d+(?:[.,]\d+)?$/.test(name) ? String(Number(name.replace(',', '.'))) : name;
+}
 const ID_LOCATION = 'IDCONVERSELECOQSPORTIF';
 const MAX_AGE = 15 * 60 * 1000;
 export class PlanError extends Error {}
@@ -32,7 +37,7 @@ function canonical(plan) {
   requirePlan(plan.stock.every(r=>id(r.inventoryItemId,'InventoryItem') && Number.isSafeInteger(r.current) && r.current!==r.desired && typeof r.sku==='string')
     && unique(plan.stock.map(r=>r.inventoryItemId)), 'Variante o cantidad ambigua.');
   requirePlan(plan.sizes.every(r=>id(r.productId,'Product') && r.opcion && Number.isFinite(r.precio) && r.precio>0 && Number.isFinite(r.costo) && r.costo>=0)
-    && unique(plan.sizes.map(r=>r.productId+'|'+normal(r.talle))), 'Talle, precio o costo inválido.');
+    && unique(plan.sizes.map(r=>r.productId+'|'+normalizedSize(r.talle))), 'Talle, precio o costo inválido.');
   return plan;
 }
 async function checkLocation(plan, query) {
@@ -63,7 +68,7 @@ async function checkSizes(rows,plan,query) {
     checkProduct(product,r,plan.brand);
     requirePlan(product.id===r.productId && product.options[0].name===r.opcion &&
       variants.every(v=>Math.round(Number(v.price)*100)===Math.round(r.precio*100)), 'Cambió el precio o la opción del producto. Volvé a simular.');
-    requirePlan(!variants.some(v=>normal(v.title)===normal(r.talle)), r.code+': el talle '+r.talle+' ya existe. Volvé a simular.');
+    requirePlan(!variants.some(v=>normalizedSize(v.title)===normalizedSize(r.talle)), r.code+': el talle '+r.talle+' ya existe. Volvé a simular.');
   }
   return variants.map(v=>v.title);
 }
