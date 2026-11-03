@@ -3,6 +3,7 @@ import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, 
 import type { SyncConfig, SyncResult } from './utils/syncLogic';
 import { planStockWrite, activarEnSucursal, enderezarTallesCorridos, crearTallesFaltantes } from './utils/writeStock';
 import type { StockPlan } from './utils/writeStock';
+import { idPlan, idRequest, applyRows } from './utils/idStockClient.js';
 import { createProducts } from './utils/createProducts';
 import { aplicarPrecios, actualizacionesAplicables, sinCambios, margenPct } from './utils/updatePrices';
 import Reposicion from './Reposicion';
@@ -36,6 +37,11 @@ export default function App() {
   // ---- ESCRITURA DE STOCK EN SHOPIFY (simular -> confirmar -> escribir) ----
   const [stockPlan, setStockPlan] = useState<StockPlan | null>(null);
   const [stockPlanning, setStockPlanning] = useState(false);
+  const idBrand = config.brand === 'converse' || config.brand === 'lecoq';
+  const [stockConfirm, setStockConfirm] = useState(false);
+  const [stockWriting, setStockWriting] = useState(false);
+  const [stockNotice, setStockNotice] = useState('');
+  const simulationVersion = useRef(0);
   // Buscador del simulador: filtra las 3 tablas por código, producto o talle.
   // Es SOLO visual: no cambia lo que se escribe en Shopify.
   const [stockBuscar, setStockBuscar] = useState('');
@@ -52,18 +58,51 @@ export default function App() {
   const claveFila = (r: { code: string; talle: string; talleProveedor: string }) =>
     `${r.code}|${r.talleProveedor}|${r.talle}`;
 
+  async function applyID(action: 'stock' | 'sizes') {
+    if (!stockPlan) throw Error('Volvé a simular el stock.');
+    const plan = idPlan(config.brand, stockPlan);
+    if (action === 'stock') plan.sizes = [];
+    else {
+      plan.stock = [];
+      plan.sizes = plan.sizes.filter(row => crearTalle[claveFila(row)]);
+    }
+    const { receipt } = await idRequest({ mode: 'prepare', plan });
+    const indices = plan[action].map((_, i) => i);
+    const result = await applyRows(plan, receipt, action, indices);
+    return [`${action === 'stock' ? 'Variantes actualizadas' : 'Talles creados'}: ${result.written} de ${indices.length}.`,
+      result.error, ...result.warnings].filter(Boolean).join(' ');
+  }
+
+  const handleWriteStock = async () => {
+    if (!idBrand || !stockPlan?.changes.length || !stockConfirm || stockWriting || faltantesLoading) return;
+    setStockWriting(true);
+    setStockConfirm(false);
+    try {
+      setStockNotice(await applyID('stock'));
+    } catch (e: any) {
+      setStockNotice(e.message);
+    } finally {
+      setStockWriting(false);
+    }
+  };
+
   const handleCrearFaltantes = async () => {
-    if (!stockPlan) return;
+    if (!stockPlan || !faltantesConfirm || stockWriting || faltantesLoading) return;
     const filas = stockPlan.notFound.filter(r => crearTalle[claveFila(r)] && r.productId);
     if (filas.length === 0) { alert('No hay ningún talle tildado para crear.'); return; }
     setFaltantesLoading(true); setFaltantesDone(null);
     try {
+      if (idBrand) {
+        setFaltantesDone(await applyID('sizes'));
+        return;
+      }
       const res = await crearTallesFaltantes(stockPlan, filas);
       setFaltantesDone(`Talles creados ${res.written} · fallidos ${res.failed}` + (res.errors.length ? ` · ${res.errors.slice(0, 2).join(' | ')}` : '') + (res.avisos?.length ? ` · ${res.avisos.slice(0, 2).join(' | ')}` : ''));
       setFaltantesConfirm(false);
     } catch (e: any) {
       alert('Error creando los talles: ' + e.message);
     } finally {
+      setFaltantesConfirm(false);
       setFaltantesLoading(false);
     }
   };
@@ -165,10 +204,14 @@ export default function App() {
   };
 
   const handleSimulateStock = async () => {
-    if (!result) return;
+    if (!result || stockWriting || faltantesLoading) return;
+    const version = ++simulationVersion.current;
+    setStockConfirm(false); setStockNotice('');
+    setFaltantesConfirm(false); setFaltantesDone(null); setCrearTalle({});
     setStockPlanning(true); setStockPlan(null);
     try {
       const plan = await planStockWrite(result, config);
+      if (simulationVersion.current !== version) return;
       setStockPlan(plan);
       if (!plan.locationFound) alert(`No encontré la sucursal "${plan.locationName}" en Shopify. Revisá el nombre exacto.`);
     } catch (e: any) {
@@ -188,6 +231,8 @@ export default function App() {
 
   // --- Lógica central de cada archivo, reutilizada por drag & drop y por clic ---
   const invalidateAnalysis = () => {
+    simulationVersion.current++;
+    setStockConfirm(false); setStockNotice('');
     setResult(null); setPreviewReady(false); setStockPlan(null);
     setCreateConfirm(false); setCreateDone(null); setPrecioConfirm(false); setPrecioDone(null);
     setAltaConfirm(false); setAltaDone(null); setFaltantesConfirm(false); setFaltantesDone(null);
@@ -487,7 +532,7 @@ export default function App() {
             <button
               className="btn-success"
               style={{ background: '#dc2626', marginLeft: '10px' }}
-              disabled={stockPlanning || creating || precioLoading || altaLoading || faltantesLoading || corridoLoading}
+              disabled={stockWriting || stockPlanning || creating || precioLoading || altaLoading || faltantesLoading || corridoLoading}
               onClick={invalidateAnalysis}
             >
               ❌ Cancelar
@@ -793,7 +838,7 @@ export default function App() {
             <p style={{ fontSize: '0.85rem', opacity: 0.85, marginTop: 0 }}>
               Compará el stock actual de la sucursal con las cantidades del proveedor.
             </p>
-            <button className="btn-primary" style={{ background: '#3b82f6' }} onClick={handleSimulateStock} disabled={stockPlanning}>
+            <button className="btn-primary" style={{ background: '#3b82f6' }} onClick={handleSimulateStock} disabled={stockPlanning || stockWriting || faltantesLoading}>
               {stockPlanning ? <span className="loader"></span> : '🧪 Simular (ver qué cambiaría)'}
             </button>
 
@@ -1000,11 +1045,11 @@ export default function App() {
                             className="btn-primary"
                             style={{ background: faltantesConfirm ? '#d97706' : '#6b7280', marginTop: '0.5rem' }}
                             onClick={handleCrearFaltantes}
-                            disabled={!faltantesConfirm || faltantesLoading}
+                            disabled={!faltantesConfirm || faltantesLoading || stockWriting || (idBrand && !!faltantesDone)}
                           >
                             {faltantesLoading ? <span className="loader"></span> : `➕ Crear ${stockPlan.notFound.filter(r => crearTalle[claveFila(r)]).length} talles en Shopify`}
                           </button>
-                          {faltantesDone && <p style={{ marginTop: '0.5rem', color: '#f59e0b', fontWeight: 'bold' }}>✅ {faltantesDone}</p>}
+                          {faltantesDone && <p role="status">{faltantesDone} {idBrand && 'Volvé a simular para revisar el resultado.'}</p>}
                         </details>
                       )}
                       {/* --- 4) SIN ALTA EN LA SUCURSAL: hay que activarlas --- */}
@@ -1150,6 +1195,16 @@ export default function App() {
                   ) : (
                     <p style={{ marginTop: '0.8rem', padding: '0.8rem', background: 'rgba(16,185,129,0.1)', borderRadius: '6px' }}>✅ El stock ya coincide con el proveedor. Nada para escribir.</p>
                   )
+                ) : idBrand ? (
+                  <div style={{ marginTop: '1rem' }}>
+                    <label><input type="checkbox" checked={stockConfirm} disabled={stockWriting || !!stockNotice}
+                      onChange={e => setStockConfirm(e.target.checked)} /> Entiendo que esto va a <strong>modificar el stock real</strong> en Shopify.</label>
+                    <button className="btn-primary" onClick={handleWriteStock}
+                      disabled={!stockConfirm || stockWriting || faltantesLoading || !!stockNotice}>
+                      {stockWriting ? 'Actualizando stock…' : `Escribir ${stockPlan.changes.length} cambios en Shopify`}
+                    </button>
+                    {stockNotice && <p role="status">{stockNotice} Volvé a simular para revisar el resultado.</p>}
+                  </div>
                 ) : (
                   <p role="status">Simulación lista para revisar. El stock de Shopify sigue igual.</p>
                 )}
