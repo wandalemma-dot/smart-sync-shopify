@@ -1,5 +1,13 @@
 # Guía del proyecto — Sincronización de Stock e Inventario (INDY)
 
+**Precios manuales (4-nov-2026).** La usuaria confirmó que los precios y costos los aplica ella,
+nunca el bot. El botón usa `/api/prices`, exclusivo de sesión humana y mismo origen, con
+campos limitados a precio/costo de variantes existentes. El proxy `/api/shopify` sigue solo
+lectura; el token del bot, aun acompañado de OIDC, no permite usar `/api/prices`.
+Releer Martínez antes de escribir costos: si hay stock, detener ese producto y pedir reanálisis.
+Conservar centavos de costos al enviar (no redondear al peso). No se cambiaron las fórmulas,
+selección ni confirmación manual. La automatización de ID no participa de este flujo.
+
 **Stock de ID.** Los botones de cantidades y talles habilitados usan `/api/id-stock`.
 La sesión humana confirma las filas de la simulación. Cada cuatro horas, el ejecutor privado procesa
 Converse y Le Coq Sportif, cada marca con su propio Excel, simulación y verificación. Acredita
