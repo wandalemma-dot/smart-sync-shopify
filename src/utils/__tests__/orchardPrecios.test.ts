@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { codigoOrchard, processFiles, type UpdateAction } from '../syncLogic';
 import { aplicarPrecios } from '../updatePrices';
 const { graphql } = vi.hoisted(() => ({ graphql: vi.fn() }));
-vi.mock('../shopify', () => ({ shopifyGraphQL: graphql, mismaSucursal: (a: string, b: string) => a === b }));
+vi.mock('../shopify', () => ({ shopifyGraphQL: graphql, actualizarPreciosManualmente: (v: unknown) => graphql('manual-prices', v), mismaSucursal: (a: string, b: string) => a === b }));
 beforeEach(() => { graphql.mockReset(); });
 const modelos = { oc: { artType: 'buzo', descCod: 'oc' }, ocultism: { artType: 'buzo', descCod: 'ocultism' } };
 it('OC no coincide dentro de OCULTISM y conserva tipo y colores', () => {

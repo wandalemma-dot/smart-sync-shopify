@@ -20,6 +20,18 @@ export function mismaSucursal(a: string, b: string): boolean {
   return !!na && !!nb && na === nb;
 }
 
+// Este acceso es solo para el botón manual; el bot no tiene permiso de precios.
+export async function actualizarPreciosManualmente(variables: Record<string, unknown>): Promise<any> {
+  const res = await fetch('/api/prices', {
+    method: 'POST', credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(variables),
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.error || 'No se pudo actualizar el precio. Volvé a analizar.');
+  return json.data;
+}
+
 export async function shopifyGraphQL<T = unknown>(
   query: string,
   variables: Record<string, unknown> = {},

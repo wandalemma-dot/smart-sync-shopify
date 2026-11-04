@@ -6,7 +6,7 @@ import { unidadesPorPackId } from '../packsId';
 import { buildMatrixProducts, downloadMatrixCSV, downloadUpdateCSV, processFiles } from '../syncLogic';
 
 const { graphql, download } = vi.hoisted(() => ({ graphql: vi.fn(), download: vi.fn() }));
-vi.mock('../shopify', () => ({ shopifyGraphQL: graphql, mismaSucursal: (a: string, b: string) => a === b }));
+vi.mock('../shopify', () => ({ shopifyGraphQL: graphql, actualizarPreciosManualmente: (v: unknown) => graphql('manual-prices', v), mismaSucursal: (a: string, b: string) => a === b }));
 vi.mock('../csv', async original => ({ ...await original<typeof import('../csv')>(), triggerDownload: download }));
 
 function archivo(rows: unknown[][]): File {
