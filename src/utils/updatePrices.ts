@@ -8,16 +8,8 @@
 //   se le pasan: precio y costo. Es imposible que borre nada más.
 // ============================================================================
 
-import { shopifyGraphQL } from './shopify';
+import { actualizarPreciosManualmente } from './shopify';
 import type { SyncResult, UpdateAction } from './syncLogic';
-
-const BULK_UPDATE = `
-  mutation ActualizarPrecios($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
-    productVariantsBulkUpdate(productId: $productId, variants: $variants) {
-      userErrors { field message }
-    }
-  }
-`;
 
 export interface PriceWriteResult {
   actualizadas: number;
@@ -83,7 +75,7 @@ export async function aplicarPrecios(
       if (opciones.precio && u.newPrice !== undefined) v.price = String(u.newPrice);
       // El costo va dentro de inventoryItem (no pisa nada más del ítem).
       if (opciones.costo && !u.costoProtegido && !(Number(u.stockMartinez) > 0) && u.newCost !== undefined && u.newCost > 0) {
-        v.inventoryItem = { cost: String(Math.round(u.newCost)) };
+        v.inventoryItem = { cost: String(Math.round(u.newCost * 100) / 100) };
       }
       return v;
     }).filter((v) => v.price !== undefined || v.inventoryItem !== undefined);
@@ -100,7 +92,7 @@ export async function aplicarPrecios(
 
     try {
       if (conflicto) throw new Error('La misma variante tiene precios o costos contradictorios. Volvé a analizar antes de aplicar.');
-      const data = await shopifyGraphQL<any>(BULK_UPDATE, { productId, variants: unicas });
+      const data = await actualizarPreciosManualmente({ productId, variants: unicas });
       if (!Array.isArray(data?.productVariantsBulkUpdate?.userErrors)) throw new Error('Shopify no confirmó la actualización. Volvé a analizar antes de reintentar.');
       const ue = data.productVariantsBulkUpdate.userErrors;
       if (ue.length) {
