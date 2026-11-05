@@ -1,17 +1,32 @@
 # Guía del proyecto — Sincronización de Stock e Inventario (INDY)
 
+**Funciones manuales de TODAS las marcas (4-nov-2026).** Wanda pidió quitar las
+restricciones agregadas a su usuario: stock, altas, talles, activación en sucursal,
+orden/corrección de talles y precios deben seguir disponibles en la app para todas
+las marcas, incluida NTF. Nunca condicionar el botón manual de stock a Converse/Le Coq.
+`/api/shopify` permite las mutaciones existentes de la app con sesión humana válida y
+mismo origen. El bot sigue limitado a lecturas en ese proxy y escribe únicamente por
+`/api/id-stock`, con su alcance Converse/Le Coq y OIDC sin cambios. No confundir los
+permisos de Wanda con los del bot. Conservar confirmaciones y reglas de negocio previas
+(NO SINCRONIZAR, sucursal por marca, costos de Martínez, validación de talles).
+Las escrituras manuales usan API 2026-07: inventorySetQuantities e inventoryActivate
+requieren clave @idempotent; el ajuste absoluto manual usa changeFromQuantity:null,
+equivalente al ignoreCompareQuantity anterior. Respuesta incompleta no cuenta como éxito
+ni dispara reintento automático; volver a simular. Las pruebas son con Shopify simulado,
+sin aplicar los cambios pendientes de stock/precio de la usuaria.
+
 **Precios manuales (4-nov-2026).** La usuaria confirmó que los precios y costos los aplica ella,
 nunca el bot. El botón usa `/api/prices`, exclusivo de sesión humana y mismo origen, con
-campos limitados a precio/costo de variantes existentes. El proxy `/api/shopify` sigue solo
-lectura; el token del bot, aun acompañado de OIDC, no permite usar `/api/prices`.
+campos limitados a precio/costo de variantes existentes. El proxy `/api/shopify` permite
+las funciones manuales arriba indicadas; el token del bot, aun acompañado de OIDC, no permite usar `/api/prices`.
 Releer Martínez antes de escribir costos: si hay stock, detener ese producto y pedir reanálisis.
 Conservar centavos de costos al enviar (no redondear al peso). No se cambiaron las fórmulas,
 selección ni confirmación manual. La automatización de ID no participa de este flujo.
 
-**Stock de ID.** Los botones de cantidades y talles habilitados usan `/api/id-stock`.
-La sesión humana confirma las filas de la simulación. Cada cuatro horas, el ejecutor privado procesa
+**Stock de ID automático.** El bot usa `/api/id-stock`; los botones manuales usan el flujo
+general de la app, con confirmación humana de las filas simuladas. Cada cuatro horas, el ejecutor privado procesa
 Converse y Le Coq Sportif, cada marca con su propio Excel, simulación y verificación. Acredita
-su identidad con GitHub Actions y aplica su simulación fresca. El proxy GraphQL sigue siendo de lectura.
+su identidad con GitHub Actions y aplica su simulación fresca. Para el bot, el proxy GraphQL sigue siendo de lectura.
 Si varios artículos de ID comparten prefijo, identificar el modelo por SKU delimitado o etiqueta completa.
 Después de crear talles, volver a simular con el mismo Excel para cubrir los ceros recién habilitados.
 

@@ -1,6 +1,6 @@
-// Proxy autenticado. Fase de revisión: todas las mutaciones están bloqueadas.
+// Sesión humana: funciones manuales de la app. Bot: únicamente lectura acotada.
 import { allowedOrigin, identity, noStore } from '../server/access.js';
-import { inspectReadQuery } from '../server/read-policy.js';
+import { inspectReadQuery, inspectUserQuery } from '../server/read-policy.js';
 const SHOP = 'indy-com-ar.myshopify.com';
 const API_VERSION = '2024-04';
 const API_VERSION_INFORMES = '2026-07';
@@ -19,11 +19,11 @@ export default async function handler(req, res) {
   const { query, variables } = req.body || {};
   if (variables != null && (typeof variables !== 'object' || Array.isArray(variables))) return res.status(400).json({ error: 'Variables inválidas.' });
   let policy;
-  try { policy = inspectReadQuery(query, who === 'automation'); }
-  catch { return res.status(403).json({ error: 'Solo se permite una consulta de lectura autorizada. Escrituras bloqueadas.' }); }
+  try { policy = who === 'user' ? inspectUserQuery(query) : inspectReadQuery(query, true); }
+  catch { return res.status(403).json({ error: who === 'user' ? 'La operación no pertenece a las funciones de esta app.' : 'El acceso del bot permite únicamente consultas autorizadas.' }); }
   try {
     const token = await obtenerToken();
-    const version = policy.reports ? API_VERSION_INFORMES : API_VERSION;
+    const version = policy.reports || policy.write ? API_VERSION_INFORMES : API_VERSION;
     const response = await fetch('https://' + SHOP + '/admin/api/' + version + '/graphql.json', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-Shopify-Access-Token': token },

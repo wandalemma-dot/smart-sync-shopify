@@ -149,8 +149,9 @@ const PRODUCTS_BY_HANDLE = `
 `;
 
 const SET_MUTATION = `
-  mutation Set($input: InventorySetQuantitiesInput!) {
-    inventorySetQuantities(input: $input) {
+  mutation Set($input: InventorySetQuantitiesInput!, $key: String!) {
+    inventorySetQuantities(input: $input) @idempotent(key: $key) {
+      inventoryAdjustmentGroup { createdAt }
       userErrors { field message }
     }
   }
@@ -199,8 +200,8 @@ const ADD_SUPPLIER_TAGS = `
 // Es la ÚNICA forma de cargarle stock a una variante que todavía no existe en
 // esa sucursal. Va de a una: Shopify no tiene versión en lote de esta mutación.
 const ACTIVATE_MUTATION = `
-  mutation Activar($inventoryItemId: ID!, $locationId: ID!, $available: Int) {
-    inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId, available: $available) {
+  mutation Activar($inventoryItemId: ID!, $locationId: ID!, $available: Int, $key: String!) {
+    inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId, available: $available) @idempotent(key: $key) {
       inventoryLevel { id }
       userErrors { field message }
     }
@@ -729,8 +730,10 @@ export async function activarEnSucursal(
         inventoryItemId: f.inventoryItemId,
         locationId: plan.locationId,
         available: f.desired,
+        key: crypto.randomUUID(),
       });
-      const ue = data?.inventoryActivate?.userErrors || [];
+      const ue = data?.inventoryActivate?.userErrors;
+      if (!Array.isArray(ue) || (!ue.length && !data.inventoryActivate.inventoryLevel?.id)) throw new Error('Shopify no confirmó el alta. Volvé a simular antes de reintentar.');
       if (ue.length) {
         failed++;
         if (errors.length < 5) errors.push(`${f.title} ${f.talle}: ${ue[0].message}`);
@@ -888,17 +891,21 @@ export async function executeStockWrite(
     const input = {
       name: 'available',
       reason: 'correction',
-      ignoreCompareQuantity: true,
       quantities: batch.map((c) => ({
         inventoryItemId: c.inventoryItemId,
         locationId: plan.locationId,
         quantity: c.desired,
+        // Equivalente al ajuste absoluto manual anterior, con la API vigente.
+        changeFromQuantity: null,
       })),
     };
     let loteOk = false;
+    let loteRechazado = false;
     try {
-      const data = await shopifyGraphQL<any>(SET_MUTATION, { input });
-      const ue = data?.inventorySetQuantities?.userErrors || [];
+      const data = await shopifyGraphQL<any>(SET_MUTATION, { input, key: crypto.randomUUID() });
+      const ue = data?.inventorySetQuantities?.userErrors;
+      if (!Array.isArray(ue) || (!ue.length && !data.inventorySetQuantities.inventoryAdjustmentGroup)) throw new Error('Shopify no confirmó la escritura. Volvé a simular antes de reintentar.');
+      loteRechazado = ue.length > 0;
       if (!ue.length) { written += batch.length; loteOk = true; }
       else if (errors.length < 5) errors.push(...ue.slice(0, 2).map((e: any) => e.message));
     } catch (err: any) {
@@ -909,18 +916,22 @@ export async function executeStockWrite(
     // contaba 100 fallidas y perdíamos 99 escrituras que estaban bien.
     // Ahora, si el lote falla, se reintenta de a una: así solo se pierde la
     // que realmente tiene el problema.
-    if (!loteOk) {
+    // Solo repetir de a una si Shopify confirmó el rechazo del lote completo.
+    // Una respuesta perdida/incompleta no demuestra que la escritura no ocurrió.
+    if (!loteOk && !loteRechazado) failed += batch.length;
+    if (loteRechazado) {
       for (const c of batch) {
         try {
           const d = await shopifyGraphQL<any>(SET_MUTATION, {
             input: {
               name: 'available',
               reason: 'correction',
-              ignoreCompareQuantity: true,
-              quantities: [{ inventoryItemId: c.inventoryItemId, locationId: plan.locationId, quantity: c.desired }],
+              quantities: [{ inventoryItemId: c.inventoryItemId, locationId: plan.locationId, quantity: c.desired, changeFromQuantity: null }],
             },
+            key: crypto.randomUUID(),
           });
-          const ue = d?.inventorySetQuantities?.userErrors || [];
+          const ue = d?.inventorySetQuantities?.userErrors;
+          if (!Array.isArray(ue) || (!ue.length && !d.inventorySetQuantities.inventoryAdjustmentGroup)) throw new Error('Shopify no confirmó la escritura. Volvé a simular antes de reintentar.');
           if (ue.length) {
             failed++;
             if (errors.length < 5) errors.push(`${c.title} ${c.talle}: ${ue[0].message}`);
