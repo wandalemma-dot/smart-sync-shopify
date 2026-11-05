@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import handler from '../api/shopify.js';
 import session from '../api/session.js';
 import { COOKIE, makeSession } from './access.js';
-import { inspectReadQuery } from './read-policy.js';
+import { inspectReadQuery, inspectUserQuery } from './read-policy.js';
+import { readFileSync } from 'node:fs';
 
 const appKey = 'app-test-only-'.padEnd(48, 'a');
 const botKey = 'bot-test-only-'.padEnd(48, 'b');
@@ -27,7 +28,7 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.unstubAllEnvs(); });
 
-describe('authenticated read-only boundary', () => {
+describe('human manual functions and separate bot scope', () => {
   it('rejects anonymous requests without calling Shopify', async () => {
     const res = response(); await handler(request('{ shop { name } }'), res);
     expect(res.statusCode).toBe(401); expect(fetch).not.toHaveBeenCalled();
@@ -53,10 +54,53 @@ describe('authenticated read-only boundary', () => {
     const res = response(); await handler(request(query, { authorization: 'Bearer ' + botKey }), res);
     expect(res.statusCode).toBe(403); expect(fetch).not.toHaveBeenCalled();
   });
-  it('blocks mutations even with valid human session', async () => {
+  const manualRoots = ['inventorySetQuantities', 'inventoryActivate', 'productSet', 'productVariantsBulkUpdate',
+    'productVariantsBulkCreate', 'productOptionsReorder', 'tagsAdd', 'metafieldsSet', 'publishablePublish'];
+  it.each(manualRoots)('allows the human app function %s, never a bot or anonymous caller', async root => {
+    const query = `mutation { action: ${root}(input: {}) { userErrors { message } } }`;
+    const cookie = `${COOKIE}=${makeSession()}`;
     const res = response();
-    await handler(request('mutation { inventorySetQuantities(input: {}) { userErrors { message } } }', { origin, cookie: `${COOKIE}=${makeSession()}` }), res);
+    await handler(request(query, { origin, cookie }), res);
+    expect(res.statusCode).toBe(200);
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0][0]).toContain('/2026-07/graphql.json');
+    expect(JSON.parse(fetch.mock.calls[0][1].body).query).toBe(query);
+    vi.mocked(fetch).mockClear();
+    for (const headers of [
+      {}, { origin, authorization: 'Bearer ' + botKey },
+      { origin, cookie, authorization: 'Bearer ' + botKey, 'x-github-oidc-token': 'not-a-human-session' },
+      { origin: 'https://example.invalid', cookie }, { cookie },
+    ]) {
+      const denied = response(); await handler(request(query, headers), denied);
+      expect([401, 403]).toContain(denied.statusCode);
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it.each([
+    'mutation { inventorySetQuantities(input: {}) { userErrors { message } } orderCreate(order: {}) { userErrors { message } } }',
+    'mutation { ...Root } fragment Root on Mutation { inventorySetQuantities: productDelete(input: {}) { userErrors { message } } }',
+    'mutation { ... on Mutation { orders: orderCreate(order: {}) { userErrors { message } } } }',
+    'query A { shop { name } } mutation B { inventoryActivate { id } }',
+    'subscription { shop { name } }',
+    'mutation { ...Loop } fragment Loop on Mutation { ...Loop }',
+  ])('does not broaden manual functions to orders/deletion or ambiguous operations: %s', async query => {
+    const res = response(); await handler(request(query, { origin, cookie: `${COOKIE}=${makeSession()}` }), res);
     expect(res.statusCode).toBe(403); expect(fetch).not.toHaveBeenCalled();
+  });
+  it('accepts allowed manual roots through aliases and fragments', () => {
+    expect(inspectUserQuery('mutation { ...Root } fragment Root on Mutation { ... on Mutation { action: inventoryActivate { inventoryLevel { id } } } }')).toEqual({ reports: false, write: true });
+  });
+  it('permits every actual manual mutation used by the existing app', () => {
+    let count = 0;
+    for (const name of ['writeStock.ts', 'createProducts.ts', 'recrearProductos.ts']) {
+      const code = readFileSync(new URL(`../src/utils/${name}`, import.meta.url), 'utf8');
+      for (const [, query] of code.matchAll(/`\s*(mutation\b[^`]+)`/g)) {
+        expect(inspectUserQuery(query)).toEqual({ reports: false, write: true });
+        expect(() => inspectReadQuery(query, true)).toThrow();
+        count++;
+      }
+    }
+    expect(count).toBeGreaterThanOrEqual(9);
   });
   it('rejects cross-origin cookie requests', async () => {
     const res = response(); await handler(request('{ shop { name } }', { origin: 'https://example.invalid', cookie: `${COOKIE}=${makeSession()}` }), res);

@@ -1,9 +1,8 @@
 import { useState, useRef } from 'react';
 import { processFiles, extractSheetNames, downloadUpdateCSV, downloadMatrixCSV, downloadInventoryCSV, autoConverseTable, problemaTablaConverse, tituloNuevoConverse } from './utils/syncLogic';
 import type { SyncConfig, SyncResult } from './utils/syncLogic';
-import { planStockWrite, activarEnSucursal, enderezarTallesCorridos, crearTallesFaltantes } from './utils/writeStock';
+import { planStockWrite, executeStockWrite, activarEnSucursal, enderezarTallesCorridos, crearTallesFaltantes } from './utils/writeStock';
 import type { StockPlan } from './utils/writeStock';
-import { idPlan, idRequest, applyRows } from './utils/idStockClient.js';
 import { createProducts } from './utils/createProducts';
 import { aplicarPrecios, actualizacionesAplicables, sinCambios, margenPct } from './utils/updatePrices';
 import Reposicion from './Reposicion';
@@ -37,7 +36,6 @@ export default function App() {
   // ---- ESCRITURA DE STOCK EN SHOPIFY (simular -> confirmar -> escribir) ----
   const [stockPlan, setStockPlan] = useState<StockPlan | null>(null);
   const [stockPlanning, setStockPlanning] = useState(false);
-  const idBrand = config.brand === 'converse' || config.brand === 'lecoq';
   const [stockConfirm, setStockConfirm] = useState(false);
   const [stockWriting, setStockWriting] = useState(false);
   const [stockNotice, setStockNotice] = useState('');
@@ -58,27 +56,13 @@ export default function App() {
   const claveFila = (r: { code: string; talle: string; talleProveedor: string }) =>
     `${r.code}|${r.talleProveedor}|${r.talle}`;
 
-  async function applyID(action: 'stock' | 'sizes') {
-    if (!stockPlan) throw Error('Volvé a simular el stock.');
-    const plan = idPlan(config.brand, stockPlan);
-    if (action === 'stock') plan.sizes = [];
-    else {
-      plan.stock = [];
-      plan.sizes = plan.sizes.filter(row => crearTalle[claveFila(row)]);
-    }
-    const { receipt } = await idRequest({ mode: 'prepare', plan });
-    const indices = plan[action].map((_, i) => i);
-    const result = await applyRows(plan, receipt, action, indices);
-    return [`${action === 'stock' ? 'Variantes actualizadas' : 'Talles creados'}: ${result.written} de ${indices.length}.`,
-      result.error, ...result.warnings].filter(Boolean).join(' ');
-  }
-
   const handleWriteStock = async () => {
-    if (!idBrand || !stockPlan?.changes.length || !stockConfirm || stockWriting || faltantesLoading) return;
+    if (!stockPlan?.changes.length || !stockConfirm || stockWriting || faltantesLoading) return;
     setStockWriting(true);
     setStockConfirm(false);
     try {
-      setStockNotice(await applyID('stock'));
+      const res = await executeStockWrite(stockPlan);
+      setStockNotice(`Escritos ${res.written} · fallidos ${res.failed}` + (res.errors.length ? ` · ${res.errors.slice(0, 2).join(' | ')}` : ''));
     } catch (e: any) {
       setStockNotice(e.message);
     } finally {
@@ -92,10 +76,6 @@ export default function App() {
     if (filas.length === 0) { alert('No hay ningún talle tildado para crear.'); return; }
     setFaltantesLoading(true); setFaltantesDone(null);
     try {
-      if (idBrand) {
-        setFaltantesDone(await applyID('sizes'));
-        return;
-      }
       const res = await crearTallesFaltantes(stockPlan, filas);
       setFaltantesDone(`Talles creados ${res.written} · fallidos ${res.failed}` + (res.errors.length ? ` · ${res.errors.slice(0, 2).join(' | ')}` : '') + (res.avisos?.length ? ` · ${res.avisos.slice(0, 2).join(' | ')}` : ''));
       setFaltantesConfirm(false);
@@ -1045,11 +1025,11 @@ export default function App() {
                             className="btn-primary"
                             style={{ background: faltantesConfirm ? '#d97706' : '#6b7280', marginTop: '0.5rem' }}
                             onClick={handleCrearFaltantes}
-                            disabled={!faltantesConfirm || faltantesLoading || stockWriting || (idBrand && !!faltantesDone)}
+                            disabled={!faltantesConfirm || faltantesLoading || stockWriting}
                           >
                             {faltantesLoading ? <span className="loader"></span> : `➕ Crear ${stockPlan.notFound.filter(r => crearTalle[claveFila(r)]).length} talles en Shopify`}
                           </button>
-                          {faltantesDone && <p role="status">{faltantesDone} {idBrand && 'Volvé a simular para revisar el resultado.'}</p>}
+                          {faltantesDone && <p role="status">{faltantesDone}</p>}
                         </details>
                       )}
                       {/* --- 4) SIN ALTA EN LA SUCURSAL: hay que activarlas --- */}
@@ -1195,18 +1175,16 @@ export default function App() {
                   ) : (
                     <p style={{ marginTop: '0.8rem', padding: '0.8rem', background: 'rgba(16,185,129,0.1)', borderRadius: '6px' }}>✅ El stock ya coincide con el proveedor. Nada para escribir.</p>
                   )
-                ) : idBrand ? (
+                ) : (
                   <div style={{ marginTop: '1rem' }}>
-                    <label><input type="checkbox" checked={stockConfirm} disabled={stockWriting || !!stockNotice}
+                    <label><input type="checkbox" checked={stockConfirm} disabled={stockWriting}
                       onChange={e => setStockConfirm(e.target.checked)} /> Entiendo que esto va a <strong>modificar el stock real</strong> en Shopify.</label>
                     <button className="btn-primary" onClick={handleWriteStock}
-                      disabled={!stockConfirm || stockWriting || faltantesLoading || !!stockNotice}>
+                      disabled={!stockConfirm || stockWriting || faltantesLoading}>
                       {stockWriting ? 'Actualizando stock…' : `Escribir ${stockPlan.changes.length} cambios en Shopify`}
                     </button>
                     {stockNotice && <p role="status">{stockNotice} Volvé a simular para revisar el resultado.</p>}
                   </div>
-                ) : (
-                  <p role="status">Simulación lista para revisar. El stock de Shopify sigue igual.</p>
                 )}
               </div>
             )}
