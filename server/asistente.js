@@ -17,7 +17,7 @@ import { obtenerToken } from './shopify-token.js';
 import { inspectReadQuery } from './read-policy.js';
 
 const SHOP_URL = 'https://indy-com-ar.myshopify.com/admin/api/2026-07/graphql.json';
-export const MODELO_POR_DEFECTO = 'claude-opus-5-5';
+export const MODELO_POR_DEFECTO = 'claude-sonnet-5-5'; // elegido por costo (9-nov); ANTHROPIC_MODEL=claude-opus-5-5 para el más potente
 const MAX_VUELTAS = 8;
 
 // ---------------------------------------------------------------- Shopify
