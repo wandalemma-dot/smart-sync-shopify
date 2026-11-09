@@ -1222,3 +1222,11 @@ encontraron así y no se habrían visto de otra forma.
 - No enviar pedidos a ID ni crear pedidos en Shopify. No escribir stock ni precios ni crear productos. La fase de aplicación futura necesita aprobación del plan exacto y validación en servidor; no restaurar el proxy de mutaciones.
 - Ver automation/README.md para accesos pendientes y tratamiento seguro de secretos. Nunca publicar informes ni Excel en el repositorio público.
 - En ID, el botón «Seleccionar» está en la tarjeta que rodea al título «DISPONIBLE», no en el contenedor inmediato del título. Comprobar que haya un solo título y una sola acción en esa tarjeta; ante ambigüedad, detenerse sin elegir otro canal.
+
+### Asistente de IA (9-nov-2026, pedido de gax)
+- Pestaña «🤖 Asistente» (`src/Asistente.tsx`) + `api/asistente.js` + núcleo `server/asistente.js`. Ayuda con carga de stock, costo ponderado, órdenes pendientes de iD y control remito/factura/nota de pedido. Empieza con iD (Converse y Le Coq).
+- 🔴 SOLO LECTURA: sus herramientas son queries a Shopify (pasan por `inspectReadQuery`) y cálculos puros. No agregarle mutaciones: las escrituras siguen por los botones con confirmación humana. Solo sesión humana + mismo origen; el token del bot NO entra.
+- Conocimiento por marca en `server/conocimiento/` (general, proveedor iD, converse, lecoq). Marca nueva = archivo nuevo + una línea en `MARCAS_ASISTENTE`; `server/asistente.test.js` controla que esté completa. Si cambia una regla de este archivo que afecta a esas marcas, actualizarla también ahí.
+- Las cuentas NO las hace el modelo: `compararDocumentos()` (código+talle, cantidades, costos en centavos, total impreso) y `costoPonderado()` (solo stock de Martínez; costo actual cero/desconocido no se inventa) en `server/asistente-calculos.js`.
+- Necesita `ANTHROPIC_API_KEY` en Vercel (se paga por uso). Modelo por defecto `claude-opus-5-5`, se cambia con `ANTHROPIC_MODEL` (ej. `claude-sonnet-5-5`, más barato) y `ANTHROPIC_EFFORT`. Los adjuntos viajan en cada pregunta (límite ~4 MB por pedido de Vercel); Excel/CSV se pasan a texto en el navegador y las fotos se achican a 1600 px.
+- No existe «iniciar sesión con Claude» (OAuth de la suscripción) para una app propia: la vía es la clave de API.

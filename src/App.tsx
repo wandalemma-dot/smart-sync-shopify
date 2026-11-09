@@ -10,10 +10,11 @@ import PedidoId from './PedidoId';
 import PedidoDistrinando from './PedidoDistrinando';
 import Recuperar from './Recuperar';
 import ControlEntregas from './ControlEntregas';
+import Asistente from './Asistente';
 
 export default function App() {
   // Pestaña activa: sincronización (lo de siempre) o reposición (pedido a iD).
-  const [tab, setTab] = useState<'sync' | 'pedido' | 'distrinando' | 'reposicion' | 'recuperar' | 'remitos'>('sync');
+  const [tab, setTab] = useState<'sync' | 'pedido' | 'distrinando' | 'reposicion' | 'recuperar' | 'remitos' | 'asistente'>('sync');
   const [providerFile, setProviderFile] = useState<File | null>(null);
   const [reebokFiles, setReebokFiles] = useState<{ file: File; sheetName: string; sheets: string[] }[]>([]);
   const [readingFiles, setReadingFiles] = useState(false);
@@ -320,7 +321,7 @@ export default function App() {
 
       {/* ====== PESTAÑAS ====== */}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', marginBottom: '1.2rem' }}>
-        {([['sync', '🔄 Sincronización'], ['pedido', '📋 Armado de pedido iD'], ['distrinando', '📋 Pedidos DISTRINANDO'], ['reposicion', '📦 Reposición'], ['recuperar', '♻️ Recuperar'], ['remitos', '🧾 Control de entregas']] as const).map(([id, label]) => (
+        {([['sync', '🔄 Sincronización'], ['pedido', '📋 Armado de pedido iD'], ['distrinando', '📋 Pedidos DISTRINANDO'], ['reposicion', '📦 Reposición'], ['recuperar', '♻️ Recuperar'], ['remitos', '🧾 Control de entregas'], ['asistente', '🤖 Asistente']] as const).map(([id, label]) => (
           <button
             key={id}
             onClick={() => setTab(id)}
@@ -336,7 +337,7 @@ export default function App() {
         ))}
       </div>
 
-      {tab === 'distrinando' ? <PedidoDistrinando /> : tab === 'pedido' ? <PedidoId /> : tab === 'remitos' ? <ControlEntregas /> : tab === 'recuperar' ? <Recuperar /> : tab === 'reposicion' ? <Reposicion /> : (<>
+      {tab === 'asistente' ? <Asistente /> : tab === 'distrinando' ? <PedidoDistrinando /> : tab === 'pedido' ? <PedidoId /> : tab === 'remitos' ? <ControlEntregas /> : tab === 'recuperar' ? <Recuperar /> : tab === 'reposicion' ? <Reposicion /> : (<>
 
       {!previewReady ? (
         <div className="main-grid">
