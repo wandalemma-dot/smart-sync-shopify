@@ -1443,23 +1443,6 @@ export async function processFiles(
   const updatesToApply: UpdateAction[] = [];
   const handlesMatcheados = new Set<string>(); // para detectar los que ya no manda el proveedor
   const codigosId = config.brand === 'converse' || config.brand === 'lecoq' ? Object.keys(excelMap) : null;
-  // Reebok y Kappa pueden conservar en Shopify un SKU físico distinto del que
-  // trae la lista. Cuando hay una etiqueta EXACTA del modelo, esa es la fuente
-  // canónica: un producto legado que todavía tenga el SKU anterior no puede
-  // hacer que se elija otro producto por el orden de la respuesta de Shopify.
-  // Dos etiquetas exactas sí son una duplicación real y se detienen para no
-  // actualizar ni poner stock en el producto equivocado.
-  const productoPorEtiquetaExacta = new Map<string, string>();
-  if (config.brand === 'reebok' || config.brand === 'kappa') {
-    for (const cod of Object.keys(excelMap)) {
-      const etiquetados = shopifyProducts.filter(prod => etiquetaModelo(String(prod.tags || ''), cod));
-      if (etiquetados.length > 1) {
-        const handles = etiquetados.map(prod => prod.handle || prod.title || 'sin handle').join(', ');
-        throw new Error(`${cod}: la etiqueta exacta del modelo está en más de un producto (${handles}); revisá las etiquetas antes de sincronizar.`);
-      }
-      if (etiquetados.length === 1) productoPorEtiquetaExacta.set(cod, etiquetados[0].handle);
-    }
-  }
 
   // Mapear Shopify contra el ExcelMap
   for (const prod of shopifyProducts) {
@@ -1482,17 +1465,11 @@ export async function processFiles(
          match = cod === orchardCodigo;
       } else if (config.brand === 'ntf' || config.brand === 'reebok' || config.brand === 'kappa' || config.brand === 'crocs') {
          const codigo = cod.toLowerCase();
-         const handleEtiquetado = productoPorEtiquetaExacta.get(cod);
-         // Si la etiqueta exacta aparece una sola vez, no usar ningún fallback
-         // por SKU/EAN en los demás productos. Así un SKU viejo no colisiona
-         // con el producto correcto cuyo SKU fue reemplazado en el depósito.
-         match = handleEtiquetado
-           ? prod.handle === handleEtiquetado
-           : tags.split(',').some(t => t.trim() === codigo)
-             || prod.variants.edges.some(v => {
-               const sku = String(v.node.sku || '').toLowerCase();
-               return sku === codigo || sku.startsWith(`${codigo}-`) || ((config.brand === 'kappa' || (config.brand === 'reebok' && config.reebokCalzado)) && Object.values(provData.skuPorTalle || {}).includes(String(v.node.sku || '')));
-             });
+         match = tags.split(',').some(t => t.trim() === codigo)
+           || prod.variants.edges.some(v => {
+             const sku = String(v.node.sku || '').toLowerCase();
+             return sku === codigo || sku.startsWith(`${codigo}-`) || ((config.brand === 'kappa' || (config.brand === 'reebok' && config.reebokCalzado)) && Object.values(provData.skuPorTalle || {}).includes(String(v.node.sku || '')));
+           });
       } else {
          // Para las marcas restantes: matchea por etiqueta (código en tags) O por el SKU
          // de las variantes que EMPIEZA con el código. Ignoramos espacios y guiones
