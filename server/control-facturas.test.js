@@ -35,6 +35,23 @@ describe('guardado del control de facturas', () => {
     expect(t.recepciones).toEqual({});
   });
 
+  it('recuerda los adjuntos de Trello revisados y los pedidos de Trello borrados, por proveedor', async () => {
+    const { fn } = memoria();
+    const adj = 'a'.repeat(24);
+    await aplicar(fn, { proveedor: 'id', accion: 'marcarTrelloVisto', adjunto: adj, motivo: 'es de Distrinando' });
+    await aplicar(fn, { proveedor: 'id', accion: 'guardarPedido', pedido: { id: `T-${'b'.repeat(24)}`, nombre: 'Tarjeta', fecha: '2026-11-01', enlace: 'https://trello.com/c/AbC123', lineas: [] } });
+    await aplicar(fn, { proveedor: 'id', accion: 'guardarPedido', pedido: { id: 'p2', nombre: 'X', fecha: '2026-11-01', enlace: 'javascript:alert(1)', lineas: [] } });
+    let t = await leerTodo(fn, 'id');
+    expect(t.trelloVistos[adj].motivo).toBe('es de Distrinando');
+    expect(t.pedidos.find((p) => p.id === 'p2').enlace).toBe('');
+    expect(t.pedidos.find((p) => p.id.startsWith('T-')).enlace).toBe('https://trello.com/c/AbC123');
+    await aplicar(fn, { proveedor: 'id', accion: 'borrarPedido', id: `T-${'b'.repeat(24)}` });
+    t = await leerTodo(fn, 'id');
+    expect(t.trelloVistos['b'.repeat(24)].motivo).toBe('borrado a mano');
+    expect((await leerTodo(fn, 'distrinando')).trelloVistos).toEqual({});
+    await expect(aplicar(fn, { proveedor: 'id', accion: 'marcarTrelloVisto', adjunto: '../x' })).rejects.toThrow(/Identificador/);
+  });
+
   it('rechaza proveedor, acción, ids y números inválidos', async () => {
     const { fn } = memoria();
     await expect(aplicar(fn, { proveedor: 'otro', accion: 'guardarPedido' })).rejects.toThrow(/Proveedor/);

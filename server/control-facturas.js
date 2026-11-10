@@ -36,6 +36,7 @@ export function limpiarPedido(p) {
     fecha: fecha(p?.fecha),
     nroProveedor: txt(p?.nroProveedor, 40),
     origen: txt(p?.origen || 'manual', 40),
+    enlace: /^https:\/\/trello\.com\/c\/[A-Za-z0-9]+$/.test(String(p?.enlace || '')) ? String(p.enlace) : '',
     lineas: lista(p?.lineas).map((l) => ({
       sku: txt(l?.sku, 80), codigo: txt(l?.codigo, 80), descripcion: txt(l?.descripcion), talle: txt(l?.talle, 40),
       unidadesPorUdm: num(l?.unidadesPorUdm || 1), precioLista: num(l?.precioLista || 0), descuento: num(l?.descuento || 0), cantidad: num(l?.cantidad || 0),
@@ -80,11 +81,11 @@ const parsear = (hash) => {
 };
 
 export async function leerTodo(kv, prov) {
-  const res = await kv([...TIPOS.map((t) => ['HGETALL', clave(prov, t)]), ['HGET', 'cf:config', prov]]);
+  const res = await kv([...TIPOS.map((t) => ['HGETALL', clave(prov, t)]), ['HGET', 'cf:config', prov], ['HGETALL', clave(prov, 'trello')]]);
   const [pedidos, facturas, asignaciones, recepciones] = res.slice(0, 4).map(parsear);
   let config = {};
   try { config = res[4] ? JSON.parse(res[4]) : {}; } catch { config = {}; }
-  return { pedidos: Object.values(pedidos), facturas: Object.values(facturas), asignaciones, recepciones, config };
+  return { pedidos: Object.values(pedidos), facturas: Object.values(facturas), asignaciones, recepciones, config, trelloVistos: parsear(res[5]) };
 }
 
 /** Aplica una acción de guardado o borrado. Valida todo antes de escribir. */
@@ -97,9 +98,15 @@ export async function aplicar(kv, body) {
       await kv([['HSET', clave(prov, 'pedidos'), p.id, JSON.stringify(p)]]);
       return { ok: true };
     }
-    case 'borrarPedido':
-      await kv([['HDEL', clave(prov, 'pedidos'), id(body.id)]]);
+    case 'borrarPedido': {
+      const pid = id(body.id);
+      const cmds = [['HDEL', clave(prov, 'pedidos'), pid]];
+      // Un pedido traído de Trello que se borra a mano no vuelve a importarse solo.
+      const adj = /^T-([a-f0-9]{24})$/.exec(pid);
+      if (adj) cmds.push(['HSET', clave(prov, 'trello'), adj[1], JSON.stringify({ motivo: 'borrado a mano', fecha: new Date().toISOString().slice(0, 10) })]);
+      await kv(cmds);
       return { ok: true };
+    }
     case 'guardarFactura': {
       const f = limpiarFactura(body.factura);
       await kv([['HSET', clave(prov, 'facturas'), f.id, JSON.stringify(f)]]);
@@ -119,6 +126,13 @@ export async function aplicar(kv, body) {
     case 'guardarRecepcion': {
       const fid = id(body.facturaId);
       await kv([['HSET', clave(prov, 'recepciones'), fid, JSON.stringify(limpiarRecepcion(body.recepcion))]]);
+      return { ok: true };
+    }
+    case 'marcarTrelloVisto': {
+      // Adjuntos de Trello ya leídos que no son pedidos de este proveedor: no volver a bajarlos.
+      const adj = String(body.adjunto ?? '');
+      if (!/^[a-f0-9]{24}$/.test(adj)) throw new Error('Identificador inválido.');
+      await kv([['HSET', clave(prov, 'trello'), adj, JSON.stringify({ motivo: txt(body.motivo, 200), fecha: new Date().toISOString().slice(0, 10) })]]);
       return { ok: true };
     }
     case 'guardarConfig': {
