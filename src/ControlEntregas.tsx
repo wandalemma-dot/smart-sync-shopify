@@ -141,7 +141,7 @@ export default function ControlEntregas() {
 
   return (
     <div className="glass-panel" style={{ padding: '1.5rem' }}>
-      <h2 style={{ marginTop: 0 }}>🧾 Control de entregas</h2>
+      <h2 style={{ marginTop: 0 }}>🧾 Control de entregas: factura contra nota de pedido</h2>
       <p style={{ fontSize: '0.9rem', opacity: 0.85, marginTop: 0 }}>
         Elegí el proveedor, subí la factura (ya controlada contra el remito) y las notas de pedido. La app controla que
         <strong> todo lo facturado esté pedido, sin pasarse, y al mismo costo</strong>. Lo pedido que todavía no llegó queda
