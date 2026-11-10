@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { analizarFacturas, compararRecepcion, fmt, mensajePagos, reporteReclamo, resumenPedidos } from '../controlFacturas';
 import type { Factura, Pedido, RenglonFactura } from '../controlFacturas';
-import { numero, leerPedidoExcel, leerPedidoAuto, leerPedidoId } from '../lectoresFacturas';
+import { numero, leerFacturaId, leerPedidoExcel, leerPedidoAuto, leerPedidoId } from '../lectoresFacturas';
 
 const linea = (codigo: string, talle: string, cantidad: number, precio = 100000, dto = 40) =>
   ({ sku: `${codigo}-${talle}`, codigo, descripcion: `Modelo ${codigo} ${talle}`, talle, unidadesPorUdm: 1, precioLista: precio, descuento: dto, cantidad });
@@ -147,5 +147,60 @@ describe('semáforo, estado de pedidos y recepción', () => {
     const r = analizarFacturas([], [fac]);
     expect(r.facturas[0].semaforo).toBe('reclamar');
     expect(r.facturas[0].motivos.join(' ')).toMatch(/falta cargar un pedido/);
+  });
+});
+
+describe('factura PDF de iD (FA 0011)', () => {
+  // Misma disposición que la factura real: filas por altura, columnas por x. Datos de ejemplo.
+  const fila = (y: number, celdas: [number, string][]) => celdas.map(([x, str]) => ({ str, transform: [1, 0, 0, 1, x, y] }));
+  const items = [
+    ...fila(800, [[279, 'A'], [447, 'Factura de Venta A']]),
+    ...fila(790, [[249, 'Código Nº 01'], [451, '0011-00000001']]),
+    ...fila(780, [[418, 'Fecha:'], [469, '05-11-26']]),
+    ...fila(770, [[84, 'Inscripto'], [299, '30000000000'], [514, '30 DIAS']]),
+    ...fila(700, [[38, 'Código'], [134, 'Descripción'], [362, 'Cantidad'], [452, 'Precio'], [537, 'Importe']]),
+    ...fila(690, [[36, 'A1C'.padEnd(7, '0')], [129, 'CHUCK TAYLOR'], [394, '5'], [449, '63.903,74'], [507, '10%'], [533, '287.566,83']]),
+    ...fila(680, [[35, 'A12975C'], [129, 'LIFT DOUBLE STACK'], [390, '17'], [449, '82.834,22'], [507, '10%'], [530, '1.267.363,5']]),
+    ...fila(300, [[504, '$'], [519, '1.554.930,40']]),
+    ...fila(290, [[33, 'Despachos:'], [101, '1'], [214, 'Comprobante Ref:'], [287, '00000002']]),
+    ...fila(280, [[406, 'I.V.A Inscripto'], [505, '$'], [525, '326.535,38']]),
+    ...fila(270, [[33, 'Cantidad total:'], [116, '22']]),
+    ...fila(260, [[405, 'Perc. IIBB CABA'], [504, '$'], [532, '77.746,52']]),
+    ...fila(250, [[400, 'Perc. IIBB BS.AS.'], [504, '$'], [533, '93.295,82']]),
+    ...fila(240, [[504, '$']]),
+    ...fila(230, [[505, '$'], [523, '2.052.508,12']]),
+  ];
+
+  it('lee renglones, totales, vencimiento y corrige importes cortados', () => {
+    const { factura, avisos } = leerFacturaId([items], 'f');
+    expect(avisos).toEqual([]);
+    expect(factura.numero).toBe('0011-00000001');
+    expect(factura.fecha).toBe('2026-11-05');
+    expect(factura.vencimiento).toBe('2026-12-05');
+    expect(factura.remito).toBe('00000002');
+    expect(factura.renglones.map((r) => `${r.codigo} ${r.cantidad} ${r.precioUnitario} ${r.bonificacion} ${r.total}`))
+      .toEqual(['A1C0000 5 63903.74 10 287566.83', 'A12975C 17 82834.22 10 1267363.57']);
+    expect([factura.subtotal, factura.iva, factura.percepcionCaba, factura.percepcionBsAs, factura.total])
+      .toEqual([1554930.4, 326535.38, 77746.52, 93295.82, 2052508.12]);
+    const r = analizarFacturas([], [factura]);
+    expect(r.facturas[0].aritmetica.errores).toEqual([]);
+  });
+
+  it('lista nueva sobre pedido viejo: avisa el aumento contra el precio del pedido', () => {
+    const { factura } = leerFacturaId([items], 'f');
+    const filas = [
+      ['Pedido N° 00002538'],
+      ['Imagen', 'Código', 'Descripción', 'Color', '055', '060', 'Total', 'Precio unit.', 'Subtotal', 'Bonif. %'],
+      [null, 'A1C0000', 'CHUCK', '1', 2, 3, 5, 63903.74, 0, 10],
+      [null, 'A12975C', 'LIFT', '1', 10, 7, 17, 80000, 0, 10],
+      [null, null, 'TOTAL', null, 12, 10, 22],
+    ];
+    const { pedido } = leerPedidoAuto(filas, 'P', 'pedido', '2026-10-01');
+    const r = analizarFacturas([pedido], [factura]);
+    const f = r.facturas[0];
+    expect(f.semaforo).toBe('reclamar');
+    expect(f.renglones[1].difPrecio[0].diferencia).toBe(43363.57);
+    expect(f.pedidosCompletos).toBe(true);
+    expect(f.checklist[0].talles).toEqual([{ talle: '055', cantidad: 2 }, { talle: '060', cantidad: 3 }]);
   });
 });

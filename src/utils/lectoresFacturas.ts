@@ -262,3 +262,89 @@ export function leerFacturaDistrinando(paginas: ItemPdf[][], id: string): Lectur
     avisos,
   };
 }
+
+/**
+ * Factura PDF de iD ARGENTINA (FA 0011-…). Renglones: código · descripción ·
+ * cantidad · precio de lista · bonificación «10%» · importe bonificado.
+ * Totales sin etiqueta para el subtotal (primer «$ importe»), luego I.V.A,
+ * Perc. IIBB CABA, Perc. IIBB BS.AS. y el total (último «$ importe»).
+ * Vencimiento = fecha + días de la condición («30 DIAS»).
+ */
+export function leerFacturaId(paginas: ItemPdf[][], id: string): LecturaFactura {
+  const avisos: string[] = [];
+  let numeroFac = '', fecha = '', remito = '', cond = '', vto = '';
+  let subtotal = NaN, iva = NaN, caba = 0, bsas = 0, total = NaN, cantTotal = NaN;
+  const renglones: RenglonFactura[] = [];
+  const montos: { etiqueta: string; valor: number }[] = [];
+  const vistos = new Set<string>();
+  for (const filas of paginas.map(filasPdf)) {
+    // Si el PDF repite la factura (copias), no duplicar renglones.
+    const firma = filas.map(texto).join('\n');
+    if (vistos.has(firma)) continue;
+    vistos.add(firma);
+    for (const f of filas) {
+      const t = texto(f);
+      if (!numeroFac && /factura/i.test(t)) numeroFac = (/\d{4}-\d{8}/.exec(t) || [''])[0];
+      if (!numeroFac && /^\d{4}-\d{8}$/.test(f[f.length - 1]?.s || '')) numeroFac = f[f.length - 1].s;
+      if (!fecha && /Fecha:/.test(t)) {
+        const m = /(\d{2})[-/](\d{2})[-/](\d{2,4})/.exec(t);
+        if (m) fecha = `${m[3].length === 2 ? '20' + m[3] : m[3]}-${m[2]}-${m[1]}`;
+      }
+      const d = /(\d{1,3})\s*D[IÍ]AS/i.exec(t);
+      if (!cond && d) cond = `${d[1]} días`;
+      if (!remito && /Comprobante Ref/i.test(t)) remito = (/Comprobante Ref:?\s*(\S+)/i.exec(t) || ['', ''])[1];
+      const ct = /Cantidad total:?\s*(\d+)/i.exec(t);
+      if (ct) cantTotal = Number(ct[1]);
+      // Montos del pie: «$ 11.726.807,96», con o sin etiqueta a la izquierda.
+      const iPeso = f.findIndex((c) => c.s === '$');
+      if (iPeso >= 0 && iPeso === f.length - 2 && RE_NUM.test(f[f.length - 1].s)) {
+        montos.push({ etiqueta: f.slice(0, iPeso).map((c) => c.s).join(' '), valor: numero(f[f.length - 1].s) });
+        continue;
+      }
+      // Renglón.
+      if (f.length < 5) continue;
+      const [cCant, cPrecio, cBonif, cImp] = f.slice(-4);
+      const cod = /^[A-Z0-9]{5,}$/i.exec(f[0].s);
+      if (!cod || !/^\d+$/.test(cCant.s) || !RE_NUM.test(cPrecio.s) || !/^\d+([.,]\d+)?%$/.test(cBonif.s) || !RE_NUM.test(cImp.s)) continue;
+      renglones.push({
+        codigo: f[0].s.toUpperCase(),
+        descripcion: f.slice(1, -4).map((c) => c.s).join(' '),
+        cantidad: Number(cCant.s),
+        precioUnitario: numero(cPrecio.s),
+        bonificacion: numero(cBonif.s),
+        total: numero(cImp.s),
+      });
+    }
+  }
+  for (const m of montos) {
+    if (/I\.?V\.?A/i.test(m.etiqueta)) iva = m.valor;
+    else if (/CABA/i.test(m.etiqueta)) caba = m.valor;
+    else if (/BS\.?\s*AS|BUENOS/i.test(m.etiqueta)) bsas = m.valor;
+    else if (Number.isNaN(subtotal) && Number.isNaN(iva)) subtotal = m.valor;
+  }
+  if (montos.length) total = montos[montos.length - 1].valor;
+  // El importe del renglón a veces sale cortado en el PDF (1.267.363,5): si coincide
+  // con la cuenta al decimal impreso, se usa la cuenta exacta.
+  for (const r of renglones) {
+    const calc = Math.round(r.precioUnitario * (1 - r.bonificacion / 100) * r.cantidad * 100) / 100;
+    if (Math.abs(calc - r.total) < 0.1 && Math.abs(calc - r.total) > 0.005) r.total = calc;
+  }
+  if (cond && fecha) {
+    const dt = new Date(`${fecha}T12:00:00Z`);
+    dt.setUTCDate(dt.getUTCDate() + Number(/\d+/.exec(cond)![0]));
+    vto = dt.toISOString().slice(0, 10);
+  }
+  if (!numeroFac) avisos.push('No encontré el número de factura.');
+  if (!fecha) avisos.push('No encontré la fecha de la factura.');
+  if (!renglones.length) throw new Error('No encontré renglones en la factura. ¿Es una factura de iD?');
+  if (Number.isNaN(subtotal) || Number.isNaN(iva) || Number.isNaN(total)) avisos.push('No pude leer subtotal, IVA o total: revisalos a mano.');
+  const suma = renglones.reduce((s, r) => s + r.cantidad, 0);
+  if (!Number.isNaN(cantTotal) && cantTotal !== suma) avisos.push(`La factura dice cantidad total ${cantTotal} y los renglones leídos suman ${suma}: puede faltar un renglón.`);
+  return {
+    factura: {
+      id, numero: numeroFac, fecha, remito, vencimiento: vto, condicionVenta: cond, pedidoProveedor: '',
+      renglones, subtotal: subtotal || 0, iva: iva || 0, percepcionCaba: caba || 0, percepcionBsAs: bsas || 0, total: total || 0,
+    },
+    avisos,
+  };
+}

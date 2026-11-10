@@ -12,7 +12,7 @@ import {
   analizarFacturas, claveRecepcion, compararRecepcion, fmt, mensajePagos, reporteReclamo, resumenPedidos,
   type Factura, type Pedido, type Recepcion, type ResultadoFactura,
 } from './utils/controlFacturas';
-import { leerFacturaDistrinando, leerPedidoAuto, type ItemPdf } from './utils/lectoresFacturas';
+import { leerFacturaDistrinando, leerFacturaId, leerPedidoAuto, type ItemPdf } from './utils/lectoresFacturas';
 
 type Prov = 'distrinando' | 'id';
 type PedidoGuardado = Pedido & { nroProveedor?: string; origen?: string };
@@ -138,8 +138,8 @@ export default function ControlFacturas() {
     const nuevos: string[] = [];
     for (const file of [...files]) {
       try {
-        if (prov !== 'distrinando') { nuevos.push(`${file.name}: el lector de facturas de iD todavía no está; falta un PDF de ejemplo.`); continue; }
-        const { factura, avisos: av } = leerFacturaDistrinando(await itemsPdf(file), '');
+        const paginas = await itemsPdf(file);
+        const { factura, avisos: av } = prov === 'id' ? leerFacturaId(paginas, '') : leerFacturaDistrinando(paginas, '');
         const id = `F-${slug(factura.numero || file.name)}`;
         const ya = datos.facturas.some((f) => f.id === id);
         if (await guardar({ accion: 'guardarFactura', factura: { ...factura, id } })) {
@@ -225,7 +225,7 @@ export default function ControlFacturas() {
             ➕ Subir factura(s) PDF
             <input type="file" accept=".pdf" multiple hidden onChange={(e) => { subirFacturas(e.target.files); e.target.value = ''; }} />
           </label>
-          {prov === 'id' && <p style={{ fontSize: '0.8rem', color: '#fbbf24', marginTop: 0 }}>El lector de facturas de iD se agrega con un PDF de ejemplo. Los pedidos de iD ya se pueden cargar.</p>}
+          {prov === 'id' && <p style={{ fontSize: '0.8rem', opacity: 0.75, marginTop: 0 }}>iD factura calzado e indumentaria por separado y puede juntar varios pedidos: cargá todas las facturas y todos los pedidos abiertos.</p>}
           {!facturasRes.length && !cargando && <p style={{ opacity: 0.7, fontSize: '0.85rem' }}>Todavía no hay facturas cargadas de este proveedor.</p>}
           {facturasRes.map((r) => <TarjetaFactura key={r.factura.id} r={r} abierta={abierta === r.factura.id}
             onAbrir={() => setAbierta(abierta === r.factura.id ? null : r.factura.id)} pedidos={pedidosOrd} nombrePedido={nombrePedido}
