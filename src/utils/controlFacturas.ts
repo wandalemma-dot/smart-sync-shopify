@@ -26,7 +26,7 @@ export const PERCEPCION_BSAS = 0.06;
  *  precio por pack y lo imprime por par redondeado: unos centavos por renglón. */
 const TOL_PRECIO = 1;
 const tolRenglon = (cantidad: number) => 5 + Math.ceil(Math.abs(cantidad));
-const TOL_TOTAL = 100;
+const TOL_TOTAL = 50; // $0,50 por redondeo (especificación de gax, 10-nov-2026)
 
 export interface LineaPedido {
   sku: string;              // SKU completo (modelo + talle)
@@ -84,6 +84,10 @@ export interface ControlRenglon {
   asignaciones: Asignacion[];
   sinPedir: number;                 // unidades facturadas que superan lo pedido
   posibleDobleCobro: boolean;       // el código ya tuvo un adelanto antes
+  /** El código no figura en NINGÚN pedido cargado: ¿falta cargar un pedido? */
+  noEstaEnPedidos: boolean;
+  /** Facturas anteriores que ya cubrieron este código (detalle del doble cobro). */
+  facturasPrevias: { factura: string; cantidad: number; adelanto: boolean }[];
   netoSinPedir: number;             // $ neto de lo facturado sin pedir
   conImpuestosSinPedir: number;     // con IVA y percepciones
   difPrecio: DiferenciaPrecio[];
@@ -121,9 +125,16 @@ export interface ResultadoFactura {
   totalSinPedirConImpuestos: number;
   totalDifPrecio: number;
   estado: 'ok' | 'revisar';
+  /** ✅ ok para pagar · ⚠️ con observaciones · ❌ reclamar. */
+  semaforo: Semaforo;
   motivos: string[];
   checklist: FilaChecklist[];
+  /** Pares/unidades facturados y si los pedidos que toca quedaron completos. */
+  unidades: number;
+  pedidosCompletos: boolean;
 }
+
+export type Semaforo = 'ok' | 'observaciones' | 'reclamar';
 
 export interface PendienteTalle {
   pedidoId: string;
@@ -229,6 +240,7 @@ export function analizarFacturas(
   const mapa = porCodigo(pedidos);
   const fechaPedido = new Map(pedidos.map((x) => [x.id, x.fecha]));
   const adelantados = new Set<string>(); // códigos con unidades adelantadas
+  const historial = new Map<string, { factura: string; cantidad: number; adelanto: boolean }[]>();
   const resultados: ResultadoFactura[] = [];
 
   for (const f of ordenarPorFecha(facturas)) {
@@ -275,6 +287,9 @@ export function analizarFacturas(
         }
       }
       const sinPedir = resto;
+      const facturasPrevias = [...(historial.get(cod) ?? [])];
+      if (!historial.has(cod)) historial.set(cod, []);
+      historial.get(cod)!.push({ factura: f.numero || f.id, cantidad: r.cantidad, adelanto: asignaciones.some((a) => a.adelanto) });
       const netoSinPedir = c(neto(r.precioUnitario, r.bonificacion) * sinPedir);
       const totalCalc = c(neto(r.precioUnitario, r.bonificacion) * r.cantidad);
       return {
@@ -284,6 +299,8 @@ export function analizarFacturas(
         asignaciones,
         sinPedir,
         posibleDobleCobro: sinPedir > 0 && yaAdelantado,
+        noEstaEnPedidos: grupos.length === 0,
+        facturasPrevias,
         netoSinPedir: p(netoSinPedir),
         conImpuestosSinPedir: p(Math.round(netoSinPedir * factor)),
         difPrecio,
@@ -298,15 +315,34 @@ export function analizarFacturas(
     const totalSinPedirConImpuestos = p(renglones.reduce((s, r) => s + c(r.conImpuestosSinPedir), 0));
     const totalDifPrecio = p(renglones.reduce((s, r) => s + r.difPrecio.reduce((t, d) => t + c(d.diferencia), 0), 0));
     const motivos: string[] = [];
+    let criticas = 0, medias = 0;
     const sinPedir = renglones.filter((r) => r.sinPedir > 0);
-    if (sinPedir.length) motivos.push(`Facturado sin pedir: ${sinPedir.length} artículo(s), ${fmt(totalSinPedirConImpuestos)} con impuestos.`);
-    if (renglones.some((r) => r.posibleDobleCobro)) motivos.push('Posible doble cobro de unidades ya adelantadas en otra factura.');
+    if (sinPedir.length) {
+      criticas++;
+      motivos.push(`NO PEDIDO: ${sinPedir.length} artículo(s), ${sinPedir.reduce((s, r) => s + r.sinPedir, 0)} unidades, ${fmt(totalSinPedirConImpuestos)} con impuestos.`);
+      const noCargados = sinPedir.filter((r) => r.noEstaEnPedidos);
+      if (noCargados.length) motivos.push(`${noCargados.map((r) => r.codigo).join(', ')} no figura en ningún pedido cargado: ¿falta cargar un pedido?`);
+    }
+    const dobles = renglones.filter((r) => r.posibleDobleCobro);
+    if (dobles.length) {
+      criticas++;
+      for (const r of dobles) {
+        const previas = r.facturasPrevias.filter((x) => x.adelanto).map((x) => `${x.factura} (${x.cantidad})`).join(', ');
+        motivos.push(`DOBLE COBRO: ${r.codigo} ya había sido facturado como adelanto en ${previas || 'una factura anterior'}.`);
+      }
+    }
     const conDif = renglones.filter((r) => r.difPrecio.length);
-    if (conDif.length) motivos.push(`Precio o bonificación distinta al pedido en ${conDif.length} artículo(s): diferencia ${fmt(totalDifPrecio)} neto.`);
+    if (conDif.length) {
+      criticas++;
+      motivos.push(`PRECIO: precio o bonificación distinta al pedido en ${conDif.length} artículo(s): diferencia ${fmt(totalDifPrecio)} neto, ${fmt(totalDifPrecio * factor)} con impuestos.`);
+    }
     const malSumados = renglones.filter((r) => !r.totalOk);
-    if (malSumados.length) motivos.push(`${malSumados.length} renglón(es) mal calculados.`);
-    motivos.push(...aritmetica.errores);
-    if (renglones.some((r) => r.asignaciones.some((a) => a.adelanto))) motivos.push('Adelanta unidades de un pedido posterior (queda registrado para controlar doble cobro).');
+    if (malSumados.length) { medias++; motivos.push(`CUENTAS: ${malSumados.length} renglón(es) mal calculados.`); }
+    if (aritmetica.errores.length) { medias++; motivos.push(...aritmetica.errores.map((e) => `CUENTAS: ${e}`)); }
+    if (renglones.some((r) => r.asignaciones.some((a) => a.adelanto))) {
+      medias++;
+      motivos.push('ADELANTO: toma unidades de un pedido posterior; no deben volver a facturarse.');
+    }
     const pedidosCubiertos = [...new Set(renglones.flatMap((r) => r.asignaciones.map((a) => a.pedidoId)))];
     resultados.push({
       factura: f,
@@ -317,9 +353,13 @@ export function analizarFacturas(
       totalSinPedirNeto,
       totalSinPedirConImpuestos,
       totalDifPrecio,
-      estado: motivos.filter((m) => !m.startsWith('Adelanta')).length ? 'revisar' : 'ok',
+      estado: criticas || medias ? 'revisar' : 'ok',
+      semaforo: criticas ? 'reclamar' : medias ? 'observaciones' : 'ok',
       motivos,
       checklist: [],
+      unidades: renglones.reduce((s, r) => s + r.cantidad, 0),
+      pedidosCompletos: pedidosCubiertos.length > 0 && pedidosCubiertos.every((id) =>
+        [...mapa.values()].every((gs) => gs.every((g) => g.pedido.id !== id || g.facturado >= g.cantidad))),
     });
   }
 
@@ -376,18 +416,78 @@ export function fmt(n: number): string {
   return `${v < 0 ? '-' : ''}$ ${s[0].replace(/\B(?=(\d{3})+(?!\d))/g, '.')},${s[1]}`;
 }
 
-/** Mensaje corto para el grupo de pagos. */
-export function mensajePagos(r: ResultadoFactura): string {
+/** Mensaje corto para el grupo de pagos: «Factura X ✅ OK: pedido Y, N pares, total $Z, vence DD/MM, completa». */
+export function mensajePagos(r: ResultadoFactura, condicionesPago = '', nombrePedido: (id: string) => string = (id) => id): string {
   const f = r.factura;
-  const ped = r.pedidosCubiertos.length ? r.pedidosCubiertos.join(' + ') : 'sin pedido asociado';
-  const estado = r.estado === 'ok' ? '✅ OK para pagar' : '⚠️ REVISAR antes de pagar';
-  return [
-    `Factura ${f.numero} (${fechaAr(f.fecha)})`,
-    `Pedido: ${ped}`,
-    `Total: ${fmt(f.total)}`,
-    `Vencimiento: ${f.vencimiento ? fechaAr(f.vencimiento) : f.condicionVenta || 'sin dato'}`,
-    `Estado: ${estado}`,
-  ].join('\n');
+  const ped = r.pedidosCubiertos.length ? `pedido ${r.pedidosCubiertos.map(nombrePedido).join(' + ')}` : 'sin pedido asociado';
+  const icono = r.semaforo === 'ok' ? '✅ OK' : r.semaforo === 'observaciones' ? '⚠️ CON OBSERVACIONES' : '❌ RECLAMAR, NO PAGAR';
+  const vence = f.vencimiento ? `vence ${fechaAr(f.vencimiento).slice(0, 5)}` : f.condicionVenta ? f.condicionVenta : 'sin vencimiento';
+  const partes = [ped, `${r.unidades} pares`, `total ${fmt(f.total)}`, vence, r.pedidosCompletos ? 'completa' : 'parcial'];
+  const lineas = [`Factura ${f.numero} ${icono}: ${partes.join(', ')}.`];
+  if (r.semaforo !== 'ok') lineas.push(...r.motivos.map((m) => `- ${m}`));
+  if (condicionesPago.trim()) lineas.push(`Recordar: ${condicionesPago.trim()}.`);
+  return lineas.join('\n');
+}
+
+export interface ResumenPedido {
+  pedidoId: string;
+  pedido: number;
+  facturado: number;
+  pendiente: number;
+  estado: 'sin facturar' | 'parcial' | 'completo';
+}
+
+/** Estado de cada pedido con todas las facturas cargadas. */
+export function resumenPedidos(pedidos: Pedido[], res: ResultadoGeneral): ResumenPedido[] {
+  const fact = new Map<string, number>();
+  for (const f of res.facturas) for (const r of f.renglones) for (const a of r.asignaciones) fact.set(a.pedidoId, (fact.get(a.pedidoId) ?? 0) + a.cantidad);
+  return pedidos.map((p) => {
+    const pedido = p.lineas.reduce((s, l) => s + (l.cantidad > 0 ? l.cantidad : 0), 0);
+    const facturado = fact.get(p.id) ?? 0;
+    return {
+      pedidoId: p.id, pedido, facturado, pendiente: Math.max(0, pedido - facturado),
+      estado: facturado <= 0 ? 'sin facturar' : facturado >= pedido ? 'completo' : 'parcial',
+    };
+  });
+}
+
+export interface Recepcion {
+  /** clave codigo|talle (talle '' si se cuenta el modelo completo) → recibido */
+  recibido: Record<string, number>;
+  /** Códigos recibidos que no están en la factura (otro color, cambios). */
+  extras: { codigo: string; talle: string; cantidad: number }[];
+}
+
+export interface DiferenciaRecepcion {
+  codigo: string;
+  talle: string;
+  esperado: number | null;   // null = talle a confirmar (solo se conoce el total del modelo)
+  recibido: number;
+  diferencia: number | null; // recibido − esperado
+}
+
+export const claveRecepcion = (codigo: string, talle: string) => `${normCodigo(codigo)}|${talle}`;
+
+/** Compara lo que contó el depósito contra el checklist de la factura. */
+export function compararRecepcion(checklist: FilaChecklist[], rec: Recepcion): { filas: DiferenciaRecepcion[]; ok: boolean } {
+  const filas: DiferenciaRecepcion[] = [];
+  for (const c of checklist) {
+    if (c.talles) {
+      for (const t of c.talles) {
+        const recibido = rec.recibido[claveRecepcion(c.codigo, t.talle)] ?? 0;
+        filas.push({ codigo: c.codigo, talle: t.talle, esperado: t.cantidad, recibido, diferencia: recibido - t.cantidad });
+      }
+    } else {
+      // Talles a confirmar: se cuentan por talle y se compara el total del modelo.
+      const pref = `${normCodigo(c.codigo)}|`;
+      const porTalle = Object.entries(rec.recibido).filter(([k]) => k.startsWith(pref));
+      const total = porTalle.reduce((s, [, v]) => s + (Number(v) || 0), 0);
+      for (const [k, v] of porTalle) filas.push({ codigo: c.codigo, talle: k.slice(pref.length) || '(sin talle)', esperado: null, recibido: Number(v) || 0, diferencia: null });
+      filas.push({ codigo: c.codigo, talle: 'TOTAL', esperado: c.cantidad, recibido: total, diferencia: total - c.cantidad });
+    }
+  }
+  for (const e of rec.extras) filas.push({ codigo: normCodigo(e.codigo), talle: e.talle, esperado: 0, recibido: e.cantidad, diferencia: e.cantidad });
+  return { filas, ok: filas.every((f) => f.diferencia === null || f.diferencia === 0) };
 }
 
 /** Reporte de reclamo al proveedor, solo si hay diferencias. */
