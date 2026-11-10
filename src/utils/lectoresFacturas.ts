@@ -80,6 +80,72 @@ export function leerPedidoExcel(filas: unknown[][], id: string, nombre: string, 
   return { pedido: { id, nombre, fecha, lineas }, avisos };
 }
 
+// ---------------------------------------------------------------------------
+// PEDIDO de iD (Converse / Le Coq): una fila por artículo, talles en columnas.
+// Fila 1 «Pedido N° 0000XXXX»; encabezado con «Código», «Color», columnas de
+// talle (035…120 = calzado en US×10, XS…XXL, TU), «Total», «Precio unit.»,
+// «Bonif. %». Columnas por NOMBRE, nunca por posición.
+// ---------------------------------------------------------------------------
+const RE_TALLE_COL = /^(\d{2,3}([.,]\d)?|XXS|XS|S|M|L|XL|XXL|XXXL|[2-5]XL|TU|U)$/i;
+
+export function leerPedidoId(filas: unknown[][], id: string, nombre: string, fecha: string): LecturaPedido & { nroProveedor: string } {
+  const avisos: string[] = [];
+  let nroProveedor = '';
+  for (const f of filas.slice(0, 8)) {
+    const m = /pedido\s*n[°ºo.]*\s*:?\s*(\d{3,})/i.exec((f || []).map((x) => String(x ?? '')).join(' '));
+    if (m) { nroProveedor = m[1]; break; }
+  }
+  const iEnc = filas.findIndex((f) => (f || []).some((x) => sinAcento(String(x ?? '')) === 'codigo'));
+  if (iEnc < 0) throw new Error(`${nombre}: no encontré el encabezado «Código».`);
+  const crudo = filas[iEnc].map((x) => String(x ?? '').trim());
+  const enc = crudo.map(sinAcento);
+  const cCod = enc.indexOf('codigo');
+  const cColor = enc.indexOf('color');
+  const cDesc = enc.findIndex((h) => h.startsWith('descripcion') || h === 'articulo' || h === 'nombre' || h === 'modelo');
+  const cTotal = enc.findIndex((h, i) => i > cCod && /^total/.test(h));
+  const cPrecio = enc.findIndex((h) => /^precio/.test(h));
+  const cBonif = enc.findIndex((h) => /^bonif/.test(h) || /^desc/.test(h) && h.includes('%'));
+  if (cPrecio < 0) throw new Error(`${nombre}: falta la columna «Precio unit.».`);
+  const desde = Math.max(cCod, cColor, cDesc) + 1;
+  const hasta = cTotal >= 0 ? cTotal : enc.length;
+  const talles: { col: number; talle: string }[] = [];
+  for (let i = desde; i < hasta; i++) if (RE_TALLE_COL.test(crudo[i])) talles.push({ col: i, talle: crudo[i].toUpperCase() });
+  if (!talles.length) throw new Error(`${nombre}: no encontré columnas de talle entre «Código» y «Total».`);
+  const lineas: LineaPedido[] = [];
+  for (let i = iEnc + 1; i < filas.length; i++) {
+    const f = filas[i] || [];
+    const codigo = String(f[cCod] ?? '').trim();
+    if (!codigo || /^total/i.test(codigo)) continue;
+    const precio = numero(f[cPrecio]);
+    const bonif = cBonif >= 0 ? numero(f[cBonif]) || 0 : 0;
+    const color = cColor >= 0 ? String(f[cColor] ?? '').trim() : '';
+    const desc = [cDesc >= 0 ? String(f[cDesc] ?? '').trim() : '', color].filter(Boolean).join(' · ');
+    let suma = 0;
+    for (const t of talles) {
+      const cant = numero(f[t.col]);
+      if (!(cant > 0)) continue;
+      if (!Number.isInteger(cant)) avisos.push(`Fila ${i + 1} (${codigo}): cantidad no entera en talle ${t.talle}.`);
+      suma += cant;
+      lineas.push({ sku: `${codigo}-${t.talle}`, codigo, descripcion: desc, talle: t.talle, unidadesPorUdm: 1, precioLista: precio, descuento: bonif, cantidad: cant });
+    }
+    if (suma > 0 && !(precio > 0)) avisos.push(`Fila ${i + 1} (${codigo}): sin precio unitario, no se puede controlar el precio.`);
+    const tot = cTotal >= 0 ? numero(f[cTotal]) : NaN;
+    if (suma > 0 && !Number.isNaN(tot) && tot !== suma) avisos.push(`Fila ${i + 1} (${codigo}): los talles suman ${suma} y «Total» dice ${tot}.`);
+  }
+  if (!lineas.length) avisos.push(`${nombre}: no tiene cantidades pedidas.`);
+  return { pedido: { id, nombre, fecha, lineas }, avisos, nroProveedor };
+}
+
+/** Elige el lector según los encabezados: Distrinando (SKU / Modelo color / Pedido) o iD (Código + talles). */
+export function leerPedidoAuto(filas: unknown[][], id: string, nombre: string, fecha: string): LecturaPedido & { nroProveedor: string; proveedor: 'distrinando' | 'id' } {
+  const esDistri = filas.some((f) => {
+    const h = (f || []).map(sinAcento);
+    return h.includes('pedido') && h.includes('sku') && (h.includes('modelo color') || h.includes('modelo-color'));
+  });
+  if (esDistri) return { ...leerPedidoExcel(filas, id, nombre, fecha), nroProveedor: '', proveedor: 'distrinando' };
+  return { ...leerPedidoId(filas, id, nombre, fecha), proveedor: 'id' };
+}
+
 function curva(sku: string): string {
   const m = /---(.+)$/.exec(sku);
   return m ? ` (${m[1].trim()})` : '';

@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { analizarFacturas, fmt, mensajePagos, reporteReclamo } from '../controlFacturas';
+import { analizarFacturas, compararRecepcion, fmt, mensajePagos, reporteReclamo, resumenPedidos } from '../controlFacturas';
 import type { Factura, Pedido, RenglonFactura } from '../controlFacturas';
-import { numero, leerPedidoExcel } from '../lectoresFacturas';
+import { numero, leerPedidoExcel, leerPedidoAuto, leerPedidoId } from '../lectoresFacturas';
 
 const linea = (codigo: string, talle: string, cantidad: number, precio = 100000, dto = 40) =>
   ({ sku: `${codigo}-${talle}`, codigo, descripcion: `Modelo ${codigo} ${talle}`, talle, unidadesPorUdm: 1, precioLista: precio, descuento: dto, cantidad });
@@ -56,7 +56,7 @@ describe('control de facturas contra pedidos', () => {
     ]);
     const f1 = r.facturas[0];
     expect(f1.renglones[0].asignaciones).toEqual([{ pedidoId: 'A', cantidad: 5, adelanto: false }, { pedidoId: 'B', cantidad: 4, adelanto: true }]);
-    expect(f1.motivos.join(' ')).toMatch(/Adelanta/);
+    expect(f1.motivos.join(' ')).toMatch(/ADELANTO/);
     const f2 = r.facturas[1];
     expect(f2.renglones[0].sinPedir).toBe(4);
     expect(f2.renglones[0].posibleDobleCobro).toBe(true);
@@ -81,7 +81,7 @@ describe('control de facturas contra pedidos', () => {
     expect(numero('63,982.40')).toBe(63982.4);
     expect(numero('8.837.577,37')).toBe(8837577.37);
     const r = analizarFacturas([pA], [factura('1', '2026-10-05', [ren('X1', 5), ren('ROJO', 2)])]);
-    expect(mensajePagos(r.facturas[0])).toMatch(/OK para pagar/);
+    expect(mensajePagos(r.facturas[0])).toMatch(/✅ OK: pedido/);
   });
 
   it('pedido Excel: packs pasan a pares con precio por par', () => {
@@ -96,5 +96,56 @@ describe('control de facturas contra pedidos', () => {
     expect(pedido.lineas[0].talle).toBe('43');
     expect(pedido.lineas[1].cantidad).toBe(36);
     expect(pedido.lineas[1].precioLista).toBeCloseTo(82644.095, 3);
+  });
+});
+
+describe('pedido de iD (talles en columnas)', () => {
+  it('lee código, talles por nombre de columna, precio y bonificación', () => {
+    const filas = [
+      ['Pedido N° 00002538'],
+      [],
+      ['Código', 'Descripción', 'Color', '075', '080', '035', 'S', 'Total', 'Precio unit.', 'Bonif. %'],
+      ['A15621C', 'CHUCK 70', 'NEGRO', 2, '', 1, '', 3, 53422.46, 10],
+      ['10025', 'TEE', 'BLANCO', '', '', '', 4, 4, 20000, 10],
+      ['A1', 'X', 'Y', '', '', '', '', 0, 1000, 10],
+    ];
+    const r = leerPedidoAuto(filas, 'p', 'pedido', '2026-11-01');
+    expect(r.proveedor).toBe('id');
+    expect(r.nroProveedor).toBe('00002538');
+    expect(r.pedido.lineas.map((l) => `${l.codigo} ${l.talle} ${l.cantidad}`)).toEqual(['A15621C 075 2', 'A15621C 035 1', '10025 S 4']);
+    expect(r.pedido.lineas[0].descuento).toBe(10);
+    expect(r.avisos).toEqual([]);
+  });
+
+  it('avisa si los talles no suman el total', () => {
+    const filas = [['Código', 'Color', '075', 'Total', 'Precio unit.'], ['A1', 'N', 2, 5, 100]];
+    expect(leerPedidoId(filas, 'p', 'pedido', '2026-11-01').avisos.join(' ')).toMatch(/suman 2/);
+  });
+});
+
+describe('semáforo, estado de pedidos y recepción', () => {
+  it('semáforo, pedidos completos y diferencias del depósito', () => {
+    const ped = { id: 'P1', nombre: 'P1', fecha: '2026-10-01', lineas: [
+      { sku: 'A-40', codigo: 'A', descripcion: 'a', talle: '40', unidadesPorUdm: 1, precioLista: 100, descuento: 10, cantidad: 2 },
+      { sku: 'A-41', codigo: 'A', descripcion: 'a', talle: '41', unidadesPorUdm: 1, precioLista: 100, descuento: 10, cantidad: 1 },
+    ] };
+    const fac = { id: 'F1', numero: '1', fecha: '2026-10-05', renglones: [{ codigo: 'A', descripcion: 'a', precioUnitario: 100, bonificacion: 10, cantidad: 3, total: 270 }],
+      subtotal: 270, iva: 56.7, percepcionCaba: 13.5, percepcionBsAs: 16.2, total: 356.4 };
+    const r = analizarFacturas([ped], [fac]);
+    expect(r.facturas[0].semaforo).toBe('ok');
+    expect(r.facturas[0].pedidosCompletos).toBe(true);
+    expect(mensajePagos(r.facturas[0], 'contado 7% desc')).toMatch(/3 pares, total \$ 356,40, sin vencimiento, completa\.\nRecordar: contado 7% desc\./);
+    expect(resumenPedidos([ped], r)[0].estado).toBe('completo');
+    const rec = compararRecepcion(r.facturas[0].checklist, { recibido: { 'A|40': 2, 'A|41': 0 }, extras: [{ codigo: 'B', talle: '41', cantidad: 1 }] });
+    expect(rec.ok).toBe(false);
+    expect(rec.filas.filter((f) => f.diferencia).map((f) => `${f.codigo} ${f.talle} ${f.diferencia}`)).toEqual(['A 41 -1', 'B 41 1']);
+  });
+
+  it('código que no está en ningún pedido sugiere cargar pedido y va a reclamar', () => {
+    const fac = { id: 'F1', numero: '1', fecha: '2026-10-05', renglones: [{ codigo: 'Z', descripcion: 'z', precioUnitario: 100, bonificacion: 0, cantidad: 1, total: 100 }],
+      subtotal: 100, iva: 21, percepcionCaba: 0, percepcionBsAs: 0, total: 121 };
+    const r = analizarFacturas([], [fac]);
+    expect(r.facturas[0].semaforo).toBe('reclamar');
+    expect(r.facturas[0].motivos.join(' ')).toMatch(/falta cargar un pedido/);
   });
 });
