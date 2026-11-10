@@ -1234,3 +1234,4 @@ encontraron así y no se habrían visto de otra forma.
 ### Pestaña «Carga y control de entregas» (10-nov-2026, pedido de gax)
 - El Asistente de IA ya no tiene pestaña propia: va arriba, dentro de «🧾 Carga y control de entregas» (antes «Control de entregas»), y debajo sigue el control factura contra nota de pedido sin cambios.
 - Se quitó la pestaña «Pedidos DISTRINANDO» (`PedidoDistrinando.tsx` borrado, vuelve desde el historial de git). La lógica `utils/pedidoDistrinando.ts`, `excelPedidoDistrinando.ts` y sus tests se conservan.
+- 10-nov-2026: gax pidió sacar de la pantalla el control factura contra nota de Grupo Blanco (Timberland). `ControlEntregas.tsx`, `controlPedido.ts`, `grupoBlanco.ts` y sus tests se conservan; ahí va a ir el control nuevo de facturas de iD contra pedidos (`controlFacturas.ts`, `lectoresFacturas.ts`).
