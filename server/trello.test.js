@@ -26,7 +26,7 @@ describe('Trello (solo lectura)', () => {
       '/boards/RzHl0YNS?': { name: 'COMPRAS Y ENTREGAS' },
       '/boards/RzHl0YNS/lists': [{ id: 'L1', name: 'Pedidos enviados' }],
       '/boards/RzHl0YNS/cards': [
-        { id: CARD, name: 'Converse 2595', idList: 'L1', desc: 'x', labels: [{ name: 'iD' }], attachments: [
+        { id: CARD, name: 'Converse 2595', idList: 'L1', desc: 'x', labels: [{ name: 'iD' }], shortUrl: 'https://trello.com/c/Ab12Cd', attachments: [
           { id: ATT, name: 'pedido.xlsx', bytes: 100, isUpload: true }, { id: OTRA, name: 'foto.png', isUpload: true }] },
         { id: OTRA, name: 'Archivada', closed: true, attachments: [] },
       ],
@@ -34,7 +34,7 @@ describe('Trello (solo lectura)', () => {
     const r = await listarTarjetas(f);
     expect(r.tablero).toBe('COMPRAS Y ENTREGAS');
     expect(r.tarjetas).toHaveLength(1);
-    expect(r.tarjetas[0]).toMatchObject({ nombre: 'Converse 2595', lista: 'Pedidos enviados', etiquetas: ['iD'], creada: fechaCreacion(CARD) });
+    expect(r.tarjetas[0]).toMatchObject({ nombre: 'Converse 2595', lista: 'Pedidos enviados', etiquetas: ['iD'], creada: fechaCreacion(CARD), enlace: 'https://trello.com/c/Ab12Cd' });
     expect(r.tarjetas[0].adjuntos.map((a) => a.nombre)).toEqual(['pedido.xlsx']);
     for (const [url, opts] of f.mock.calls) {
       expect(url).not.toMatch(/key=|token=/);

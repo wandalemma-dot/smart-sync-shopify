@@ -15,7 +15,7 @@ import {
 import { leerFacturaDistrinando, leerFacturaId, leerPedidoAuto, type ItemPdf } from './utils/lectoresFacturas';
 
 type Prov = 'distrinando' | 'id';
-type PedidoGuardado = Pedido & { nroProveedor?: string; origen?: string };
+type PedidoGuardado = Pedido & { nroProveedor?: string; origen?: string; enlace?: string };
 type RecepcionGuardada = Recepcion & { nota?: string; actualizado?: string };
 interface Datos {
   pedidos: PedidoGuardado[];
@@ -23,15 +23,32 @@ interface Datos {
   asignaciones: Record<string, string[]>;
   recepciones: Record<string, RecepcionGuardada>;
   config: { condicionesPago?: string };
+  /** Excel de Trello ya revisados que no se cargaron (otro proveedor, no es pedido, repetido, borrado). */
+  trelloVistos: Record<string, { motivo?: string; fecha?: string }>;
 }
-const VACIO: Datos = { pedidos: [], facturas: [], asignaciones: {}, recepciones: {}, config: {} };
+const VACIO: Datos = { pedidos: [], facturas: [], asignaciones: {}, recepciones: {}, config: {}, trelloVistos: {} };
 const PROVS: { id: Prov; nombre: string }[] = [
   { id: 'id', nombre: 'iD Argentina (Converse, Le Coq)' },
   { id: 'distrinando', nombre: 'Distrinando (Reebok, Kappa, Crocs)' },
 ];
 type Vista = 'facturas' | 'pedidos' | 'deposito' | 'reportes';
-interface AdjuntoTrello { id: string; nombre: string; bytes: number; fecha: string }
-interface TarjetaTrello { id: string; nombre: string; descripcion: string; lista: string; creada: string; inicio: string; vence: string; etiquetas: string[]; adjuntos: AdjuntoTrello[] }
+interface AdjuntoTrello { id: string; nombre: string }
+interface TarjetaTrello { id: string; nombre: string; enlace: string; lista: string; creada: string; inicio: string; adjuntos: AdjuntoTrello[] }
+/** Enlace a la tarjeta de Trello de un pedido importado desde ahí. */
+const enlaceTrello = (p?: PedidoGuardado) => {
+  const m = /^trello:([a-f0-9]{24})$/.exec(p?.origen || '');
+  return m ? (p!.enlace || `https://trello.com/c/${m[1]}`) : '';
+};
+
+async function bajarAdjunto(tarjeta: string, adjunto: string): Promise<ArrayBuffer> {
+  const r = await fetch(`/api/trello?accion=adjunto&tarjeta=${tarjeta}&adjunto=${adjunto}`, { cache: 'no-store' });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || `Error ${r.status}`);
+  const bin = atob(d.datos);
+  const buf = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  return buf.buffer;
+}
 
 const inputSt: React.CSSProperties = {
   padding: '5px 7px', borderRadius: 5, border: '1px solid rgba(255,255,255,0.18)',
@@ -92,6 +109,7 @@ export default function ControlFacturas() {
   const [abierta, setAbierta] = useState<string | null>(null);
   const [facturaDeposito, setFacturaDeposito] = useState('');
   const [condiciones, setCondiciones] = useState('');
+  const [trelloEstado, setTrelloEstado] = useState('');
 
   const recargar = useCallback(async () => {
     setCargando(true); setError('');
@@ -115,61 +133,128 @@ export default function ControlFacturas() {
     catch (e) { setError(mensaje(e)); return false; }
   }
 
-  /** Lee un Excel de pedido y lo guarda. Devuelve los mensajes para mostrar. */
-  async function guardarPedidoExcel(buf: ArrayBuffer, archivo: string, fecha: string, extra: { id?: string; nombre?: string; origen: string }): Promise<string[]> {
+  /** Lee un Excel de pedido. Devuelve el pedido listo para guardar, o por qué no se carga. */
+  function prepararPedido(buf: ArrayBuffer, archivo: string, fecha: string, extra: { id?: string; nombre?: string; origen: string; enlace?: string },
+    existentes: PedidoGuardado[]): { pedido?: PedidoGuardado; mensajes: string[]; descartado?: string } {
     const wb = XLSX.read(buf);
     const hoja = wb.SheetNames.find((_, i) => !wb.Workbook?.Sheets?.[i]?.Hidden) || wb.SheetNames[0];
     const filas = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[hoja], { header: 1, raw: true });
     const nombre = extra.nombre || archivo.replace(/\.[^.]+$/, '');
     const r = leerPedidoAuto(filas, '', nombre, fecha);
-    if (r.proveedor !== prov) return [`${archivo}: parece de ${r.proveedor === 'id' ? 'iD' : 'Distrinando'}; cambiá el proveedor arriba.`];
+    if (r.proveedor !== prov) {
+      const otro = r.proveedor === 'id' ? 'iD' : 'Distrinando';
+      return { mensajes: [`${archivo}: parece de ${otro}; cambiá el proveedor arriba.`], descartado: `es un pedido de ${otro}` };
+    }
+    if (!r.pedido.lineas.length) return { mensajes: [`${archivo}: no tiene cantidades pedidas.`], descartado: 'no tiene cantidades pedidas' };
     const id = extra.id || `P-${slug(r.nroProveedor || nombre)}-${fecha}`;
     // El mismo pedido cargado dos veces (a mano y desde Trello) duplicaría el saldo y taparía lo facturado sin pedir.
     const firma = (ls: { sku: string; cantidad: number }[]) => ls.map((l) => `${l.sku}:${l.cantidad}`).sort().join('|');
-    const repetido = datos.pedidos.find((p) => p.id !== id && ((r.nroProveedor && p.nroProveedor === r.nroProveedor) || firma(p.lineas) === firma(r.pedido.lineas)));
-    if (repetido) return [`${archivo}: este pedido ya está cargado como «${repetido.nroProveedor ? `N° ${repetido.nroProveedor}` : repetido.nombre}». Si querés reemplazarlo, borralo primero.`];
-    if (!(await guardar({ accion: 'guardarPedido', pedido: { ...r.pedido, id, nroProveedor: r.nroProveedor, origen: extra.origen } }))) return [];
-    return [`${archivo}: ${r.pedido.lineas.reduce((s, l) => s + l.cantidad, 0)} unidades guardadas con fecha ${fechaAr(fecha)}.`, ...r.avisos];
+    const repetido = existentes.find((p) => p.id !== id && ((r.nroProveedor && p.nroProveedor === r.nroProveedor) || firma(p.lineas) === firma(r.pedido.lineas)));
+    if (repetido) {
+      const cual = repetido.nroProveedor ? `N° ${repetido.nroProveedor}` : repetido.nombre;
+      return { mensajes: [`${archivo}: este pedido ya está cargado como «${cual}». Si querés reemplazarlo, borralo primero.`], descartado: `repite el pedido ${cual}` };
+    }
+    const pedido = { ...r.pedido, id, nroProveedor: r.nroProveedor, origen: extra.origen, enlace: extra.enlace || '' };
+    return { pedido, mensajes: [`${archivo}: ${r.pedido.lineas.reduce((s, l) => s + l.cantidad, 0)} unidades guardadas con fecha ${fechaAr(fecha)}.`, ...r.avisos] };
   }
 
   async function subirPedidos(files: FileList | null) {
     if (!files?.length) return;
     const nuevos: string[] = [];
+    const existentes = [...datos.pedidos];
     for (const file of [...files]) {
-      try { nuevos.push(...await guardarPedidoExcel(await file.arrayBuffer(), file.name, fechaPedido, { origen: 'manual' })); }
-      catch (e) { nuevos.push(`${file.name}: ${mensaje(e)}`); }
+      try {
+        const r = prepararPedido(await file.arrayBuffer(), file.name, fechaPedido, { origen: 'manual' }, existentes);
+        if (r.pedido) { await api({ proveedor: prov, accion: 'guardarPedido', pedido: r.pedido }); existentes.push(r.pedido); }
+        nuevos.push(...r.mensajes);
+      } catch (e) { nuevos.push(`${file.name}: ${mensaje(e)}`); }
     }
+    await recargar();
     setAvisos(nuevos);
   }
 
-  async function importarDeTrello(t: TarjetaTrello, a: AdjuntoTrello, fecha: string) {
+  /**
+   * Revisa las tarjetas abiertas del tablero de Trello y carga como pedidos los Excel
+   * nuevos de este proveedor. Cada Excel se baja una sola vez: los que no son pedidos
+   * de este proveedor (o están repetidos, o se borraron a mano) quedan anotados.
+   */
+  async function sincronizarTrello(): Promise<string[]> {
+    setTrelloEstado('Buscando pedidos en Trello…');
     try {
-      const r = await fetch(`/api/trello?accion=adjunto&tarjeta=${t.id}&adjunto=${a.id}`, { cache: 'no-store' });
+      const r = await fetch('/api/trello?accion=tarjetas', { cache: 'no-store' });
       const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d.error || `Error ${r.status}`);
-      const bin = atob(d.datos);
-      const buf = new Uint8Array(bin.length);
-      for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-      setAvisos(await guardarPedidoExcel(buf.buffer, a.nombre, fecha, { id: `T-${a.id}`, nombre: t.nombre, origen: `trello:${t.id}` }));
-    } catch (e) { setAvisos([`${t.nombre}: ${mensaje(e)}`]); }
+      if (!r.ok) throw new Error(d.sinTrello ? 'Trello no está conectado (faltan las claves en Vercel).' : d.error || `Error ${r.status}`);
+      const conocidos = new Set([...datos.pedidos.map((p) => p.id), ...Object.keys(datos.trelloVistos).map((a) => `T-${a}`)]);
+      const nuevos = (d.tarjetas as TarjetaTrello[]).flatMap((t) => t.adjuntos.map((a) => ({ t, a }))).filter(({ a }) => !conocidos.has(`T-${a.id}`));
+      const existentes = [...datos.pedidos];
+      const cargados: string[] = [];
+      const fallas: string[] = [];
+      let otros = 0;
+      const LOTE = 4;
+      for (let i = 0; i < nuevos.length; i += LOTE) {
+        setTrelloEstado(`Leyendo Excel nuevos de Trello: ${Math.min(i + LOTE, nuevos.length)} de ${nuevos.length}…`);
+        const lote = nuevos.slice(i, i + LOTE);
+        const bajados = await Promise.all(lote.map(({ t, a }) => bajarAdjunto(t.id, a.id).then((b) => b, (e) => e as Error)));
+        for (let j = 0; j < lote.length; j++) {
+          const { t, a } = lote[j];
+          const buf = bajados[j];
+          // Falla de red: no se anota, se reintenta la próxima vez.
+          if (buf instanceof Error) { fallas.push(`«${t.nombre}» ${a.nombre}: ${buf.message}`); continue; }
+          let res: ReturnType<typeof prepararPedido>;
+          try {
+            res = prepararPedido(buf, a.nombre, t.inicio || t.creada, { id: `T-${a.id}`, nombre: t.nombre, origen: `trello:${t.id}`, enlace: t.enlace }, existentes);
+          } catch (e) { res = { mensajes: [], descartado: `no es un pedido (${mensaje(e)})` }; }
+          if (res.pedido) {
+            await api({ proveedor: prov, accion: 'guardarPedido', pedido: res.pedido });
+            existentes.push(res.pedido);
+            cargados.push(`«${t.nombre}» (${res.pedido.lineas.reduce((s, l) => s + l.cantidad, 0)} u., fecha ${fechaAr(res.pedido.fecha)})`);
+          } else {
+            await api({ proveedor: prov, accion: 'marcarTrelloVisto', adjunto: a.id, motivo: `«${t.nombre}» ${a.nombre}: ${res.descartado}` });
+            otros++;
+          }
+        }
+      }
+      const out = [cargados.length
+        ? `Trello: cargué ${cargados.length} pedido(s) nuevo(s): ${cargados.join(', ')}. La fecha es la de la tarjeta; corregila en Pedidos si no es la del envío.`
+        : 'Trello: no hay pedidos nuevos de este proveedor.'];
+      if (otros) out.push(`Trello: ${otros} Excel no eran pedidos de este proveedor o ya estaban cargados (detalle en Pedidos).`);
+      if (fallas.length) out.push(`Trello: no pude bajar ${fallas.length} Excel; se reintenta la próxima vez. ${fallas.join(' · ')}`);
+      return out;
+    } catch (e) {
+      return [`Trello: ${mensaje(e)} Se controló con los pedidos ya cargados.`];
+    } finally { setTrelloEstado(''); }
   }
 
+  async function buscarEnTrello() {
+    const m = await sincronizarTrello();
+    await recargar();
+    setAvisos(m);
+  }
+
+  /** Sube facturas: primero trae de Trello los pedidos nuevos y después controla. */
   async function subirFacturas(files: FileList | null) {
     if (!files?.length) return;
     const nuevos: string[] = [];
+    const leidas: { archivo: string; factura: Factura; avisos: string[] }[] = [];
     for (const file of [...files]) {
       try {
         const paginas = await itemsPdf(file);
         const { factura, avisos: av } = prov === 'id' ? leerFacturaId(paginas, '') : leerFacturaDistrinando(paginas, '');
-        const id = `F-${slug(factura.numero || file.name)}`;
-        const ya = datos.facturas.some((f) => f.id === id);
-        if (await guardar({ accion: 'guardarFactura', factura: { ...factura, id } })) {
-          nuevos.push(`${file.name}: factura ${factura.numero} ${ya ? 'actualizada (ya estaba cargada)' : 'guardada'}.`, ...av);
-          setAbierta(id);
-        }
+        leidas.push({ archivo: file.name, factura: { ...factura, id: `F-${slug(factura.numero || file.name)}` }, avisos: av });
       } catch (e) { nuevos.push(`${file.name}: ${mensaje(e)}`); }
     }
-    setAvisos(nuevos);
+    if (!leidas.length) { setAvisos(nuevos); return; }
+    const deTrello = await sincronizarTrello();
+    for (const { archivo, factura, avisos: av } of leidas) {
+      try {
+        const ya = datos.facturas.some((f) => f.id === factura.id);
+        await api({ proveedor: prov, accion: 'guardarFactura', factura });
+        nuevos.push(`${archivo}: factura ${factura.numero} ${ya ? 'actualizada (ya estaba cargada)' : 'guardada'}.`, ...av);
+        setAbierta(factura.id);
+      } catch (e) { nuevos.push(`${archivo}: ${mensaje(e)}`); }
+    }
+    await recargar();
+    setAvisos([...nuevos, ...deTrello]);
   }
 
   const pedidosOrd = [...datos.pedidos].sort((a, b) => b.fecha.localeCompare(a.fecha));
@@ -179,8 +264,8 @@ export default function ControlFacturas() {
     <div className="glass-panel" style={{ padding: '1.5rem', marginTop: '1.5rem' }}>
       <h2 style={{ marginTop: 0 }}>📑 Control de facturas contra pedidos</h2>
       <p style={{ fontSize: '0.88rem', opacity: 0.85, marginTop: 0 }}>
-        Cargá los pedidos (Excel del proveedor) y las facturas (PDF). La app asigna cada artículo al pedido más viejo con saldo,
-        avisa lo facturado sin pedir, doble cobro, precios distintos a la lista del pedido y errores de cuentas. Queda todo guardado.
+        Subí la factura (PDF): la app trae sola de Trello los pedidos nuevos, te dice a qué tarjetas corresponde y asigna cada artículo
+        al pedido más viejo con saldo. Avisa lo facturado sin pedir, doble cobro, precios distintos a la lista del pedido y errores de cuentas. Queda todo guardado.
       </p>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 10 }}>
         <select value={prov} onChange={(e) => { setProv(e.target.value as Prov); setAvisos([]); setAbierta(null); setFacturaDeposito(''); }}
@@ -211,7 +296,13 @@ export default function ControlFacturas() {
             </label>
           </div>
           <p style={{ fontSize: '0.78rem', opacity: 0.7, marginTop: 0 }}>La fecha del archivo no sirve (el proveedor reusa plantillas): poné la del día que lo mandaste. Ordena qué pedido se factura primero.</p>
-          <Trello importados={new Set(datos.pedidos.map((p) => p.id))} onImportar={importarDeTrello} />
+          <BotonTrello estado={trelloEstado} onBuscar={buscarEnTrello} />
+          {Object.keys(datos.trelloVistos).length > 0 && (
+            <details style={{ fontSize: '0.8rem', margin: '0 0 10px', opacity: 0.85 }}>
+              <summary style={{ cursor: 'pointer' }}>{Object.keys(datos.trelloVistos).length} Excel de Trello que no se cargaron como pedidos de este proveedor</summary>
+              {Object.values(datos.trelloVistos).map((v, i) => <div key={i}>• {v.motivo || 'sin detalle'}{v.fecha ? ` (${fechaAr(v.fecha)})` : ''}</div>)}
+            </details>
+          )}
           <table style={{ borderCollapse: 'collapse', fontSize: '0.84rem', width: '100%' }}>
             <thead><tr><th style={th}>Pedido</th><th style={th}>Fecha</th><th style={th}>Pedido u.</th><th style={th}>Facturado</th><th style={th}>Pendiente</th><th style={th}>Estado</th><th style={th}></th></tr></thead>
             <tbody>{pedidosOrd.map((p) => {
@@ -220,12 +311,13 @@ export default function ControlFacturas() {
               return (<Fragment key={p.id}>
                 <tr>
                   <td style={td}><button onClick={() => setAbierta(abierta === p.id ? null : p.id)} style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: 0, textAlign: 'left' }}>
-                    {abierta === p.id ? '▾' : '▸'} {p.nroProveedor ? `N° ${p.nroProveedor}` : p.nombre}</button></td>
+                    {abierta === p.id ? '▾' : '▸'} {p.nroProveedor ? `N° ${p.nroProveedor}` : p.nombre}</button>
+                    {enlaceTrello(p) && <> · <a href={enlaceTrello(p)} target="_blank" rel="noreferrer" style={{ color: '#60a5fa' }}>🗂️ {p.nroProveedor ? p.nombre : 'Trello'}</a></>}</td>
                   <td style={td}><input type="date" value={p.fecha} style={inputSt}
                     onChange={(e) => e.target.value && guardar({ accion: 'guardarPedido', pedido: { ...p, fecha: e.target.value } })} /></td>
                   <td style={td}>{r.pedido}</td><td style={td}>{r.facturado}</td><td style={td}>{r.pendiente}</td>
                   <td style={{ ...td, color: r.estado === 'completo' ? '#34d399' : r.estado === 'parcial' ? '#fbbf24' : undefined }}>{r.estado}</td>
-                  <td style={td}><button onClick={() => confirm(`¿Borrar el pedido ${p.nombre}?`) && guardar({ accion: 'borrarPedido', id: p.id })}
+                  <td style={td}><button onClick={() => confirm(`¿Borrar el pedido ${p.nombre}?${enlaceTrello(p) ? ' No se vuelve a traer de Trello.' : ''}`) && guardar({ accion: 'borrarPedido', id: p.id })}
                     style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer' }}>✕</button></td>
                 </tr>
                 {abierta === p.id && <tr><td colSpan={7} style={{ ...td, background: 'rgba(255,255,255,0.03)' }}>
@@ -243,10 +335,14 @@ export default function ControlFacturas() {
 
       {vista === 'facturas' && (
         <div>
-          <label className="btn" style={{ fontSize: '0.85rem', padding: '5px 12px', cursor: 'pointer', display: 'inline-block', marginBottom: 10 }}>
-            ➕ Subir factura(s) PDF
-            <input type="file" accept=".pdf" multiple hidden onChange={(e) => { subirFacturas(e.target.files); e.target.value = ''; }} />
-          </label>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 6 }}>
+            <label className="btn" style={{ fontSize: '0.85rem', padding: '5px 12px', cursor: trelloEstado ? 'wait' : 'pointer', opacity: trelloEstado ? 0.6 : 1 }}>
+              ➕ Subir factura(s) PDF
+              <input type="file" accept=".pdf" multiple hidden disabled={!!trelloEstado} onChange={(e) => { subirFacturas(e.target.files); e.target.value = ''; }} />
+            </label>
+            {trelloEstado && <span style={{ fontSize: '0.82rem', color: '#60a5fa' }}>⏳ {trelloEstado}</span>}
+          </div>
+          <p style={{ fontSize: '0.8rem', opacity: 0.75, marginTop: 0 }}>Al subir la factura, la app busca sola en Trello los pedidos nuevos y te dice a qué tarjetas corresponde.</p>
           {prov === 'id' && <p style={{ fontSize: '0.8rem', opacity: 0.75, marginTop: 0 }}>iD factura calzado e indumentaria por separado y puede juntar varios pedidos: cargá todas las facturas y todos los pedidos abiertos.</p>}
           {!facturasRes.length && !cargando && <p style={{ opacity: 0.7, fontSize: '0.85rem' }}>Todavía no hay facturas cargadas de este proveedor.</p>}
           {facturasRes.map((r) => <TarjetaFactura key={r.factura.id} r={r} abierta={abierta === r.factura.id}
@@ -297,6 +393,7 @@ function TarjetaFactura({ r, abierta, onAbrir, pedidos, nombrePedido, manual, co
         <span style={{ color: s.color, fontWeight: 'bold' }}>{s.icono} {s.texto}</span>
         <span style={{ fontSize: '0.8rem', opacity: 0.75 }}>Pedidos: {r.pedidosCubiertos.map(nombrePedido).join(' + ') || 'ninguno'} {r.pedidosCubiertos.length ? (r.pedidosCompletos ? '(completos)' : '(parcial)') : ''}</span>
       </div>
+      <TarjetasTrello ids={r.pedidosCubiertos} pedidos={pedidos} />
       {r.motivos.length > 0 && <ul style={{ margin: '6px 0 0', paddingLeft: 18, fontSize: '0.84rem' }}>{r.motivos.map((m, i) => <li key={i}>{m}</li>)}</ul>}
       {abierta && (
         <div style={{ marginTop: 10 }}>
@@ -443,56 +540,26 @@ function Pendientes({ res, nombrePedido }: { res: ReturnType<typeof analizarFact
   );
 }
 
-/** Tarjetas del tablero de compras con Excel adjunto, para importarlas como pedidos. */
-function Trello({ importados, onImportar }: { importados: Set<string>; onImportar: (t: TarjetaTrello, a: AdjuntoTrello, fecha: string) => Promise<void> }) {
-  const [datos, setDatos] = useState<{ tablero: string; tarjetas: TarjetaTrello[] } | null>(null);
-  const [estado, setEstado] = useState<'' | 'cargando' | string>('');
-  const [fechas, setFechas] = useState<Record<string, string>>({});
-  const [filtro, setFiltro] = useState('');
-  const [trabajando, setTrabajando] = useState('');
-
-  async function cargar() {
-    setEstado('cargando');
-    try {
-      const r = await fetch('/api/trello?accion=tarjetas', { cache: 'no-store' });
-      const d = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(d.error || `Error ${r.status}`);
-      setDatos(d); setEstado('');
-    } catch (e) { setEstado(mensaje(e)); }
-  }
-
-  const conExcel = (datos?.tarjetas ?? []).filter((t) => t.adjuntos.length && (!filtro || `${t.nombre} ${t.lista} ${t.etiquetas.join(' ')}`.toLowerCase().includes(filtro.toLowerCase())));
+function BotonTrello({ estado, onBuscar }: { estado: string; onBuscar: () => void }) {
   return (
-    <details style={{ margin: '0 0 12px', border: '1px solid rgba(96,165,250,0.35)', borderRadius: 8, padding: '8px 10px' }}
-      onToggle={(e) => { if ((e.target as HTMLDetailsElement).open && !datos && estado !== 'cargando') cargar(); }}>
-      <summary style={{ cursor: 'pointer', fontSize: '0.9rem' }}>🗂️ Importar pedidos desde Trello{datos ? ` (${datos.tablero})` : ''}</summary>
-      {estado === 'cargando' && <p style={{ fontSize: '0.82rem', opacity: 0.75 }}>Leyendo el tablero…</p>}
-      {estado && estado !== 'cargando' && <p style={{ fontSize: '0.82rem', color: '#fbbf24' }}>⚠ {estado}</p>}
-      {datos && <>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', margin: '8px 0' }}>
-          <input placeholder="Buscar tarjeta, lista o etiqueta" value={filtro} onChange={(e) => setFiltro(e.target.value)} style={{ ...inputSt, width: 240, maxWidth: '100%' }} />
-          <button className="btn" style={{ fontSize: '0.8rem', padding: '4px 10px' }} onClick={cargar}>↻ Actualizar</button>
-          <span style={{ fontSize: '0.78rem', opacity: 0.7 }}>{conExcel.length} tarjeta(s) con Excel. La fecha propuesta es la de creación de la tarjeta: corregila si no es la del envío.</span>
-        </div>
-        <div style={{ overflowX: 'auto' }}>
-          <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem', width: '100%' }}>
-            <thead><tr><th style={th}>Tarjeta</th><th style={th}>Lista</th><th style={th}>Excel</th><th style={th}>Fecha del pedido</th><th style={th}></th></tr></thead>
-            <tbody>{conExcel.flatMap((t) => t.adjuntos.map((a) => {
-              const ya = importados.has(`T-${a.id}`);
-              const fecha = fechas[a.id] ?? (t.inicio || t.creada);
-              return <tr key={a.id}>
-                <td style={td}>{t.nombre}{t.etiquetas.length ? <span style={{ opacity: 0.65 }}> · {t.etiquetas.join(', ')}</span> : null}</td>
-                <td style={td}>{t.lista}</td>
-                <td style={td}>{a.nombre}</td>
-                <td style={td}><input type="date" value={fecha} onChange={(e) => setFechas((x) => ({ ...x, [a.id]: e.target.value }))} style={inputSt} /></td>
-                <td style={td}><button className="btn" disabled={!!trabajando || !fecha} style={{ fontSize: '0.78rem', padding: '3px 9px' }}
-                  onClick={async () => { setTrabajando(a.id); await onImportar(t, a, fecha); setTrabajando(''); }}>
-                  {trabajando === a.id ? 'Importando…' : ya ? '↻ Reimportar' : '⬇ Importar'}</button>{ya && <span style={{ color: '#34d399', marginLeft: 6 }}>✔ cargado</span>}</td>
-              </tr>;
-            }))}</tbody>
-          </table>
-        </div>
-      </>}
-    </details>
+    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', margin: '0 0 10px' }}>
+      <button className="btn" disabled={!!estado} style={{ fontSize: '0.85rem', padding: '5px 12px' }} onClick={onBuscar}>🗂️ Buscar pedidos nuevos en Trello</button>
+      {estado ? <span style={{ fontSize: '0.82rem', color: '#60a5fa' }}>⏳ {estado}</span>
+        : <span style={{ fontSize: '0.78rem', opacity: 0.7 }}>Trae los Excel de pedido de las tarjetas abiertas del tablero. También se hace solo al subir una factura.</span>}
+    </div>
+  );
+}
+
+/** «Esta factura corresponde a las tarjetas…», con enlace a cada una. */
+function TarjetasTrello({ ids, pedidos }: { ids: string[]; pedidos: PedidoGuardado[] }) {
+  const tarjetas = ids.map((id) => pedidos.find((p) => p.id === id)).filter((p): p is PedidoGuardado => !!enlaceTrello(p));
+  const vistas = new Set<string>();
+  const unicas = tarjetas.filter((p) => !vistas.has(enlaceTrello(p)) && vistas.add(enlaceTrello(p)));
+  if (!unicas.length) return null;
+  return (
+    <div style={{ fontSize: '0.86rem', marginTop: 4 }}>
+      🗂️ Corresponde a {unicas.length === 1 ? 'la tarjeta' : 'las tarjetas'}{' '}
+      {unicas.map((p, i) => <Fragment key={p.id}>{i ? ' + ' : ''}<a href={enlaceTrello(p)} target="_blank" rel="noreferrer" style={{ color: '#60a5fa' }}>{p.nombre}</a></Fragment>)}
+    </div>
   );
 }

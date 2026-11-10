@@ -31,7 +31,7 @@ export async function listarTarjetas(fetchImpl = fetch) {
   const [info, listas, tarjetas] = await Promise.all([
     get(`/boards/${encodeURIComponent(b)}?fields=name`, fetchImpl),
     get(`/boards/${encodeURIComponent(b)}/lists?fields=id,name&filter=all`, fetchImpl),
-    get(`/boards/${encodeURIComponent(b)}/cards?fields=id,name,desc,idList,dateLastActivity,due,start,labels,closed&attachments=true&attachment_fields=id,name,bytes,isUpload,date`, fetchImpl),
+    get(`/boards/${encodeURIComponent(b)}/cards?fields=id,name,desc,idList,dateLastActivity,due,start,labels,closed,shortUrl&attachments=true&attachment_fields=id,name,bytes,isUpload,date`, fetchImpl),
   ]);
   const nombreLista = new Map((Array.isArray(listas) ? listas : []).map((l) => [l.id, l.name]));
   return {
@@ -39,6 +39,7 @@ export async function listarTarjetas(fetchImpl = fetch) {
     tarjetas: (Array.isArray(tarjetas) ? tarjetas : []).filter((t) => !t.closed && RE_ID.test(t.id)).map((t) => ({
       id: t.id,
       nombre: String(t.name || '').slice(0, 200),
+      enlace: /^https:\/\/trello\.com\/c\/[A-Za-z0-9]+$/.test(String(t.shortUrl || '')) ? t.shortUrl : '',
       descripcion: String(t.desc || '').slice(0, 500),
       lista: String(nombreLista.get(t.idList) || ''),
       creada: fechaCreacion(t.id),
