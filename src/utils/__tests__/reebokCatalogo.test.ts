@@ -63,6 +63,25 @@ describe('Unión Reebok Calzado', () => {
     const plan=await planStockWrite(await processFiles(f,null,null,cfg),cfg);
     expect(plan.notFound).toEqual([]); expect(plan.changes).toEqual(expect.arrayContaining([expect.objectContaining({talle:'36',desired:5})]));
   });
+  it('prioriza una etiqueta exacta frente a otro producto que conserva el SKU legado', async()=>{
+    const modelo='RBK1100074785';
+    products=[
+      product(modelo,[variant('7791234567890','36')]),
+      product('LEGACY',[variant(`${modelo}-6.5`,'36')]),
+    ];
+    const result=await processFiles(file('30.xlsx',[row('6.5','36',5,modelo)]),null,null,cfg);
+    expect(result.excelMap[modelo]).toMatchObject({foundInShopify:true,shopifyHandle:modelo.toLowerCase(),matchPorEtiqueta:true});
+    const plan=await planStockWrite(result,cfg);
+    expect(plan.changes).toEqual(expect.arrayContaining([expect.objectContaining({handle:modelo.toLowerCase(),sku:'7791234567890',talle:'36',desired:5})]));
+    expect(plan.changes).not.toEqual(expect.arrayContaining([expect.objectContaining({handle:'legacy'})]));
+  });
+  it('frena si la etiqueta exacta del modelo está duplicada', async()=>{
+    const modelo='RBK1100074785';
+    const duplicado={...product('DUPLICADO',[variant('otro-codigo','36')]),tags:[modelo]};
+    products=[product(modelo,[variant('7791234567890','36')]),duplicado];
+    await expect(processFiles(file('30.xlsx',[row('6.5','36',5,modelo)]),null,null,cfg))
+      .rejects.toThrow(`${modelo}: la etiqueta exacta del modelo está en más de un producto`);
+  });
   it('revisa otra vez antes de crear y evita duplicar por una segunda confirmación', async()=>{
     products=[product(code,[variant(`${code}-5.5`,'35')])];
     const f=file('30.xlsx',[row()]);
