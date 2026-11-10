@@ -1230,3 +1230,7 @@ encontraron así y no se habrían visto de otra forma.
 - Las cuentas NO las hace el modelo: `compararDocumentos()` (código+talle, cantidades, costos en centavos, total impreso) y `costoPonderado()` (solo stock de Martínez; costo actual cero/desconocido no se inventa) en `server/asistente-calculos.js`.
 - Necesita `ANTHROPIC_API_KEY` en Vercel (se paga por uso). Modelo por defecto `claude-sonnet-5-5` (gax eligió el más barato, ~US$0,05–0,10 por consulta), se cambia con `ANTHROPIC_MODEL` (ej. `claude-opus-5-5`, más potente y ~el doble de caro) y `ANTHROPIC_EFFORT`. Los adjuntos viajan en cada pregunta (límite ~4 MB por pedido de Vercel); Excel/CSV se pasan a texto en el navegador y las fotos se achican a 1600 px.
 - No existe «iniciar sesión con Claude» (OAuth de la suscripción) para una app propia: la vía es la clave de API.
+
+### Pestaña «Carga y control de entregas» (10-nov-2026, pedido de gax)
+- El Asistente de IA ya no tiene pestaña propia: va arriba, dentro de «🧾 Carga y control de entregas» (antes «Control de entregas»), y debajo sigue el control factura contra nota de pedido sin cambios.
+- Se quitó la pestaña «Pedidos DISTRINANDO» (`PedidoDistrinando.tsx` borrado, vuelve desde el historial de git). La lógica `utils/pedidoDistrinando.ts`, `excelPedidoDistrinando.ts` y sus tests se conservan.
