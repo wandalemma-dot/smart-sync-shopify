@@ -20,6 +20,7 @@ import {
 import { leerFacturaDistrinando, leerFacturaId, leerPedidoAuto, leerTextoRemito, textoRemito, type ItemPdf } from './utils/lectoresFacturas';
 import ControlFamily from './ControlFamily';
 import RegistroCargas from './RegistroCargas';
+import EnlacesRapidos from './EnlacesRapidos';
 import { Archivo, Copiar, Parte } from './EntregasPartes';
 import {
   apiControl, boton, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, slug, td, th,
@@ -492,6 +493,7 @@ export default function ControlFacturas() {
       <h2 style={{ margin: 0 }}>🧾 Control de entregas</h2>
       <button style={{ ...boton, background: verRegistro ? '#6366f1' : boton.background, border: verRegistro ? '1px solid #6366f1' : boton.border }}
         onClick={() => setVerRegistro((v) => !v)} title="Qué se cargó en Shopify desde acá, con remito y factura">📋 Registro de cargas</button>
+      <EnlacesRapidos />
     </div>
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
       <span style={{ fontSize: '0.88rem', opacity: 0.8 }}>Proveedor:</span>

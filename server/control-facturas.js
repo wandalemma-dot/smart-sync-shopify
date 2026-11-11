@@ -251,8 +251,50 @@ export async function leerTodo(kv, prov) {
   return out;
 }
 
+// ---------------------------------------------------------------------------
+// ENLACES RÁPIDOS (11-nov-2026, pedido de gax): planillas propias, como «Control
+// de ingreso de mercadería» en Google Sheets, a un clic desde Control de entregas.
+// Se guardan en la base y no en el código, porque el repositorio es público.
+// Campo «enlaces» de cf:config (los otros campos de ese hash son los proveedores).
+// ---------------------------------------------------------------------------
+export const MAX_ENLACES = 5;
+function limpiarEnlace(x) {
+  const crudo = String(x?.url ?? '').trim();
+  if (!crudo) throw new Error('Falta el enlace.');
+  if (crudo.length > 500) throw new Error('El enlace es demasiado largo.');
+  let u;
+  try { u = new URL(crudo); } catch { throw new Error(`«${crudo.slice(0, 60)}» no es una dirección web.`); }
+  if (u.protocol !== 'https:' || u.username || u.password) throw new Error('El enlace tiene que empezar con https://.');
+  const nombre = txt(x?.nombre, 60).replace(/\s+/g, ' ').trim() || 'Planilla';
+  return { nombre, url: u.href };
+}
+
+export async function leerEnlaces(kv) {
+  const [crudo] = await kv([['HGET', 'cf:config', 'enlaces']]);
+  let lista = [];
+  try { lista = crudo ? JSON.parse(crudo) : []; } catch { lista = []; }
+  const enlaces = (Array.isArray(lista) ? lista : []).flatMap((x) => { try { return [limpiarEnlace(x)]; } catch { return []; } });
+  return { enlaces: enlaces.slice(0, MAX_ENLACES) };
+}
+
+async function guardarEnlaces(kv, body) {
+  if (!Array.isArray(body?.enlaces) || !Array.isArray(body?.antes)) throw new Error('Faltan los enlaces.');
+  if (body.enlaces.length > MAX_ENLACES) throw new Error(`Se pueden guardar hasta ${MAX_ENLACES} enlaces.`);
+  const enlaces = body.enlaces.map(limpiarEnlace);
+  // Se guarda la lista ENTERA: si cambió desde que la pantalla la leyó (otra computadora, otra
+  // pestaña), no se pisa, para no borrar un enlace que alguien agregó en el medio.
+  const plano = (l) => JSON.stringify(l.map((x) => [String(x?.nombre ?? ''), String(x?.url ?? '')]));
+  if (plano((await leerEnlaces(kv)).enlaces) !== plano(body.antes)) {
+    throw new Error('Las planillas guardadas cambiaron desde que abriste el editor (¿desde otra computadora?). Volvé a abrirlo.');
+  }
+  await kv([['HSET', 'cf:config', 'enlaces', JSON.stringify(enlaces)]]);
+  return { ok: true, enlaces };
+}
+
 /** Aplica una acción de guardado o borrado. Valida todo antes de escribir. */
 export async function aplicar(kv, body) {
+  // Los enlaces rápidos son de toda la pantalla, no de un proveedor.
+  if (body?.accion === 'guardarEnlaces') return guardarEnlaces(kv, body);
   const prov = String(body?.proveedor || '');
   if (!PROVEEDORES.includes(prov)) throw new Error('Proveedor inválido.');
   switch (body?.accion) {

@@ -54,18 +54,38 @@ const TIPOS: [RegExp, TipoFamily][] = [
 
 const capital = (w: string) => (/\d/.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1).toLowerCase());
 
-/** Separa la descripción de la planilla (ARTICULO MODELO CORTE COLOR) en el tipo y el resto. */
-export function partesFamily(descripcion: string): { articulo: string; resto: string[]; tipo: TipoFamily | null } {
-  const palabras = String(descripcion ?? '').replace(/\//g, ' ').split(/\s+/).filter(Boolean);
-  const [primera = '', ...resto] = palabras;
-  const tipo = TIPOS.find(([re]) => re.test(norm(primera)))?.[1] ?? null;
-  return { articulo: primera, resto: resto.filter((w) => !/^FAMILY(ARG)?$/.test(norm(w))), tipo };
+/** «BRAND & CO», «X BRAND AND CO», «BRAND&CO» dentro de la descripción. */
+const FRASE_BRAND_CO = /(?:^|\s)(?:X\s+)?BRAND\s*(?:&|AND|Y)?\s*CO\.?(?=\s|$)/gi;
+
+/**
+ * Línea «Family x Brand & Co» (pedido de gax, 11-nov-2026: «Family tiene un apartado
+ * que es por Brand and Co.»). En la tienda se titulan «Remera Familyarg x Brand & Co
+ * Duncan Supersized Negro» y TODOS tienen código que empieza con BF (BFRMCSD01,
+ * BFHDU01, BFRDU01…; revisado en Shopify el 11-nov: 43 de 43). Ningún Family sin BF
+ * lleva Brand & Co. También vale si la planilla lo escribe en la descripción.
+ */
+export function esBrandCo(codigo: string, descripcion = ''): boolean {
+  return /^BF[A-Z0-9]/.test(norm(codigo)) || new RegExp(FRASE_BRAND_CO.source, 'i').test(norm(String(descripcion ?? '').replace(/\//g, ' ')));
 }
 
-/** «SHORT SPECTRUM BASKET NEGRO/MULTI» → «Bermuda Short Familyarg Spectrum Basket Negro Multi». */
-export function tituloFamily(descripcion: string): string {
-  const { articulo, resto, tipo } = partesFamily(descripcion);
-  return [tipo?.prefijo ?? capital(articulo), VENDOR_FAMILY, ...resto.map(capital)].filter(Boolean).join(' ');
+/** Separa la descripción de la planilla (ARTICULO MODELO CORTE COLOR) en el tipo y el resto. */
+export function partesFamily(descripcion: string, codigo = ''): { articulo: string; resto: string[]; tipo: TipoFamily | null; brandCo: boolean } {
+  const brandCo = esBrandCo(codigo, descripcion);
+  // «Brand & Co» va una sola vez, en su lugar del título: se saca de la descripción.
+  // La barra separa palabras («NEGRO/MULTI», «NEGRO/BRAND & CO»): se cambia por espacio ANTES de sacar la frase.
+  const palabras = String(descripcion ?? '').replace(/\//g, ' ').replace(FRASE_BRAND_CO, ' ').split(/\s+/).filter(Boolean);
+  const [primera = '', ...resto] = palabras;
+  const tipo = TIPOS.find(([re]) => re.test(norm(primera)))?.[1] ?? null;
+  return { articulo: primera, resto: resto.filter((w) => !/^FAMILY(ARG)?$/.test(norm(w))), tipo, brandCo };
+}
+
+/**
+ * «SHORT SPECTRUM BASKET NEGRO/MULTI» → «Bermuda Short Familyarg Spectrum Basket Negro Multi».
+ * Brand & Co: «REMERA DUNCAN SUPERSIZED NEGRO» (BFRMCSD01) → «Remera Familyarg x Brand & Co Duncan Supersized Negro».
+ */
+export function tituloFamily(descripcion: string, codigo = ''): string {
+  const { articulo, resto, tipo, brandCo } = partesFamily(descripcion, codigo);
+  return [tipo?.prefijo ?? capital(articulo), VENDOR_FAMILY, ...(brandCo ? ['x Brand & Co'] : []), ...resto.map(capital)].filter(Boolean).join(' ');
 }
 
 /** Talle con el que se crea la variante (como en la tienda): 2XL = XXL, 3XL = XXXL. */
@@ -266,9 +286,26 @@ export function textoCarga(c: CargaFamily): string {
   return `⏳ Se empezó a cargar el ${cuando}${que} y no terminó: revisá en Shopify.`;
 }
 
+/** Las marcas de una entrega, por código (en la base se guardan como «entregaId|código»). */
+export function cargasDeEntrega(cargas: Record<string, CargaFamily>, entregaId: string): Record<string, CargaFamily> {
+  const pre = `${entregaId}|`;
+  return Object.fromEntries(Object.entries(cargas).filter(([k]) => k.startsWith(pre)).map(([k, v]) => [k.slice(pre.length), v]));
+}
+
+/**
+ * Cuánto de la entrega ya está en Shopify (pedido de gax, 11-nov-2026: las
+ * cargadas van abajo, las pendientes arriba en amarillo). «completa» = todos sus
+ * artículos con la marca «cargada»; dudosa, parcial o sin terminar sigue pendiente.
+ */
+export function estadoShopifyEntrega(codigos: string[], cargas: Record<string, CargaFamily>): { cargados: number; total: number; completa: boolean } {
+  const unicos = [...new Set(codigos)];
+  const cargados = unicos.filter((c) => cargas[c]?.estado === 'cargada').length;
+  return { cargados, total: unicos.length, completa: unicos.length > 0 && cargados === unicos.length };
+}
+
 function opcionAlta(r: RenglonFamily): OpcionCarga {
-  const { articulo, tipo } = partesFamily(r.descripcion);
-  const titulo = tituloFamily(r.descripcion);
+  const { articulo, tipo } = partesFamily(r.descripcion, r.codigo);
+  const titulo = tituloFamily(r.descripcion, r.codigo);
   const avisos: string[] = [];
   const base = { clave: 'alta', etiqueta: `Crear producto nuevo «${titulo}»`, avisos };
   if (!r.talles.length) return { ...base, accion: null, bloqueo: 'La planilla no trae talles: no sé qué variantes crear. Cargalo a mano.' };
