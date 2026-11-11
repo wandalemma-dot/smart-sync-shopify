@@ -45,6 +45,13 @@ describe('claves de Vercel: limpias y nunca en un mensaje (11-nov-2026)', () => 
     for (const secreto of [TOKEN_TRELLO, 'sk-ant-api03', 'shpat_0123', 'abc123', 'zzz999', 'clave123', 'dXN1YXJpbzpjbGF2ZQ']) expect(t).not.toContain(secreto);
   });
 
+  it('también tapa la clave escrita dentro de un JSON (\\n, comillas)', () => {
+    vi.stubEnv('KV_REST_API_TOKEN', 'AXyzABCDEF12\nGHIJKLMNOP');
+    const t = ocultarSecretos(JSON.stringify({ h: 'Bearer AXyzABCDEF12\nGHIJKLMNOP' }));
+    expect(t).not.toContain('AXyzABCDEF12');
+    expect(t).not.toContain('GHIJKLMNOP');
+  });
+
   it('no estropea los mensajes comunes', () => {
     for (const m of [
       'Falta el token configurado en TRELLO_TOKEN de Vercel.',

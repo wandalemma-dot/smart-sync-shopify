@@ -2,6 +2,7 @@
 // Guarda en la base de Vercel (Upstash Redis). No toca Shopify.
 import { allowedOrigin, identity, noStore } from '../server/access.js';
 import { kv, kvConfigurado } from '../server/kv.js';
+import { mensajeSeguro } from '../server/secretos.js';
 import { aplicar, leerEnlaces, leerRegistro, leerTodo, PROVEEDORES } from '../server/control-facturas.js';
 
 export default async function handler(req, res) {
@@ -26,6 +27,6 @@ export default async function handler(req, res) {
     return res.status(200).json(await aplicar(kv, req.body));
   } catch (e) {
     const status = e && typeof e === 'object' && 'status' in e ? e.status : 400;
-    return res.status(status === 503 || status === 502 ? status : 400).json({ error: e instanceof Error ? e.message : 'Error.' });
+    return res.status(status === 503 || status === 502 ? status : 400).json({ error: mensajeSeguro(e, 'Error.') });
   }
 }

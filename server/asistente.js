@@ -15,6 +15,7 @@ import { MARCAS_ASISTENTE, PROVEEDORES_ASISTENTE, SUCURSAL_PROPIA, instrucciones
 import { compararDocumentos, costoPonderado } from './asistente-calculos.js';
 import { obtenerToken } from './shopify-token.js';
 import { inspectReadQuery } from './read-policy.js';
+import { claveEnv, mensajeSeguro } from './secretos.js';
 
 const SHOP_URL = 'https://indy-com-ar.myshopify.com/admin/api/2026-07/graphql.json';
 export const MODELO_POR_DEFECTO = 'claude-sonnet-5-5'; // elegido por costo (9-nov); ANTHROPIC_MODEL=claude-opus-5-5 para el más potente
@@ -215,7 +216,7 @@ export function armarMensajes(turnos) {
  */
 export async function conversar({ marca, turnos, cliente, ejecutar = ejecutarHerramienta }) {
   if (!MARCAS_ASISTENTE[marca]) throw new Error('Marca no habilitada en el asistente.');
-  const client = cliente || new Anthropic();
+  const client = cliente || new Anthropic({ apiKey: claveEnv('ANTHROPIC_API_KEY') });
   const mensajes = armarMensajes(turnos);
   const herramientasUsadas = [];
   const system = [{ type: 'text', text: instruccionesMarca(marca), cache_control: { type: 'ephemeral' } }];
@@ -245,7 +246,8 @@ export async function conversar({ marca, turnos, cliente, ejecutar = ejecutarHer
       try {
         return { type: 'tool_result', tool_use_id: b.id, content: JSON.stringify(await ejecutar(b.name, b.input || {}, marca)) };
       } catch (e) {
-        return { type: 'tool_result', tool_use_id: b.id, is_error: true, content: e instanceof Error ? e.message : 'Error' };
+        // Sin claves: este texto va a Anthropic y Claude lo puede repetir en la respuesta (11-nov-2026).
+        return { type: 'tool_result', tool_use_id: b.id, is_error: true, content: mensajeSeguro(e, 'Error') };
       }
     }));
     mensajes.push({ role: 'user', content: resultados });

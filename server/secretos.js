@@ -34,6 +34,8 @@ export function ocultarSecretos(texto, extras = []) {
     for (const v of [crudo, crudo.trim(), claveEnv(n)]) if (v.trim().length >= 6) valores.add(v);
   }
   for (const v of extras) if (typeof v === 'string' && v.trim().length >= 6) valores.add(v);
+  // También como queda dentro de un JSON (un salto de línea escrito \\n, una comilla \\").
+  for (const v of [...valores]) valores.add(JSON.stringify(v).slice(1, -1));
   // Primero los más largos: el valor con el salto de línea antes que el mismo valor limpio.
   for (const v of [...valores].sort((a, b) => b.length - a.length)) s = s.split(v).join(TAPADO);
   return s
