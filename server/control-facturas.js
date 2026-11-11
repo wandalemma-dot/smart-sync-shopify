@@ -1,9 +1,9 @@
-// Control de facturas contra pedidos: guardado de pedidos, facturas, asignaciones
-// manuales, recepción del depósito y condiciones de pago, por proveedor.
+// Control de facturas contra pedidos: guardado de pedidos, facturas, remitos,
+// asignaciones manuales, recepción del depósito y condiciones de pago, por proveedor.
 // Los archivos se leen en el navegador; acá solo se valida y se guarda el JSON.
 // No toca Shopify.
 export const PROVEEDORES = ['distrinando', 'id'];
-const TIPOS = ['pedidos', 'facturas', 'asignaciones', 'recepciones'];
+const TIPOS = ['pedidos', 'facturas', 'asignaciones', 'recepciones', 'remitos'];
 const RE_ID = /^[A-Za-z0-9_.-]{1,80}$/;
 const MAX_LINEAS = 5000;
 
@@ -70,6 +70,22 @@ export function limpiarRecepcion(r) {
   };
 }
 
+/** Remito de una entrega (lo que llegó), leído de la foto o escrito a mano. Solo el texto: la foto no se guarda. */
+export function limpiarRemito(r) {
+  return {
+    numero: txt(r?.numero, 40),
+    fecha: fecha(r?.fecha),
+    origen: r?.origen === 'foto' ? 'foto' : 'manual',
+    dudas: lista(r?.dudas || [], 50).map((d) => txt(d, 300)),
+    renglones: lista(r?.renglones, 1000).map((x) => ({
+      codigo: txt(x?.codigo, 80),
+      cantidad: num(x?.cantidad || 0),
+      talles: lista(x?.talles || [], 60).map((t) => ({ talle: txt(t?.talle, 20), cantidad: num(t?.cantidad || 0) })),
+    })),
+    actualizado: new Date().toISOString(),
+  };
+}
+
 const parsear = (hash) => {
   const out = {};
   // Upstash devuelve HGETALL como [campo, valor, campo, valor…].
@@ -82,10 +98,11 @@ const parsear = (hash) => {
 
 export async function leerTodo(kv, prov) {
   const res = await kv([...TIPOS.map((t) => ['HGETALL', clave(prov, t)]), ['HGET', 'cf:config', prov], ['HGETALL', clave(prov, 'trello')]]);
-  const [pedidos, facturas, asignaciones, recepciones] = res.slice(0, 4).map(parsear);
+  const [pedidos, facturas, asignaciones, recepciones, remitos] = res.slice(0, TIPOS.length).map(parsear);
+  const crudo = res[TIPOS.length];
   let config = {};
-  try { config = res[4] ? JSON.parse(res[4]) : {}; } catch { config = {}; }
-  return { pedidos: Object.values(pedidos), facturas: Object.values(facturas), asignaciones, recepciones, config, trelloVistos: parsear(res[5]) };
+  try { config = crudo ? JSON.parse(crudo) : {}; } catch { config = {}; }
+  return { pedidos: Object.values(pedidos), facturas: Object.values(facturas), asignaciones, recepciones, remitos, config, trelloVistos: parsear(res[TIPOS.length + 1]) };
 }
 
 /** Aplica una acción de guardado o borrado. Valida todo antes de escribir. */
@@ -114,7 +131,7 @@ export async function aplicar(kv, body) {
     }
     case 'borrarFactura': {
       const fid = id(body.id);
-      await kv([['HDEL', clave(prov, 'facturas'), fid], ['HDEL', clave(prov, 'asignaciones'), fid], ['HDEL', clave(prov, 'recepciones'), fid]]);
+      await kv([['HDEL', clave(prov, 'facturas'), fid], ['HDEL', clave(prov, 'asignaciones'), fid], ['HDEL', clave(prov, 'recepciones'), fid], ['HDEL', clave(prov, 'remitos'), fid]]);
       return { ok: true };
     }
     case 'guardarAsignacion': {
@@ -126,6 +143,15 @@ export async function aplicar(kv, body) {
     case 'guardarRecepcion': {
       const fid = id(body.facturaId);
       await kv([['HSET', clave(prov, 'recepciones'), fid, JSON.stringify(limpiarRecepcion(body.recepcion))]]);
+      return { ok: true };
+    }
+    case 'guardarRemito': {
+      const fid = id(body.facturaId);
+      await kv([['HSET', clave(prov, 'remitos'), fid, JSON.stringify(limpiarRemito(body.remito))]]);
+      return { ok: true };
+    }
+    case 'borrarRemito': {
+      await kv([['HDEL', clave(prov, 'remitos'), id(body.facturaId)]]);
       return { ok: true };
     }
     case 'marcarTrelloVisto': {

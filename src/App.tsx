@@ -8,7 +8,6 @@ import { aplicarPrecios, actualizacionesAplicables, sinCambios, margenPct } from
 import Reposicion from './Reposicion';
 import PedidoId from './PedidoId';
 import Recuperar from './Recuperar';
-import Asistente from './Asistente';
 import ControlFacturas from './ControlFacturas';
 
 export default function App() {
@@ -336,7 +335,7 @@ export default function App() {
         ))}
       </div>
 
-      {tab === 'pedido' ? <PedidoId /> : tab === 'remitos' ? <><Asistente /><ControlFacturas /></> : tab === 'recuperar' ? <Recuperar /> : tab === 'reposicion' ? <Reposicion /> : (<>
+      {tab === 'pedido' ? <PedidoId /> : tab === 'remitos' ? <ControlFacturas /> : tab === 'recuperar' ? <Recuperar /> : tab === 'reposicion' ? <Reposicion /> : (<>
 
       {!previewReady ? (
         <div className="main-grid">

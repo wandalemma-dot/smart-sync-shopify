@@ -52,6 +52,28 @@ describe('guardado del control de facturas', () => {
     await expect(aplicar(fn, { proveedor: 'id', accion: 'marcarTrelloVisto', adjunto: '../x' })).rejects.toThrow(/Identificador/);
   });
 
+  it('guarda el remito de cada factura y lo borra con la factura', async () => {
+    const { fn } = memoria();
+    await aplicar(fn, { proveedor: 'id', accion: 'guardarFactura', factura: { id: 'f1', numero: '1', fecha: '2026-11-02', renglones: [] } });
+    await aplicar(fn, { proveedor: 'id', accion: 'guardarRemito', facturaId: 'f1', remito: {
+      numero: '0016-00125246', fecha: '2026-11-04', origen: 'foto', dudas: ['A12744C 10.0: marcado NO a mano'],
+      renglones: [{ codigo: '571818C', cantidad: 8, talles: [{ talle: '5.0', cantidad: 1 }, { talle: '6.0', cantidad: 7 }] }], extra: 'x' } });
+    let t = await leerTodo(fn, 'id');
+    expect(t.remitos.f1.renglones[0].talles[1]).toEqual({ talle: '6.0', cantidad: 7 });
+    expect(t.remitos.f1.origen).toBe('foto');
+    expect(t.remitos.f1.extra).toBeUndefined();
+    expect(t.config).toEqual({});
+    expect((await leerTodo(fn, 'distrinando')).remitos).toEqual({});
+    await expect(aplicar(fn, { proveedor: 'id', accion: 'guardarRemito', facturaId: 'f1', remito: { renglones: [{ codigo: 'A', cantidad: 'muchas' }] } })).rejects.toThrow(/Número/);
+    await expect(aplicar(fn, { proveedor: 'id', accion: 'guardarRemito', facturaId: 'f1', remito: { renglones: 'x' } })).rejects.toThrow(/Lista/);
+    await aplicar(fn, { proveedor: 'id', accion: 'borrarFactura', id: 'f1' });
+    t = await leerTodo(fn, 'id');
+    expect(t.remitos).toEqual({});
+    await aplicar(fn, { proveedor: 'id', accion: 'guardarRemito', facturaId: 'f2', remito: { renglones: [] } });
+    await aplicar(fn, { proveedor: 'id', accion: 'borrarRemito', facturaId: 'f2' });
+    expect((await leerTodo(fn, 'id')).remitos).toEqual({});
+  });
+
   it('rechaza proveedor, acción, ids y números inválidos', async () => {
     const { fn } = memoria();
     await expect(aplicar(fn, { proveedor: 'otro', accion: 'guardarPedido' })).rejects.toThrow(/Proveedor/);
