@@ -18,8 +18,6 @@ const LIMITE_BYTES = 4_000_000;
 
 const ATAJOS: { titulo: string; texto: string }[] = [
   { titulo: '📦 Órdenes pendientes', texto: '¿Qué órdenes tienen unidades pendientes en iD para esta marca? Agrupalas por producto y talle.' },
-  { titulo: '🧾 Remito contra factura', texto: 'Te adjunto el remito y la factura. Controlá que coincidan artículo por artículo (código, talle, cantidad) y decime qué no cierra.' },
-  { titulo: '📝 Factura contra nota de pedido', texto: 'Te adjunto la factura y la nota de pedido. Controlá que todo lo facturado esté pedido, sin pasarse y al mismo costo (lista − 10%).' },
   { titulo: '⚖️ Costo ponderado', texto: 'Con la factura adjunta, calculá el costo ponderado de cada artículo usando el stock actual de Martínez y el costo guardado en Shopify.' },
 ];
 
@@ -154,7 +152,7 @@ export default function Asistente() {
 
       <div style={{ ...caja, minHeight: 200, display: 'flex', flexDirection: 'column', gap: 12 }}>
         {turnos.length === 0 && <div style={{ opacity: 0.7 }}>
-          Preguntá por un código, pedí las órdenes pendientes, o adjuntá remito, factura y nota de pedido para controlarlos.
+          Preguntá por un código, pedí las órdenes pendientes o calculá un costo ponderado. Para controlar una entrega usá «Nueva entrega», arriba.
         </div>}
         {turnos.map((t, i) => <div key={i} style={{ alignSelf: t.rol === 'user' ? 'flex-end' : 'stretch', maxWidth: t.rol === 'user' ? '80%' : '100%',
           background: t.rol === 'user' ? 'rgba(99,102,241,0.25)' : 'rgba(0,0,0,0.2)', borderRadius: 8, padding: '10px 12px', whiteSpace: t.rol === 'user' ? 'pre-wrap' : undefined }}>

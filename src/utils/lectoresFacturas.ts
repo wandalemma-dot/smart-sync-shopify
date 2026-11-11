@@ -9,9 +9,9 @@
 //   sigue la lectura. Renglones con números en formato 63,982.40 y totales en
 //   formato 8.837.577,37.
 // ============================================================================
-import type { Factura, LineaPedido, Pedido, RenglonFactura } from './controlFacturas';
+import type { Factura, LineaPedido, Pedido, RenglonFactura, RenglonRemito, Remito } from './controlFacturas';
 
-const sinAcento = (s: string) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
+const sinAcento = (s: unknown) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/\s+/g, ' ').trim();
 
 /** Número en formato argentino o inglés: el último separador seguido de 1-2 dígitos es el decimal. */
 export function numero(v: unknown): number {
@@ -88,13 +88,28 @@ export function leerPedidoExcel(filas: unknown[][], id: string, nombre: string, 
 // ---------------------------------------------------------------------------
 const RE_TALLE_COL = /^(\d{2,3}([.,]\d)?|XXS|XS|S|M|L|XL|XXL|XXXL|[2-5]XL|TU|U)$/i;
 
-export function leerPedidoId(filas: unknown[][], id: string, nombre: string, fecha: string): LecturaPedido & { nroProveedor: string } {
+/** Fecha dd/mm/aaaa (o número de serie de Excel) a AAAA-MM-DD; '' si no hay. */
+function fechaDeCelda(v: unknown): string {
+  if (typeof v === 'number' && v > 40000 && v < 60000) return new Date(Math.round((v - 25569) * 86400000)).toISOString().slice(0, 10);
+  const m = /\b(\d{1,2})\/(\d{1,2})\/(\d{4})\b/.exec(String(v ?? ''));
+  if (!m || +m[2] < 1 || +m[2] > 12 || +m[1] < 1 || +m[1] > 31) return '';
+  return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
+}
+
+export function leerPedidoId(filas: unknown[][], id: string, nombre: string, fecha: string): LecturaPedido & { nroProveedor: string; fechaArchivo: string } {
   const avisos: string[] = [];
   let nroProveedor = '';
+  let fechaArchivo = '';
+  // Fila 1: «Pedido N° 00002576 | 2059 — ELEVE SAS | 27/10/2026»: número y fecha de la nota.
   for (const f of filas.slice(0, 8)) {
     const m = /pedido\s*n[°ºo.]*\s*:?\s*(\d{3,})/i.exec((f || []).map((x) => String(x ?? '')).join(' '));
-    if (m) { nroProveedor = m[1]; break; }
+    if (m) {
+      nroProveedor = m[1];
+      fechaArchivo = (f || []).map(fechaDeCelda).find(Boolean) || '';
+      break;
+    }
   }
+  fecha = fechaArchivo || fecha;
   const iEnc = filas.findIndex((f) => (f || []).some((x) => sinAcento(String(x ?? '')) === 'codigo'));
   if (iEnc < 0) throw new Error(`${nombre}: no encontré el encabezado «Código».`);
   const crudo = filas[iEnc].map((x) => String(x ?? '').trim());
@@ -133,16 +148,16 @@ export function leerPedidoId(filas: unknown[][], id: string, nombre: string, fec
     if (suma > 0 && !Number.isNaN(tot) && tot !== suma) avisos.push(`Fila ${i + 1} (${codigo}): los talles suman ${suma} y «Total» dice ${tot}.`);
   }
   if (!lineas.length) avisos.push(`${nombre}: no tiene cantidades pedidas.`);
-  return { pedido: { id, nombre, fecha, lineas }, avisos, nroProveedor };
+  return { pedido: { id, nombre, fecha, lineas }, avisos, nroProveedor, fechaArchivo };
 }
 
 /** Elige el lector según los encabezados: Distrinando (SKU / Modelo color / Pedido) o iD (Código + talles). */
-export function leerPedidoAuto(filas: unknown[][], id: string, nombre: string, fecha: string): LecturaPedido & { nroProveedor: string; proveedor: 'distrinando' | 'id' } {
+export function leerPedidoAuto(filas: unknown[][], id: string, nombre: string, fecha: string): LecturaPedido & { nroProveedor: string; fechaArchivo: string; proveedor: 'distrinando' | 'id' } {
   const esDistri = filas.some((f) => {
     const h = (f || []).map(sinAcento);
     return h.includes('pedido') && h.includes('sku') && (h.includes('modelo color') || h.includes('modelo-color'));
   });
-  if (esDistri) return { ...leerPedidoExcel(filas, id, nombre, fecha), nroProveedor: '', proveedor: 'distrinando' };
+  if (esDistri) return { ...leerPedidoExcel(filas, id, nombre, fecha), nroProveedor: '', fechaArchivo: '', proveedor: 'distrinando' };
   return { ...leerPedidoId(filas, id, nombre, fecha), proveedor: 'id' };
 }
 
@@ -347,4 +362,62 @@ export function leerFacturaId(paginas: ItemPdf[][], id: string): LecturaFactura 
     },
     avisos,
   };
+}
+
+// ---------------------------------------------------------------------------
+// REMITO EN TEXTO (11-nov-2026). Es lo que devuelve la lectura de la foto y lo
+// que se puede escribir o corregir a mano, una línea por artículo:
+//   Remito 0016-00125246
+//   Fecha 04/11/2026
+//   571818C 5.0/1 6.0/2 6.5/3 7.5/2
+//   A10520C 3            ← solo el total, sin talles
+// ---------------------------------------------------------------------------
+const RE_COD_REMITO = /^[A-Z0-9][A-Z0-9._/-]{2,}$/;
+
+export function leerTextoRemito(texto: string): { remito: Pick<Remito, 'numero' | 'fecha' | 'renglones'>; errores: string[] } {
+  const errores: string[] = [];
+  let numero = '';
+  let fecha = '';
+  const porCodigo = new Map<string, RenglonRemito>();
+  String(texto ?? '').split(/\r?\n/).forEach((cruda, i) => {
+    const linea = cruda.trim();
+    if (!linea || linea.startsWith('#')) return;
+    const mNum = /^remito\b\s*(?:n[°ºo.]*)?\s*:?\s*([0-9][0-9 -]*)$/i.exec(linea);
+    if (mNum) { numero = mNum[1].replace(/\s+/g, ''); return; }
+    if (/^fecha\b/i.test(linea)) { fecha = fechaDeCelda(linea) || fecha; return; }
+    const tokens = linea.replace(/\s*([/×:=])\s*/g, '$1').replace(/\s+x\s+/gi, 'x').split(/[\s,;]+/).filter(Boolean);
+    const codigo = tokens[0].toUpperCase();
+    if (!RE_COD_REMITO.test(codigo) || !/\d/.test(codigo)) { errores.push(`Línea ${i + 1}: no reconozco el código «${tokens[0]}».`); return; }
+    const resto = tokens.slice(1);
+    const r = porCodigo.get(codigo) ?? { codigo, cantidad: 0, talles: [] };
+    if (resto.length === 1 && /^\d+$/.test(resto[0])) {
+      r.cantidad += Number(resto[0]);
+    } else if (!resto.length) {
+      errores.push(`Línea ${i + 1}: ${codigo} no tiene cantidades.`); return;
+    } else {
+      for (const t of resto) {
+        const m = /^([A-Z0-9.]+?)[/×:=x](\d+)$/i.exec(t);
+        if (!m) { errores.push(`Línea ${i + 1}: no entiendo «${t}» (escribí talle/cantidad, por ejemplo 7.5/2).`); continue; }
+        const talle = m[1].toUpperCase();
+        const cant = Number(m[2]);
+        const ya = r.talles.find((x) => x.talle === talle);
+        if (ya) ya.cantidad += cant; else r.talles.push({ talle, cantidad: cant });
+        r.cantidad += cant;
+      }
+    }
+    porCodigo.set(codigo, r);
+  });
+  return { remito: { numero, fecha, renglones: [...porCodigo.values()] }, errores };
+}
+
+/** El remito en el mismo formato de texto, para mostrarlo y corregirlo. */
+export function textoRemito(r: Pick<Remito, 'numero' | 'fecha' | 'renglones'>): string {
+  const lineas: string[] = [];
+  if (r.numero) lineas.push(`Remito ${r.numero}`);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(r.fecha || '');
+  if (m) lineas.push(`Fecha ${m[3]}/${m[2]}/${m[1]}`);
+  for (const x of r.renglones) {
+    lineas.push(x.talles.length ? `${x.codigo} ${x.talles.map((t) => `${t.talle}/${t.cantidad}`).join(' ')}` : `${x.codigo} ${x.cantidad}`);
+  }
+  return lineas.join('\n');
 }

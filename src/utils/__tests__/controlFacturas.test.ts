@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
-import { analizarFacturas, compararRecepcion, fmt, mensajePagos, reporteReclamo, resumenPedidos } from '../controlFacturas';
+import { analizarFacturas, compararRecepcion, conImpuestos, fmt, mensajePagos, mismoTalle, reporteReclamo, resumenPedidos } from '../controlFacturas';
 import type { Factura, Pedido, RenglonFactura } from '../controlFacturas';
-import { numero, leerFacturaId, leerPedidoExcel, leerPedidoAuto, leerPedidoId } from '../lectoresFacturas';
+import { numero, leerFacturaId, leerPedidoExcel, leerPedidoAuto, leerPedidoId, leerTextoRemito, textoRemito } from '../lectoresFacturas';
 
 const linea = (codigo: string, talle: string, cantidad: number, precio = 100000, dto = 40) =>
   ({ sku: `${codigo}-${talle}`, codigo, descripcion: `Modelo ${codigo} ${talle}`, talle, unidadesPorUdm: 1, precioLista: precio, descuento: dto, cantidad });
@@ -202,5 +202,138 @@ describe('factura PDF de iD (FA 0011)', () => {
     expect(f.renglones[1].difPrecio[0].diferencia).toBe(43363.57);
     expect(f.pedidosCompletos).toBe(true);
     expect(f.checklist[0].talles).toEqual([{ talle: '055', cantidad: 2 }, { talle: '060', cantidad: 3 }]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 11-nov-2026: método de gax, remito y carga obligatoria de las tres partes.
+// ---------------------------------------------------------------------------
+describe('método de gax: otra nota, faltantes, precio y tolerancias', () => {
+  const remitoDe = (f: Factura) => ({ numero: '', fecha: '', renglones: f.renglones.map((r) => ({ codigo: r.codigo, cantidad: r.cantidad, talles: [] })) });
+
+  it('la fecha de la nota de iD sale de la fila 1', () => {
+    const filas = [
+      [null, 'Pedido N° 00002576', '2059 — ELEVE SAS', '27/10/2026'],
+      ['Código', 'Color', '075', 'Total', 'Precio unit.'], ['A1', 'N', 2, 2, 100],
+    ];
+    const r = leerPedidoAuto(filas, 'p', 'pedido', '2026-11-11');
+    expect(r.fechaArchivo).toBe('2026-10-27');
+    expect(r.pedido.fecha).toBe('2026-10-27');
+    expect(leerPedidoId([['Pedido N° 0001'], ['Código', '075', 'Total', 'Precio unit.'], ['A1', 1, 1, 100]], 'p', 'x', '2026-11-11').pedido.fecha).toBe('2026-11-11');
+  });
+
+  it('renglón de una nota anterior = OTRA NOTA; menos que lo pedido = FALTANTE (observaciones, no reclamo)', () => {
+    const p471: Pedido = { id: '471', nroProveedor: '471', nombre: 'n', fecha: '2026-10-09', lineas: [linea('LFO0225061', '040', 2)] };
+    const p497: Pedido = { id: '497', nroProveedor: '497', nombre: 'n', fecha: '2026-10-30', lineas: [linea('LFO0125084', '040', 9), linea('LFO0225061', '041', 2)] };
+    const f = factura('1', '2026-11-05', [ren('LFO0225061', 2), ren('LFO0125084', 6)]);
+    const r = analizarFacturas([p471, p497], [f], {}, { 1: remitoDe(f) }).facturas[0];
+    expect(r.pedidoPrincipal).toBe('497');
+    expect(r.renglones[0].otraNota).toEqual(['471']);
+    expect(r.renglones[1].faltante).toBe(3);
+    expect(r.renglones[1].pedidoCantidad).toBe(9);
+    expect(r.motivos.join(' ')).toMatch(/OTRA NOTA: LFO0225061 \(2\) corresponde al pedido N° 471 del 09\/10\/2026, no al N° 497/);
+    expect(r.motivos.join(' ')).toMatch(/FALTANTE: LFO0125084 \(pedido 9, facturado 6, faltan 3\)/);
+    expect(r.semaforo).toBe('observaciones');
+    expect(r.pendientePedidos.map((x) => `${x.pedidoId} ${x.codigo} ${x.pendiente}`).sort()).toEqual(['497 LFO0125084 3', '497 LFO0225061 2']);
+  });
+
+  it('precio mayor: reclamo con IVA 21% y percepciones 11% (×1,32), nota de crédito por el neto', () => {
+    const ped: Pedido = { id: 'P', nombre: 'P', fecha: '2026-10-27', lineas: [linea('571818C', '050', 9, 69251.34, 10)] };
+    const f = factura('1', '2026-11-04', [ren('571818C', 8, 74598.93, 10)]);
+    const r = analizarFacturas([ped], [f], {}, { 1: remitoDe(f) }).facturas[0];
+    expect(r.semaforo).toBe('reclamar');
+    expect(r.totalDifPrecio).toBe(38502.65);
+    expect(r.reclamo).toEqual({ neto: 38502.65, iva: 8085.56, percepciones: 4235.29, total: 50823.5 });
+    expect(conImpuestos(94812.8, f).total).toBe(125152.9); // caso real 2576: neto $94.812,80 → $125.152,90
+    expect(reporteReclamo(r, () => 'N° 2576')).toMatch(/en el pedido N° 2576[\s\S]*nota de crédito por \$ 38\.502,65 neto/);
+  });
+
+  it('precio más barato o diferencia de 2 centavos: no es reclamo', () => {
+    const ped: Pedido = { id: 'P', nombre: 'P', fecha: '2026-10-27', lineas: [linea('A', '40', 1, 1000, 10), linea('B', '40', 1, 1000, 10)] };
+    const f = factura('1', '2026-11-04', [ren('A', 1, 1000.02, 10), ren('B', 1, 900, 10)]);
+    const r = analizarFacturas([ped], [f], {}, { 1: remitoDe(f) }).facturas[0];
+    expect(r.renglones[0].difPrecio).toEqual([]);
+    expect(r.renglones[1].difPrecio[0].diferencia).toBe(-90);
+    expect(r.semaforo).toBe('observaciones');
+    expect(r.reclamo.neto).toBe(0);
+  });
+
+  it('total con tolerancia de $1', () => {
+    const f = factura('1', '2026-10-05', [ren('X1', 5)]);
+    f.total += 0.8;
+    expect(analizarFacturas([pA], [f]).facturas[0].aritmetica.errores).toEqual([]);
+    f.total += 0.5;
+    expect(analizarFacturas([pA], [f]).facturas[0].aritmetica.errores.join(' ')).toMatch(/Total/);
+  });
+});
+
+describe('tres partes obligatorias y remito', () => {
+  const ped: Pedido = { id: 'P', nombre: 'P', nroProveedor: '2576', fecha: '2026-10-27', lineas: [
+    linea('571818C', '050', 1), linea('571818C', '060', 2), linea('571818C', '075', 3),
+    linea('A12744C', '100', 2), linea('A12744C', '110', 2),
+  ] };
+  const f = factura('1', '2026-11-04', [ren('571818C', 6), ren('A12744C', 4)]);
+  f.remito = '00125246';
+  const rem = (texto: string) => ({ ...leerTextoRemito(texto).remito, origen: 'manual' as const });
+
+  it('sin remito o sin ninguna nota: incompleta, no se paga', () => {
+    const sinRemito = analizarFacturas([ped], [f], {}, {}).facturas[0];
+    expect(sinRemito.semaforo).toBe('incompleta');
+    expect(sinRemito.faltaRemito).toBe(true);
+    expect(mensajePagos(sinRemito)).toMatch(/⏳ INCOMPLETA, NO PAGAR TODAVÍA/);
+    const sinNota = analizarFacturas([], [f], {}, { 1: rem('571818C 6\nA12744C 4') }).facturas[0];
+    expect(sinNota.semaforo).toBe('incompleta');
+    expect(sinNota.faltaNota).toBe(true);
+    expect(sinNota.motivos.join(' ')).toMatch(/falta la nota de pedido/);
+    expect(sinNota.motivos.join(' ')).not.toMatch(/SIN PEDIR/);
+    // Sin pasar remitos (compatibilidad): no se exige.
+    expect(analizarFacturas([ped], [f]).facturas[0].semaforo).toBe('ok');
+  });
+
+  it('remito que coincide: OK, y el checklist del depósito usa sus talles', () => {
+    const r = analizarFacturas([ped], [f], {}, { 1: rem('Remito 0016-00125246\n571818C 5.0/1 6.0/2 7.5/3\nA12744C 10.0/2 11.0/2') }).facturas[0];
+    expect(r.semaforo).toBe('ok');
+    expect(r.renglones.map((x) => x.remito)).toEqual([6, 4]);
+    expect(r.checklist[0].talles).toEqual([{ talle: '5.0', cantidad: 1 }, { talle: '6.0', cantidad: 2 }, { talle: '7.5', cantidad: 3 }]);
+  });
+
+  it('remito con menos que la factura es reclamo; con más, observación; otro número, observación', () => {
+    const menos = analizarFacturas([ped], [f], {}, { 1: rem('571818C 5.0/1 6.0/2 7.5/2\nA12744C 4') }).facturas[0];
+    expect(menos.semaforo).toBe('reclamar');
+    expect(menos.difRemito).toEqual([{ codigo: '571818C', factura: 6, remito: 5 }]);
+    expect(reporteReclamo(menos)).toMatch(/571818C: facturaron 6 y el remito trae 5/);
+    const mas = analizarFacturas([ped], [f], {}, { 1: rem('Remito 0016-00999999\n571818C 6\nA12744C 4\nZZZ999 1') }).facturas[0];
+    expect(mas.semaforo).toBe('observaciones');
+    expect(mas.motivos.join(' ')).toMatch(/llegó más de lo facturado: ZZZ999/);
+    expect(mas.motivos.join(' ')).toMatch(/remito cargado es el 0016-00999999 y la factura dice 00125246/);
+  });
+
+  it('talle que no se pidió: observación', () => {
+    const r = analizarFacturas([ped], [f], {}, { 1: rem('571818C 5.0/1 6.0/2 7.5/3\nA12744C 10.0/3 11.0/1') }).facturas[0];
+    expect(r.tallesNoPedidos).toEqual([{ codigo: 'A12744C', talle: '10.0', llegaron: 3, pedidos: 2 }]);
+    expect(r.semaforo).toBe('observaciones');
+  });
+
+  it('mismo talle escrito distinto (Converse US×10 y Le Coq)', () => {
+    expect(mismoTalle('055', '5.5')).toBe(true);
+    expect(mismoTalle('100', '10.0')).toBe(true);
+    expect(mismoTalle('040', '40')).toBe(true);
+    expect(mismoTalle('xl', 'XL')).toBe(true);
+    expect(mismoTalle('055', '5')).toBe(false);
+    expect(mismoTalle('S', 'M')).toBe(false);
+  });
+
+  it('remito en texto: talles, total sin talles, repetidos y errores', () => {
+    const { remito, errores } = leerTextoRemito('Remito N° 0016-00125246\nFecha 04/11/2026\n571818C 5.0/1, 6.0 / 2\n571818C 5.0x1\nCAMP01 XLx2 2XL/1\nA10520C 3\nhola\nB123 7.5-2');
+    expect(remito.numero).toBe('0016-00125246');
+    expect(remito.fecha).toBe('2026-11-04');
+    expect(remito.renglones).toEqual([
+      { codigo: '571818C', cantidad: 4, talles: [{ talle: '5.0', cantidad: 2 }, { talle: '6.0', cantidad: 2 }] },
+      { codigo: 'CAMP01', cantidad: 3, talles: [{ talle: 'XL', cantidad: 2 }, { talle: '2XL', cantidad: 1 }] },
+      { codigo: 'A10520C', cantidad: 3, talles: [] },
+      { codigo: 'B123', cantidad: 0, talles: [] },
+    ]);
+    expect(errores).toHaveLength(2);
+    expect(textoRemito(remito).split('\n').slice(0, 3)).toEqual(['Remito 0016-00125246', 'Fecha 04/11/2026', '571818C 5.0/2 6.0/2']);
   });
 });
