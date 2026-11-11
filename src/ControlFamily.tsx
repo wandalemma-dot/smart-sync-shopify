@@ -20,7 +20,7 @@ import {
   type EntregaFamily, type FilaFamily, type RenglonFamily, type ResultadoFamily,
 } from './utils/controlFamily';
 import {
-  ejecutarCargaFamily, leerEstadoCarga, planCargaFamily, resumenCarga, SUCURSAL_FAMILY, textoCarga,
+  cargasDeEntrega, ejecutarCargaFamily, estadoShopifyEntrega, leerEstadoCarga, planCargaFamily, resumenCarga, SUCURSAL_FAMILY, textoCarga,
   type CargaFamily, type EleccionesCarga, type ItemCarga, type PlanCarga,
 } from './utils/cargaFamily';
 import { leerTextoRemito, textoRemito } from './utils/lectoresFacturas';
@@ -35,6 +35,7 @@ const SEMAFORO = {
   revisar: { icono: '❌', texto: 'No coincide con el remito', color: '#f87171' },
   incompleta: { icono: '⏳', texto: 'Falta el remito', color: '#94a3b8' },
 } as const;
+const AMARILLO = '#fbbf24', VERDE = '#34d399';
 const tdN: React.CSSProperties = { ...td, whiteSpace: 'nowrap' };
 const api = (body?: object) => (body ? apiControl({ proveedor: 'family', ...body }) : apiControl(undefined, 'family'));
 const esExcel = (f: File) => /\.(xlsx|xls)$/i.test(f.name);
@@ -84,6 +85,14 @@ export default function ControlFamily() {
 
   const resultados = useMemo(() => [...entregas].sort((a, b) => (b.fecha + b.id).localeCompare(a.fecha + a.id))
     .map((e) => controlarEntregaFamily(e, remitos[e.id], entregas)), [entregas, remitos]);
+  // Pedido de gax (11-nov-2026): arriba lo que falta cargar en Shopify, en amarillo; abajo, después
+  // de una línea, las entregas ya cargadas enteras. Dentro de cada grupo, la más nueva primero.
+  const tarjetas = useMemo(() => resultados.map((r) => {
+    const deEntrega = cargasDeEntrega(cargas, r.entrega.id);
+    return { r, cargas: deEntrega, completa: estadoShopifyEntrega(r.filas.map((f) => f.codigo), deEntrega).completa };
+  }), [resultados, cargas]);
+  const pendientes = tarjetas.filter((t) => !t.completa);
+  const cargadas = tarjetas.filter((t) => t.completa);
 
   async function guardar(body: object) {
     setError('');
@@ -232,8 +241,19 @@ export default function ControlFamily() {
       </div>
 
       {!resultados.length && !cargando && <p style={{ opacity: 0.7, fontSize: '0.85rem' }}>Todavía no hay entregas de Family cargadas.</p>}
-      {resultados.map((r) => <TarjetaFamily key={r.entrega.id} r={r} abierta={abierta === r.entrega.id} ocupado={!!ocupado}
-        cargas={Object.fromEntries(Object.entries(cargas).filter(([k]) => k.startsWith(`${r.entrega.id}|`)).map(([k, v]) => [k.slice(r.entrega.id.length + 1), v]))}
+      {pendientes.length > 0 && cargadas.length > 0 && <Separador color={AMARILLO} texto={`⏳ Falta cargar en Shopify (${pendientes.length})`} />}
+      {pendientes.map(tarjeta)}
+      {cargadas.length > 0 && <>
+        {!pendientes.length && <p style={{ opacity: 0.7, fontSize: '0.85rem' }}>No hay entregas pendientes de cargar en Shopify.</p>}
+        <Separador color={VERDE} texto={`✔ Cargadas en Shopify (${cargadas.length})`} />
+        {cargadas.map(tarjeta)}
+      </>}
+    </div>
+  );
+
+  function tarjeta({ r, cargas: deEntrega }: (typeof tarjetas)[number]) {
+    return <TarjetaFamily key={r.entrega.id} r={r} abierta={abierta === r.entrega.id} ocupado={!!ocupado}
+        cargas={deEntrega}
         plan={armado?.entregaId === r.entrega.id ? armado : null}
         onArmar={() => armarCarga(r)} onConfirmar={(el) => armado && confirmarCarga(armado, el)} onCancelarCarga={() => setArmado(null)}
         onLiberar={(codigo, c) => liberarCarga(r.entrega.id, codigo, c)}
@@ -244,7 +264,16 @@ export default function ControlFamily() {
         onGuardarEntrega={async (e) => { try { return await guardar({ accion: 'guardarEntrega', entrega: await conShopify(e) }); } catch (err) { setError(mensaje(err)); return false; } }}
         onFecha={(fecha) => guardar({ accion: 'guardarEntrega', entrega: { ...r.entrega, fecha } })}
         onConsultar={() => reconsultar(r.entrega)}
-        onBorrar={() => confirm(`¿Borrar la entrega del ${fechaAr(r.entrega.fecha)}? Se borra también su remito.`) && guardar({ accion: 'borrarEntrega', id: r.entrega.id })} />)}
+        onBorrar={() => confirm(`¿Borrar la entrega del ${fechaAr(r.entrega.fecha)}? Se borra también su remito.`) && guardar({ accion: 'borrarEntrega', id: r.entrega.id })} />;
+  }
+}
+
+/** Línea con título que separa las entregas pendientes de las ya cargadas en Shopify. */
+function Separador({ color, texto }: { color: string; texto: string }) {
+  const linea = <span style={{ flex: 1, height: 1, background: `${color}66` }} />;
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, margin: '16px 0 10px', color, fontWeight: 'bold', fontSize: '0.9rem' }}>
+      {linea}<span>{texto}</span>{linea}
     </div>
   );
 }
@@ -316,22 +345,28 @@ function TarjetaFamily({ r, abierta, ocupado, cargas, plan, onArmar, onConfirmar
     if (await onGuardarEntrega({ ...e, fecha: fecha || e.fecha, renglones, origen: 'manual', dudas: [] })) setEditando(null);
   }
   const unidadesRemito = r.remito?.renglones.reduce((t, x) => t + x.cantidad, 0) ?? 0;
-  const cargados = r.filas.filter((f) => cargas[f.codigo]?.estado === 'cargada').length;
+  const enShopify = estadoShopifyEntrega(r.filas.map((f) => f.codigo), cargas);
+  const cargados = enShopify.cargados;
+  // Lo que falta cargar en Shopify va en amarillo; el rojo (no coincide con el remito) manda porque hay que arreglarlo antes.
+  const color = enShopify.completa || r.semaforo === 'revisar' ? s.color : AMARILLO;
   const aRevisar = Object.entries(cargas).filter(([, c]) => c.estado !== 'cargada');
   const puedeCargar = r.semaforo === 'ok' || r.semaforo === 'observaciones';
   // Cargada entera o en parte: «hay que darlos de alta» deja de ser cierto para lo ya cargado.
   const pendientes = r.filas.filter((f) => !cargas[f.codigo]).map((f) => f.codigo);
-  const motivos = cargados === r.filas.length ? [...r.motivos.filter((m) => !/^(🆕|🔁)/.test(m)), '✔ Entrega cargada en Shopify.']
+  const motivos = enShopify.completa ? [...r.motivos.filter((m) => !/^(🆕|🔁)/.test(m)), '✔ Entrega cargada en Shopify.']
     : cargados ? [...r.motivos.filter((m) => !/^(🆕|🔁)/.test(m)),
       `✔ Ya cargado en Shopify: ${r.filas.filter((f) => cargas[f.codigo]?.estado === 'cargada').map((f) => f.codigo).join(', ')}.`,
       ...(pendientes.length ? [`⏳ Falta cargar: ${pendientes.join(', ')}. Cuando llegue, tocá «⬆️ Cargar en Shopify».`] : [])]
     : r.motivos;
   return (
-    <div style={{ border: `1px solid ${s.color}66`, borderRadius: 10, padding: '10px 12px', marginBottom: 12, background: `${s.color}0d` }}>
+    <div style={{ border: `1px solid ${color}${enShopify.completa ? '66' : '99'}`, borderRadius: 10, padding: '10px 12px', marginBottom: 12, background: `${color}${enShopify.completa ? '0d' : '14'}` }}>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', cursor: 'pointer' }} onClick={onAbrir}>
         <strong>{abierta ? '▾' : '▸'} Entrega del {fechaAr(e.fecha)}</strong>
-        <span style={{ opacity: 0.8, fontSize: '0.85rem' }}>{r.filas.length} artículos · {r.unidades} u.{r.nuevos ? ` · 🆕 ${r.nuevos} nuevo(s)` : ''}{r.reposiciones ? ` · 🔁 ${r.reposiciones} reposición` : ''}{cargados ? ` · ✔ ${cargados === r.filas.length ? 'cargada' : `${cargados} cargado(s)`} en Shopify` : ''}</span>
+        <span style={{ opacity: 0.8, fontSize: '0.85rem' }}>{r.filas.length} artículos · {r.unidades} u.{r.nuevos ? ` · 🆕 ${r.nuevos} nuevo(s)` : ''}{r.reposiciones ? ` · 🔁 ${r.reposiciones} reposición` : ''}</span>
         <span style={{ color: s.color, fontWeight: 'bold' }}>{s.icono} {s.texto}</span>
+        <span style={{ color: enShopify.completa ? VERDE : AMARILLO, border: `1px solid ${enShopify.completa ? VERDE : AMARILLO}88`, borderRadius: 999, padding: '1px 9px', fontSize: '0.82rem', fontWeight: 'bold' }}>
+          {enShopify.completa ? '✔ Cargada en Shopify' : `⏳ Falta cargar en Shopify${cargados ? `: ${cargados} de ${enShopify.total} cargados` : ''}`}
+        </span>
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
@@ -342,8 +377,8 @@ function TarjetaFamily({ r, abierta, ocupado, cargas, plan, onArmar, onConfirmar
           {!r.remito && <Archivo etiqueta="📷 Subir foto" accept="image/*" multiple disabled={ocupado} estilo={botonChico} onArchivos={onFotos} />}
           <button style={botonChico} onClick={() => abrir('remito')}>{r.remito ? '✏️ Ver o corregir' : '✏️ Escribirlo'}</button>
         </Parte>
-        <Parte ok={cargados === r.filas.length} titulo="Shopify" detalle={cargados ? `${cargados} de ${r.filas.length} cargados` : 'sin cargar'}>
-          {cargados < r.filas.length && !plan && <button style={{ ...botonChico, opacity: puedeCargar && !ocupado ? 1 : 0.5 }} disabled={ocupado}
+        <Parte ok={enShopify.completa} titulo="Shopify" detalle={cargados ? `${cargados} de ${enShopify.total} cargados` : 'sin cargar'}>
+          {!enShopify.completa && !plan && <button style={{ ...botonChico, opacity: puedeCargar && !ocupado ? 1 : 0.5 }} disabled={ocupado}
             title={puedeCargar ? 'Crea los nuevos y suma la reposición, con vista previa y confirmación' : 'Primero la planilla tiene que coincidir con el remito'}
             onClick={onArmar}>⬆️ Cargar en Shopify</button>}
         </Parte>
@@ -398,7 +433,7 @@ function TarjetaFamily({ r, abierta, ocupado, cargas, plan, onArmar, onConfirmar
             <button style={botonChico} disabled={ocupado} onClick={onConsultar}>🔄 Consultar Shopify de nuevo</button>
             <label>fecha de la planilla <input type="date" value={e.fecha} style={inputSt} onChange={(ev) => ev.target.value && onFecha(ev.target.value)} /></label>
             {e.shopify?.fecha && <span style={{ opacity: 0.65 }}>Shopify consultado el {fechaAr(e.shopify.fecha)}</span>}
-            {cargados < r.filas.length && !plan && <button style={botonChico} disabled={ocupado} onClick={onArmar}>⬆️ Cargar en Shopify</button>}
+            {!enShopify.completa && !plan && <button style={botonChico} disabled={ocupado} onClick={onArmar}>⬆️ Cargar en Shopify</button>}
             {Object.entries(cargas).filter(([, c]) => c.estado === 'cargada').map(([codigo, c]) => (
               <button key={codigo} style={{ ...botonChico, background: 'transparent', opacity: 0.7 }} disabled={ocupado} title={textoCarga(c)} onClick={() => onLiberar(codigo, c)}>🔓 {codigo}</button>
             ))}

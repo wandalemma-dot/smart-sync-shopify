@@ -1,8 +1,8 @@
 // Carga de las entregas de Family en Shopify (11-nov-2026, pedido de gax). Shopify SIMULADO: ninguna escritura real.
 import { describe, it, expect, vi } from 'vitest';
 import {
-  accionesElegidas, candidatosPorNombre, costoFamily, ejecutarCargaFamily, firmaCarga, leerEstadoCarga, noSeEjecuto, planCargaFamily, resumenCarga,
-  talleAlta, tituloFamily, type CargaFamily, type DepsCarga, type EstadoCarga, type PlanCarga, type ProductoCarga,
+  accionesElegidas, candidatosPorNombre, cargasDeEntrega, costoFamily, ejecutarCargaFamily, esBrandCo, estadoShopifyEntrega, firmaCarga, leerEstadoCarga,
+  noSeEjecuto, planCargaFamily, resumenCarga, talleAlta, tituloFamily, type CargaFamily, type DepsCarga, type EstadoCarga, type PlanCarga, type ProductoCarga,
 } from '../cargaFamily';
 import { controlarEntregaFamily, leerEntregaFamily, type EntregaFamily } from '../controlFamily';
 import type { Remito } from '../controlFacturas';
@@ -38,6 +38,21 @@ describe('Family: título, talles y costo de los nuevos (como se cargan a mano)'
     expect(tituloFamily('PANTALON GARAGE SKT PANT LOOSE FIT GRIS')).toBe('Pantalon Familyarg Garage Skt Pant Loose Fit Gris');
     expect(tituloFamily('REMERA FAMILY LOGO 3D NEGRO')).toBe('Remera Familyarg Logo 3D Negro');
     expect(tituloFamily('CHALECO PUFFER NEGRO')).toBe('Chaleco Familyarg Puffer Negro');
+  });
+  it('Brand & Co (código BF…, como todos los de la tienda): «Remera Familyarg x Brand & Co Duncan Supersized Negro»', () => {
+    // El título exacto que gax escribió a mano el 11-nov para BFRMCSD01.
+    expect(tituloFamily('REMERA DUNCAN SUPERSIZED NEGRO', 'BFRMCSD01')).toBe('Remera Familyarg x Brand & Co Duncan Supersized Negro');
+    expect(tituloFamily('REMERA PANCHART CRY REGULAR LADRILLO', 'BFRMCPC29')).toBe('Remera Familyarg x Brand & Co Panchart Cry Regular Ladrillo');
+    expect(tituloFamily('BUZO DUNCAN NEGRO', 'bfhdu01')).toBe('Buzo Familyarg x Brand & Co Duncan Negro');
+    // Si la planilla lo escribe, va una sola vez y en su lugar, con o sin código BF.
+    expect(tituloFamily('REMERA X BRAND & CO DUNCAN NEGRO', 'BFRMCSD01')).toBe('Remera Familyarg x Brand & Co Duncan Negro');
+    expect(tituloFamily('REMERA BRAND AND CO DUNCAN NEGRO', 'RMCX01')).toBe('Remera Familyarg x Brand & Co Duncan Negro');
+    // Sin BF ni la frase, no es Brand & Co; «BRAND & COURT» tampoco.
+    expect(tituloFamily('SHORT SPECTRUM BASKET NEGRO/MULTI', 'SHBSPEC')).toBe('Bermuda Short Familyarg Spectrum Basket Negro Multi');
+    expect(esBrandCo('HPRST01', 'BUZO STICKERS NEGRO')).toBe(false);
+    expect(esBrandCo('RMC01', 'REMERA BRAND & COURT NEGRO')).toBe(false);
+    expect(esBrandCo('BF')).toBe(false);
+    expect(esBrandCo('BFHDU01')).toBe(true);
   });
   it('talles como en Shopify y costo = por mayor − 15% con centavos (42,5% del público)', () => {
     expect(['S', '2XL', '3XL', 'xl', 'U'].map(talleAlta)).toEqual(['S', 'XXL', 'XXXL', 'XL', 'U']);
@@ -125,6 +140,16 @@ describe('Family: vista previa de la carga', () => {
     expect(crear).toMatchObject({ tipo: 'alta', titulo: 'Bermuda Short Familyarg Spectrum Negro' });
   });
 
+  it('Brand & Co: el producto nuevo se crea con «x Brand & Co» en el título', () => {
+    const planilla = [PLANILLA[0], PLANILLA[1], ['BFRMCSD01', 'REMERA', 'DUNCAN', 'SUPERSIZED', 'NEGRO', 19500, 39000, 1, 2, 2, 2, 1, null, 8]];
+    const { entrega: e0 } = leerEntregaFamily(planilla, 'Planilla', '2026-01-01');
+    const e = { ...e0, id: 'E3', fecha: '2026-11-10', shopify: { fecha: 'x', codigos: { BFRMCSD01: [] } } };
+    const r = controlarEntregaFamily(e, { numero: '0001-00002716', fecha: '2026-11-10', renglones: [{ codigo: 'BFRMCSD01', cantidad: 8, talles: [] }] }, [e]);
+    const plan = planCargaFamily(r, estadoVacio({ porCodigo: { BFRMCSD01: [] } }), {});
+    const op = plan.items[0].opciones[0];
+    expect(op.etiqueta).toBe('Crear producto nuevo «Remera Familyarg x Brand & Co Duncan Supersized Negro»');
+    expect(op.accion).toMatchObject({ tipo: 'alta', titulo: 'Remera Familyarg x Brand & Co Duncan Supersized Negro', productType: 'Remera', precio: 39000, costo: 16575 });
+  });
   it('el código en dos productos: elegir en cuál sumar', () => {
     const a = producto('gid://shopify/Product/1', 'Uno', { S: 0, M: 0, L: 0, XL: 0, XXL: 0 });
     const b = producto('gid://shopify/Product/2', 'Dos', { S: 0, M: 0, L: 0, XL: 0, XXL: 0 });
@@ -143,6 +168,22 @@ function shopify(respuestas: Record<string, (v: Record<string, unknown>) => unkn
   });
 }
 const sinPagina = { hasNextPage: false, endCursor: null };
+
+describe('Family: entregas cargadas y pendientes en Shopify (pantalla)', () => {
+  const marca = (estado: CargaFamily['estado']): CargaFamily => ({ estado, fecha: '2026-11-11T19:20:55.000Z', firma: 'x' });
+  it('separa las marcas por entrega y cuenta cuánto está cargado', () => {
+    const cargas = { 'E1|SHBSPEC': marca('cargada'), 'E1|GSKPT23': marca('dudosa'), 'E10|SHBSPEC': marca('cargada'), 'E2|HPRST01': marca('cargada') };
+    expect(Object.keys(cargasDeEntrega(cargas, 'E1'))).toEqual(['SHBSPEC', 'GSKPT23']);
+    const e1 = cargasDeEntrega(cargas, 'E1');
+    // Dudosa no cuenta como cargada: la entrega sigue pendiente (amarilla, arriba).
+    expect(estadoShopifyEntrega(['SHBSPEC', 'GSKPT23'], e1)).toEqual({ cargados: 1, total: 2, completa: false });
+    expect(estadoShopifyEntrega(['SHBSPEC'], e1)).toEqual({ cargados: 1, total: 1, completa: true });
+    expect(estadoShopifyEntrega(['SHBSPEC', 'SHBSPEC'], e1)).toEqual({ cargados: 1, total: 1, completa: true });
+    expect(estadoShopifyEntrega(['SHBSPEC'], {})).toEqual({ cargados: 0, total: 1, completa: false });
+    // Una entrega sin artículos no es «cargada».
+    expect(estadoShopifyEntrega([], e1).completa).toBe(false);
+  });
+});
 
 describe('Family: lectura de Shopify para armar la carga (solo lectura)', () => {
   it('encuentra FAMILYARG y Point of Sale, busca por SKU/etiqueta y por nombre, y lee el stock en FAMILYARG', async () => {

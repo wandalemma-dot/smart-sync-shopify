@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { aplicar, leerRegistro, leerTodo } from './control-facturas.js';
+import { aplicar, leerEnlaces, leerRegistro, leerTodo } from './control-facturas.js';
 import { kv } from './kv.js';
 import handler from '../api/control-facturas.js';
 
@@ -139,6 +139,39 @@ describe('Registro de cargas en Shopify (11-nov-2026)', () => {
   it('el registro se lee solo con sesión iniciada', async () => {
     const r = { headers: {}, code: 0, body: null, setHeader(k, v) { r.headers[k] = v; }, status(c) { r.code = c; return r; }, json(b) { r.body = b; return r; } };
     await handler({ method: 'GET', headers: {}, query: { registro: '1' } }, r);
+    expect(r.code).toBe(401);
+  });
+});
+
+describe('Enlaces rápidos a planillas propias (11-nov-2026)', () => {
+  const url = 'https://docs.google.com/spreadsheets/d/ABC123/edit?usp=sharing';
+  it('guarda y lee los enlaces: solo https, sin usuario ni clave, hasta 5, sin pisar la configuración de los proveedores', async () => {
+    const { fn, db } = memoria();
+    expect(await leerEnlaces(fn)).toEqual({ enlaces: [] });
+    const r = await aplicar(fn, { accion: 'guardarEnlaces', enlaces: [{ nombre: '  Control de ingreso   de mercadería ', url: `  ${url} ` }] });
+    expect(r.enlaces).toEqual([{ nombre: 'Control de ingreso de mercadería', url }]);
+    expect(await leerEnlaces(fn)).toEqual({ enlaces: [{ nombre: 'Control de ingreso de mercadería', url }] });
+    await aplicar(fn, { proveedor: 'id', accion: 'guardarConfig', config: { condicionesPago: '30 días' } });
+    expect((await leerTodo(fn, 'id')).config).toEqual({ condicionesPago: '30 días' });
+    expect((await leerEnlaces(fn)).enlaces).toHaveLength(1);
+    for (const mala of ['javascript:alert(1)', 'http://docs.google.com/x', 'https://yo:clave@docs.google.com/x', 'no es un enlace', '', `https://x.com/${'a'.repeat(500)}`]) {
+      await expect(aplicar(fn, { accion: 'guardarEnlaces', enlaces: [{ nombre: 'x', url: mala }] })).rejects.toThrow();
+    }
+    await expect(aplicar(fn, { accion: 'guardarEnlaces', enlaces: Array.from({ length: 6 }, () => ({ url })) })).rejects.toThrow(/hasta 5/);
+    await expect(aplicar(fn, { accion: 'guardarEnlaces', enlaces: 'x' })).rejects.toThrow(/Faltan/);
+    // Lo rechazado no cambió nada.
+    expect((await leerEnlaces(fn)).enlaces).toEqual([{ nombre: 'Control de ingreso de mercadería', url }]);
+    expect((await aplicar(fn, { accion: 'guardarEnlaces', enlaces: [{ url }] })).enlaces[0].nombre).toBe('Planilla');
+    await aplicar(fn, { accion: 'guardarEnlaces', enlaces: [] });
+    expect(await leerEnlaces(fn)).toEqual({ enlaces: [] });
+    // Un valor dañado en la base no rompe la pantalla.
+    db.get('cf:config').set('enlaces', '{roto');
+    expect(await leerEnlaces(fn)).toEqual({ enlaces: [] });
+  });
+
+  it('se leen solo con sesión iniciada', async () => {
+    const r = { headers: {}, code: 0, body: null, setHeader(k, v) { r.headers[k] = v; }, status(c) { r.code = c; return r; }, json(b) { r.body = b; return r; } };
+    await handler({ method: 'GET', headers: {}, query: { enlaces: '1' } }, r);
     expect(r.code).toBe(401);
   });
 });
