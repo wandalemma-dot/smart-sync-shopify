@@ -10,7 +10,7 @@
 // pasa a texto con api/leer-remito.js y se puede corregir o escribir a mano.
 // No toca Shopify.
 // ============================================================================
-import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import Asistente from './Asistente';
 import {
@@ -58,13 +58,21 @@ interface FilaTrello {
   pedido?: PedidoGuardado;
 }
 interface InformeTrello {
+  /** Proveedor de la búsqueda: el informe no se muestra ni se usa con otro proveedor elegido. */
+  prov: Prov;
   facturaId?: string; hora: string; tablero: string; tarjetas: number; conExcel: number; filas: FilaTrello[];
   /** Excel ya anotados como de otro proveedor: no se vuelven a bajar. */
   otroProveedor: number;
   /** Excel revisados antes que esta vez no se volvieron a bajar. */
   sinRevisar: number;
+  /** Alguna nota cargada (de Trello o subida a mano) tiene artículos de la factura. */
+  cubierta?: boolean;
   error?: string;
 }
+/** Marca de un Excel que repetía otra nota (o una nota borrada a mano). */
+const REPITE = /: repite /;
+/** Marca de un Excel que es copia de una nota borrada a mano. */
+const REPITE_BORRADA = /: repite una nota que borraste/;
 /** Enlace a la tarjeta de Trello de un pedido importado desde ahí. */
 const enlaceTrello = (p?: PedidoGuardado) => {
   const m = /^trello:([a-f0-9]{24})$/.exec(p?.origen || '');
@@ -74,7 +82,7 @@ const enlaceTrello = (p?: PedidoGuardado) => {
 async function bajarAdjunto(tarjeta: string, adjunto: string): Promise<ArrayBuffer> {
   const r = await fetch(`/api/trello?accion=adjunto&tarjeta=${tarjeta}&adjunto=${adjunto}`, { cache: 'no-store' });
   const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.error || `Error ${r.status}`);
+  if (!r.ok) throw Object.assign(new Error(d.error || `Error ${r.status}`), { status: r.status });
   const bin = atob(d.datos);
   const buf = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
@@ -123,15 +131,22 @@ export default function ControlFacturas() {
   const [nuevaFactura, setNuevaFactura] = useState<File | null>(null);
   const [nuevasFotos, setNuevasFotos] = useState<File[]>([]);
   const [informe, setInforme] = useState<InformeTrello | null>(null);
+  // Proveedor elegido ahora: una búsqueda o carga que termina después de cambiarlo no toca la pantalla.
+  const provRef = useRef(prov);
+  const sigue = (p: Prov) => provRef.current === p;
 
   const recargar = useCallback(async () => {
     if (prov === 'family') return; // Family tiene su propia pantalla (ControlFamily)
     setCargando(true); setError('');
     try {
       const d = await api(undefined, prov);
+      if (provRef.current !== prov) return; // se cambió de proveedor mientras cargaba
       setDatos({ ...VACIO, ...d }); setSinBase(false);
       setCondiciones(d.config?.condicionesPago || '');
-    } catch (e) { setError(mensaje(e)); setSinBase(!!(e as { sinBase?: boolean }).sinBase); setDatos(VACIO); }
+    } catch (e) {
+      if (provRef.current !== prov) return;
+      setError(mensaje(e)); setSinBase(!!(e as { sinBase?: boolean }).sinBase); setDatos(VACIO);
+    }
     finally { setCargando(false); }
   }, [prov]);
   // eslint-disable-next-line react-hooks/set-state-in-effect -- carga inicial y al cambiar de proveedor
@@ -149,7 +164,7 @@ export default function ControlFacturas() {
 
   /** Lee un Excel de pedido. Devuelve el pedido listo para guardar, o por qué no se carga. */
   function prepararPedido(buf: ArrayBuffer, archivo: string, fecha: string, extra: { id?: string; nombre?: string; origen: string; enlace?: string },
-    existentes: PedidoGuardado[]): { pedido?: PedidoGuardado; mensajes: string[]; descartado?: string; repetidoId?: string } {
+    existentes: PedidoGuardado[]): { pedido?: PedidoGuardado; mensajes: string[]; descartado?: string; repetidoId?: string; leido?: { lineas: PedidoGuardado['lineas']; nroProveedor?: string } } {
     const wb = XLSX.read(buf);
     const hoja = wb.SheetNames.find((_, i) => !wb.Workbook?.Sheets?.[i]?.Hidden) || wb.SheetNames[0];
     const filas = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[hoja], { header: 1, raw: true });
@@ -168,7 +183,8 @@ export default function ControlFacturas() {
     const repetido = existentes.find((p) => p.id !== id && ((r.nroProveedor && p.nroProveedor === r.nroProveedor) || firma(p.lineas) === firma(r.pedido.lineas)));
     if (repetido) {
       const cual = repetido.nroProveedor ? `N° ${repetido.nroProveedor}` : repetido.nombre;
-      return { mensajes: [`${archivo}: esta nota ya estaba cargada como «${cual}».`], descartado: `repite el pedido ${cual}`, repetidoId: repetido.id };
+      return { mensajes: [`${archivo}: esta nota ya estaba cargada como «${cual}».`], descartado: `repite el pedido ${cual}`, repetidoId: repetido.id,
+        leido: { lineas: r.pedido.lineas, nroProveedor: r.nroProveedor } };
     }
     const pedido = { ...r.pedido, id, nroProveedor: r.nroProveedor, origen: extra.origen, enlace: extra.enlace || '' };
     return { pedido, mensajes: [`${archivo}: ${r.pedido.lineas.reduce((s, l) => s + l.cantidad, 0)} unidades guardadas con fecha ${fechaAr(fechaNota)}${r.fechaArchivo ? ' (la del archivo)' : ''}.`, ...r.avisos] };
@@ -176,25 +192,32 @@ export default function ControlFacturas() {
 
   /** Sube notas de pedido. Si vienen desde una factura, quedan asignadas a esa factura. */
   async function subirPedidos(files: File[], fecha: string, paraFactura?: string) {
+    const p = prov;
     const nuevos: string[] = [];
-    const existentes = [...datos.pedidos];
     const asignar: string[] = [];
     setOcupado('Leyendo la nota de pedido…');
     try {
+      // Datos frescos: lo de la pantalla puede estar viejo (otra compu, una carga que falló) y repetiría una nota.
+      let frescos: Datos;
+      try { frescos = { ...VACIO, ...(await api(undefined, p)) } as Datos; }
+      catch (e) { if (sigue(p)) setAvisos([`No pude leer las notas cargadas: ${mensaje(e)}`]); return; }
+      const existentes = [...frescos.pedidos];
       for (const file of files) {
         try {
           const r = prepararPedido(await file.arrayBuffer(), file.name, fecha, { origen: 'manual' }, existentes);
-          if (r.pedido) { await api({ proveedor: prov, accion: 'guardarPedido', pedido: r.pedido }); existentes.push(r.pedido); asignar.push(r.pedido.id); }
+          if (r.pedido) { await api({ proveedor: p, accion: 'guardarPedido', pedido: r.pedido }); existentes.push(r.pedido); asignar.push(r.pedido.id); }
           else if (paraFactura && r.repetidoId) asignar.push(r.repetidoId); // ya estaba cargada: igual se asocia a esta factura
           nuevos.push(...r.mensajes);
         } catch (e) { nuevos.push(`${file.name}: ${mensaje(e)}`); }
       }
       if (paraFactura && asignar.length) {
-        const previos = datos.asignaciones[paraFactura] ?? [];
-        await api({ proveedor: prov, accion: 'guardarAsignacion', facturaId: paraFactura, pedidos: [...new Set([...previos, ...asignar])] });
+        const previos = frescos.asignaciones[paraFactura] ?? [];
+        await api({ proveedor: p, accion: 'guardarAsignacion', facturaId: paraFactura, pedidos: [...new Set([...previos, ...asignar])] });
         nuevos.push('La nota quedó asociada a esta factura.');
       }
-    } finally { setOcupado(''); }
+    } catch (e) { nuevos.push(`No pude asociar la nota a la factura: ${mensaje(e)}`); }
+    finally { setOcupado(''); }
+    if (!sigue(p)) return;
     await recargar();
     setAvisos(nuevos);
   }
@@ -212,7 +235,7 @@ export default function ControlFacturas() {
     const { factura, profunda = false } = opts;
     const codigosFactura = new Set((factura?.renglones || []).map((x) => claveCodigo(x.codigo)));
     const deLaFactura = (lineas: { codigo: string }[]) => new Set(lineas.map((l) => claveCodigo(l.codigo)).filter((c) => codigosFactura.has(c))).size;
-    const informe: InformeTrello = { facturaId: factura?.id, hora: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }), tablero: '', tarjetas: 0, conExcel: 0, filas: [], otroProveedor: 0, sinRevisar: 0 };
+    const informe: InformeTrello = { prov, facturaId: factura?.id, hora: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }), tablero: '', tarjetas: 0, conExcel: 0, filas: [], otroProveedor: 0, sinRevisar: 0 };
     setOcupado('Buscando la nota de pedido en Trello…');
     try {
       // Datos frescos de la base: lo que hay en pantalla puede estar viejo (otra compu, una carga que falló).
@@ -232,7 +255,7 @@ export default function ControlFacturas() {
         const h = huellaPedido(p.lineas);
         if (!borradasHuella.has(h)) borradasHuella.set(h, tarjeta);
       };
-      for (const v of Object.values(vistos)) if (v.motivo === 'borrado a mano') {
+      for (const v of Object.values(vistos)) if (v.motivo === 'borrado a mano' || REPITE_BORRADA.test(v.motivo || '')) {
         if (v.nro) borradasNro.set(v.nro, 'una nota borrada');
         if (v.huella) borradasHuella.set(v.huella, 'una nota borrada');
       }
@@ -249,7 +272,8 @@ export default function ControlFacturas() {
         ofrecidas.add(h);
         fila(t, a, 'borrada', ofrecer || detalle.includes('«') ? detalle : `${detalle} (la misma nota está en otra tarjeta de esta lista)`, { deEstaFactura: deLaFactura(p.lineas), pedido: ofrecer ? p : undefined });
       };
-      // Vuelta 0: notas borradas a mano antes de guardar su huella (se leen una sola vez).
+      // Vuelta 0: notas borradas a mano antes de guardar su huella, y copias de otra nota anotadas con un
+      // lector anterior (se leen primero, para reconocer una nota borrada antes de cargar nada).
       // Vuelta 1: lo nuevo y lo descartado con un lector anterior. Vuelta 2: lo anotado, si hace falta.
       const fase0: { t: TarjetaTrello; a: AdjuntoTrello }[] = [];
       const fase1: { t: TarjetaTrello; a: AdjuntoTrello }[] = [];
@@ -261,12 +285,15 @@ export default function ControlFacturas() {
           if (ya) { fila(t, a, 'ya estaba', 'nota ya cargada', { deEstaFactura: deLaFactura(ya.lineas) }); continue; }
           const marca = vistos[a.id];
           if (marca?.motivo === 'borrado a mano') (marca.huella ? fase2 : fase0).push({ t, a });
-          else if (!marca || (marca.version ?? 1) < LECTOR_TRELLO) fase1.push({ t, a });
+          else if (!marca || (marca.version ?? 1) < LECTOR_TRELLO) (REPITE.test(marca?.motivo || '') ? fase0 : fase1).push({ t, a });
           else if (/: es un pedido de /.test(marca.motivo || '')) informe.otroProveedor++;
           else fase2.push({ t, a });
         }
       }
-      const procesar = async (lista: { t: TarjetaTrello; a: AdjuntoTrello }[]) => {
+      // Si no se pudo bajar una nota borrada (o una copia anotada), esta vez no se carga ninguna nota
+      // nueva: podría ser la misma. Se reintenta la próxima búsqueda.
+      let sinRevisarBorradas = '';
+      const procesar = async (lista: { t: TarjetaTrello; a: AdjuntoTrello }[], primero = false) => {
         const LOTE = 4;
         for (let i = 0; i < lista.length; i += LOTE) {
           setOcupado(`Leyendo los Excel de Trello: ${Math.min(i + LOTE, lista.length)} de ${lista.length}…`);
@@ -277,53 +304,71 @@ export default function ControlFacturas() {
             const buf = bajados[j];
             const marca = vistos[a.id];
             // Falla de red: no se anota, se reintenta la próxima vez.
-            if (buf instanceof Error) { fallas.push(`«${t.nombre}» ${a.nombre}: ${buf.message}`); fila(t, a, 'falla', `no lo pude bajar: ${buf.message}`); continue; }
+            if (buf instanceof Error) {
+              // Un archivo que no existe más o es demasiado grande no se va a poder leer nunca: no frena el resto.
+              const definitivo = [400, 403, 404, 413].includes((buf as Error & { status?: number }).status ?? 0);
+              if (primero && !definitivo && !sinRevisarBorradas) sinRevisarBorradas = `«${t.nombre}» ${a.nombre}`;
+              fallas.push(`«${t.nombre}» ${a.nombre}: ${buf.message}`); fila(t, a, 'falla', `no lo pude bajar: ${buf.message}`); continue;
+            }
+            let leidas = 0;
             try {
               let res: ReturnType<typeof prepararPedido>;
               try {
                 res = prepararPedido(buf, a.nombre, t.inicio || t.creada, { id: `T-${a.id}`, nombre: t.nombre, origen: `trello:${t.id}`, enlace: t.enlace }, existentes);
               } catch (e) { res = { mensajes: [], descartado: `no es un pedido (${mensaje(e)})` }; }
+              const leido = res.pedido || res.leido;
+              leidas = leido ? deLaFactura(leido.lineas) : 0;
+              // Si falla anotar, no importa: se vuelve a leer la próxima vez.
+              const anotar = (motivo: string, firma?: { lineas: PedidoGuardado['lineas']; nroProveedor?: string }) =>
+                api({ proveedor: prov, accion: 'marcarTrelloVisto', adjunto: a.id, motivo, version: LECTOR_TRELLO, ...(firma ? { nro: firma.nroProveedor, huella: huellaPedido(firma.lineas) } : {}) }).catch(() => undefined);
               if (res.pedido && marca?.motivo === 'borrado a mano') {
                 // La borraste de Pedidos: no vuelve sola, pero se avisa si es de esta factura.
-                if (!marca.huella) await api({ proveedor: prov, accion: 'marcarTrelloVisto', adjunto: a.id, motivo: 'borrado a mano', version: LECTOR_TRELLO, nro: res.pedido.nroProveedor, huella: huellaPedido(res.pedido.lineas) });
                 anotarBorrada(res.pedido, t.nombre);
                 borrada(t, a, res.pedido, 'la borraste de Pedidos');
-              } else if (res.pedido && borradaIgual(res.pedido)) {
+                if (!marca.huella) await anotar('borrado a mano', res.pedido);
+              } else if (res.pedido && (borradaIgual(res.pedido) || REPITE.test(marca?.motivo || ''))) {
+                // Copia de una nota borrada a mano: tampoco vuelve sola. Si antes repetía una nota que ya
+                // no está en Pedidos, esa nota se borró a mano.
                 const de = borradaIgual(res.pedido);
-                await api({ proveedor: prov, accion: 'marcarTrelloVisto', adjunto: a.id, motivo: `«${t.nombre}» ${a.nombre}: repite una nota que borraste de Pedidos`, version: LECTOR_TRELLO });
+                anotarBorrada(res.pedido, t.nombre);
                 otros++;
-                borrada(t, a, res.pedido, `es la misma nota que borraste de Pedidos${de !== 'una nota borrada' ? ` («${de}»)` : ''}`);
+                borrada(t, a, res.pedido, de ? `es la misma nota que borraste de Pedidos${de !== 'una nota borrada' ? ` («${de}»)` : ''}` : 'repetía una nota que ya no está en Pedidos (la borraste)');
+                await anotar(`«${t.nombre}» ${a.nombre}: repite una nota que borraste de Pedidos`, res.pedido);
+              } else if (res.pedido && sinRevisarBorradas) {
+                fallas.push(`«${t.nombre}» ${a.nombre}: no la cargo todavía`);
+                fila(t, a, 'falla', `no la cargo todavía: no pude bajar ${sinRevisarBorradas}, que repite o es una nota que borraste de Pedidos, y podría ser esta misma. Se reintenta la próxima vez.`, { deEstaFactura: leidas });
               } else if (res.pedido) {
                 await api({ proveedor: prov, accion: 'guardarPedido', pedido: res.pedido });
                 existentes.push(res.pedido);
                 cargados.push(`«${t.nombre}»`);
-                fila(t, a, 'cargada', 'nota cargada ahora', { deEstaFactura: deLaFactura(res.pedido.lineas) });
+                fila(t, a, 'cargada', 'nota cargada ahora', { deEstaFactura: leidas });
               } else {
-                if (marca?.motivo !== 'borrado a mano') await api({ proveedor: prov, accion: 'marcarTrelloVisto', adjunto: a.id, motivo: `«${t.nombre}» ${a.nombre}: ${res.descartado}`, version: LECTOR_TRELLO });
+                if (marca?.motivo !== 'borrado a mano') await anotar(`«${t.nombre}» ${a.nombre}: ${res.descartado}`);
                 otros++;
-                const leida = /^(es un pedido de|repite )/.test(res.descartado || '');
-                fila(t, a, leida ? 'otra' : 'ilegible', leida ? res.descartado || '' : `no la pude leer como nota: ${res.descartado}`);
+                const legible = /^(es un pedido de|repite )/.test(res.descartado || '');
+                fila(t, a, legible ? 'otra' : 'ilegible', legible ? res.descartado || '' : `no la pude leer como nota: ${res.descartado}`, { deEstaFactura: leidas });
               }
             } catch (e) {
               // No se pudo guardar: se sigue con las demás y se reintenta la próxima vez.
               fallas.push(`«${t.nombre}» ${a.nombre}: ${mensaje(e)}`);
-              fila(t, a, 'falla', `no la pude guardar: ${mensaje(e)}`);
+              fila(t, a, 'falla', `no la pude guardar: ${mensaje(e)}`, { deEstaFactura: leidas });
             }
           }
         }
       };
-      await procesar(fase0);
+      await procesar(fase0, true);
       await procesar(fase1);
       const cubierta = () => existentes.some((p) => deLaFactura(p.lineas) > 0);
       if (factura && fase2.length && (profunda === true || (profunda === 'si-falta' && !cubierta()))) await procesar(fase2);
       else informe.sinRevisar += fase2.length;
+      informe.cubierta = !!factura && cubierta();
       const out = cargados.length ? [`Trello: traje ${cargados.length} nota(s) de pedido nueva(s): ${cargados.join(', ')}.`] : [];
       if (otros) out.push(`Trello: ${otros} Excel no eran notas nuevas de este proveedor (otro proveedor, repetidas, borradas o ilegibles).`);
       if (fallas.length) out.push(`Trello: no pude bajar o guardar ${fallas.length} Excel (${fallas.slice(0, 2).join('; ')}); se reintenta la próxima vez.`);
       const borradas = informe.filas.filter((f) => f.estado === 'borrada' && f.pedido && f.deEstaFactura > 0);
       if (borradas.length) out.push(`Trello: ${borradas.map((f) => `«${f.tarjeta}»`).join(', ')} tiene(n) artículos de esta factura pero la(s) borraste de Pedidos: abrí la entrega y tocá «Volver a cargar».`);
       const ilegibles = informe.filas.filter((f) => f.estado === 'ilegible' || f.estado === 'falla').length;
-      if (factura && !cubierta() && !borradas.length) out.push(`Trello: revisé ${informe.conExcel} tarjeta(s) con Excel y ninguna de las notas que pude leer tiene artículos de la factura ${factura.numero}.${ilegibles ? ` ${ilegibles} archivo(s) no los pude leer.` : ''} El detalle de cada tarjeta está en la entrega.`);
+      if (factura && !cubierta() && !informe.filas.some((f) => f.deEstaFactura > 0)) out.push(`Trello: revisé ${informe.conExcel} tarjeta(s) con Excel y ninguna de las notas que pude leer tiene artículos de la factura ${factura.numero}.${ilegibles ? ` ${ilegibles} archivo(s) no los pude leer.` : ''} El detalle de cada tarjeta está en la entrega.`);
       return { avisos: out, informe };
     } catch (e) {
       informe.error = mensaje(e);
@@ -332,7 +377,9 @@ export default function ControlFacturas() {
   }
 
   async function buscarEnTrello() {
+    const p = prov;
     const { avisos: m, informe: inf } = await sincronizarTrello();
+    if (!sigue(p)) return;
     await recargar();
     setInforme(inf);
     setAvisos(m.length ? m : ['Trello: no hay notas de pedido nuevas de este proveedor.']);
@@ -340,7 +387,9 @@ export default function ControlFacturas() {
 
   /** Desde una entrega sin nota: revisa de nuevo TODOS los Excel de Trello buscando los artículos de esa factura. */
   async function buscarEnTrelloParaFactura(factura: Factura) {
+    const p = prov;
     const { avisos: m, informe: inf } = await sincronizarTrello({ factura, profunda: true });
+    if (!sigue(p)) return;
     await recargar();
     setInforme(inf);
     setAvisos(m.length ? m : ['Trello: no hay notas de pedido nuevas de este proveedor.']);
@@ -350,26 +399,28 @@ export default function ControlFacturas() {
   /** Vuelve a cargar una nota de Trello que se había borrado a mano (si no está ya cargada de otra forma). */
   async function recargarBorrada(f: FilaTrello) {
     const ped = f.pedido;
-    if (!ped) return;
+    // La nota es del proveedor de la búsqueda: nunca se guarda en otro.
+    const p = informe?.prov;
+    if (!ped || !p || !sigue(p) || !informe?.filas.includes(f)) return;
     const marcar = (estado: EstadoTrello, detalle: string) =>
       setInforme((inf) => inf && { ...inf, filas: inf.filas.map((x) => (x === f ? { ...x, estado, detalle, pedido: undefined } : x)) });
     setOcupado('Cargando la nota de nuevo…');
     try {
-      const frescos = { ...VACIO, ...(await api(undefined, prov)) } as Datos;
+      const frescos = { ...VACIO, ...(await api(undefined, p)) } as Datos;
       const h = huellaPedido(ped.lineas);
-      const igual = frescos.pedidos.find((p) => p.id !== ped.id && ((ped.nroProveedor && p.nroProveedor === ped.nroProveedor) || huellaPedido(p.lineas) === h));
+      const igual = frescos.pedidos.find((x) => x.id !== ped.id && ((ped.nroProveedor && x.nroProveedor === ped.nroProveedor) || huellaPedido(x.lineas) === h));
       if (igual) {
         const cual = igual.nroProveedor ? `N° ${igual.nroProveedor}` : igual.nombre;
         marcar('ya estaba', `ya está cargada como «${cual}»`);
         setAvisos([`La nota «${f.tarjeta}» ya está cargada como «${cual}»: no la cargo dos veces.`]);
       } else {
-        await api({ proveedor: prov, accion: 'guardarPedido', pedido: ped, recargar: true });
+        await api({ proveedor: p, accion: 'guardarPedido', pedido: ped, recargar: true });
         marcar('cargada', 'nota cargada de nuevo');
         setAvisos([`Nota «${f.tarjeta}» cargada de nuevo.`]);
       }
     } catch (e) { setAvisos([`No pude cargar la nota «${f.tarjeta}»: ${mensaje(e)}`]); }
     finally { setOcupado(''); }
-    await recargar();
+    if (sigue(p)) await recargar();
   }
 
   /** Lee la foto del remito y la guarda en la factura. Si no se puede, deja el error para escribirlo a mano. */
@@ -386,7 +437,9 @@ export default function ControlFacturas() {
   }
 
   async function fotosParaFactura(facturaId: string, files: File[]) {
+    const p = prov;
     const m = await remitoDeFotos(facturaId, files);
+    if (!sigue(p)) return;
     await recargar();
     setAvisos(m);
     setAbierta(facturaId);
@@ -395,23 +448,29 @@ export default function ControlFacturas() {
   /** Nueva entrega: factura (PDF) + fotos del remito. La nota de pedido se busca sola en Trello. */
   async function controlarEntrega() {
     if (!nuevaFactura) return;
+    const p = prov;
     const nuevos: string[] = [];
     let factura: Factura;
     let av: string[];
+    setOcupado('Leyendo la factura…');
     try {
       const paginas = await itemsPdf(nuevaFactura);
-      const leida = prov === 'id' ? leerFacturaId(paginas, '') : leerFacturaDistrinando(paginas, '');
+      const leida = p === 'id' ? leerFacturaId(paginas, '') : leerFacturaDistrinando(paginas, '');
       factura = { ...leida.factura, id: `F-${slug(leida.factura.numero || nuevaFactura.name)}` };
       av = leida.avisos;
     } catch (e) { setAvisos([`${nuevaFactura.name}: ${mensaje(e)}`]); return; }
+    finally { setOcupado(''); }
+    if (!sigue(p)) return;
     const { avisos: deTrello, informe: inf } = await sincronizarTrello({ factura, profunda: 'si-falta' });
+    if (!sigue(p)) return;
     setInforme(inf);
     try {
       const ya = datos.facturas.some((f) => f.id === factura.id);
-      await api({ proveedor: prov, accion: 'guardarFactura', factura });
+      await api({ proveedor: p, accion: 'guardarFactura', factura });
       nuevos.push(`Factura ${factura.numero} ${ya ? 'actualizada (ya estaba cargada)' : 'guardada'}: ${factura.renglones.length} renglones.`, ...av);
     } catch (e) { setAvisos([`${nuevaFactura.name}: ${mensaje(e)}`]); return; }
     if (nuevasFotos.length) nuevos.push(...await remitoDeFotos(factura.id, nuevasFotos));
+    if (!sigue(p)) return;
     setNuevaFactura(null); setNuevasFotos([]);
     await recargar();
     setAvisos([...nuevos, ...deTrello]);
@@ -419,16 +478,19 @@ export default function ControlFacturas() {
   }
 
   const pedidosOrd = [...datos.pedidos].sort((a, b) => b.fecha.localeCompare(a.fecha));
+  // Las notas subidas a mano y borradas también se anotan ahí (con «P:»), pero no son Excel de Trello.
+  const excelTrello = Object.entries(datos.trelloVistos).filter(([k]) => /^[a-f0-9]{24}$/.test(k)).map(([, v]) => v);
   const facturasRes = [...res.facturas].reverse();
-  const cambiarProv = (p: Prov) => { setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
+  const cambiarProv = (p: Prov) => { provRef.current = p; setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
 
   const cabecera = (<>
     <h2 style={{ marginTop: 0, marginBottom: 8 }}>🧾 Control de entregas</h2>
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
       <span style={{ fontSize: '0.88rem', opacity: 0.8 }}>Proveedor:</span>
       {PROVS.map((p) => (
-        <button key={p.id} onClick={() => cambiarProv(p.id)}
-          style={{ ...boton, background: prov === p.id ? '#6366f1' : 'rgba(255,255,255,0.04)', border: prov === p.id ? '1px solid #6366f1' : boton.border, opacity: prov === p.id ? 1 : 0.75 }}>
+        <button key={p.id} onClick={() => cambiarProv(p.id)} disabled={!!ocupado && prov !== p.id}
+          title={ocupado && prov !== p.id ? 'Esperá a que termine lo que está haciendo' : undefined}
+          style={{ ...boton, background: prov === p.id ? '#6366f1' : 'rgba(255,255,255,0.04)', border: prov === p.id ? '1px solid #6366f1' : boton.border, opacity: prov === p.id ? 1 : ocupado ? 0.4 : 0.75, cursor: ocupado && prov !== p.id ? 'not-allowed' : 'pointer' }}>
           {p.nombre}
         </button>
       ))}
@@ -480,7 +542,7 @@ export default function ControlFacturas() {
             onBorrarRemito={() => confirm('¿Borrar el remito de esta entrega?') && guardar({ accion: 'borrarRemito', facturaId: r.factura.id })}
             onNota={(f) => subirPedidos(f, r.factura.fecha, r.factura.id)}
             onTrello={() => buscarEnTrelloParaFactura(r.factura)}
-            informe={informe?.facturaId === r.factura.id ? informe : null} onRecargarBorrada={recargarBorrada} />)}
+            informe={informe?.prov === prov && informe.facturaId === r.factura.id ? informe : null} onRecargarBorrada={recargarBorrada} />)}
 
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 16, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
             <button style={enlace} onClick={() => setVista('pedidos')}>📋 Notas de pedido cargadas ({datos.pedidos.length})</button>
@@ -506,10 +568,10 @@ export default function ControlFacturas() {
           <p style={{ fontSize: '0.78rem', opacity: 0.7, marginTop: 0 }}>
             {prov === 'id' ? 'La fecha de cada nota sale de la fila 1 del Excel de iD.' : 'Distrinando no trae la fecha en el Excel: poné la del día que lo mandaste.'} La fecha ordena qué nota se factura primero; se puede corregir abajo.
           </p>
-          {Object.keys(datos.trelloVistos).length > 0 && (
+          {excelTrello.length > 0 && (
             <details style={{ fontSize: '0.8rem', margin: '0 0 10px', opacity: 0.85 }}>
-              <summary style={{ cursor: 'pointer' }}>{Object.keys(datos.trelloVistos).length} Excel de Trello que no se cargaron como notas de este proveedor</summary>
-              {Object.values(datos.trelloVistos).map((v, i) => <div key={i}>• {v.motivo || 'sin detalle'}{v.fecha ? ` (${fechaAr(v.fecha)})` : ''}</div>)}
+              <summary style={{ cursor: 'pointer' }}>{excelTrello.length} Excel de Trello que no se cargaron como notas de este proveedor</summary>
+              {excelTrello.map((v, i) => <div key={i}>• {v.motivo || 'sin detalle'}{v.fecha ? ` (${fechaAr(v.fecha)})` : ''}</div>)}
             </details>
           )}
           <div style={{ overflowX: 'auto' }}>
@@ -837,9 +899,9 @@ function InformeTrelloCaja({ informe, ocupado, onRecargar }: { informe: InformeT
         🗂️ Lo que revisé en Trello ({informe.hora}){informe.tablero ? ` · tablero «${informe.tablero}»` : ''}: {informe.tarjetas} tarjeta(s) abiertas, {informe.conExcel} con Excel.
       </div>
       {informe.error && <div style={{ color: '#f87171' }}>❌ {informe.error}</div>}
-      {!informe.error && !conArticulos && <div>
-        Ninguna de las notas que pude leer tiene artículos de esta factura.{sinLeer ? ` ${sinLeer} archivo(s) no los pude leer (abajo el motivo).` : ''}
-      </div>}
+      {!informe.error && !conArticulos && (informe.cubierta
+        ? <div>Las notas con artículos de esta factura ya estaban cargadas.{sinLeer ? ` ${sinLeer} archivo(s) no los pude leer (abajo el motivo).` : ''}</div>
+        : <div>Ninguna de las notas que pude leer tiene artículos de esta factura.{sinLeer ? ` ${sinLeer} archivo(s) no los pude leer (abajo el motivo).` : ''}</div>)}
       {arriba.map(linea)}
       {leidas.length > 0 && <details style={{ marginTop: 4 }}>
         <summary style={{ cursor: 'pointer', opacity: 0.8 }}>{leidas.length} nota(s) o archivo(s) leídos, sin artículos de esta factura</summary>

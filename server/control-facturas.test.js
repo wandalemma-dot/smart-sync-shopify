@@ -89,6 +89,28 @@ describe('guardado del control de facturas', () => {
     expect((await leerTodo(fn, 'id')).trelloVistos['b'.repeat(24)]).toMatchObject({ motivo: 'borrado a mano', nro: '00002595', huella: 'abc123' });
     await aplicar(fn, { proveedor: 'id', accion: 'borrarPedido', id: borrada.id, huella: '../../x' });
     expect((await leerTodo(fn, 'id')).trelloVistos['b'.repeat(24)].huella).toBeUndefined();
+    // Una copia de una nota borrada tampoco se guarda sola.
+    const copia = { id: `T-${'d'.repeat(24)}`, nombre: 'Otra tarjeta', fecha: '2026-11-01', lineas: [] };
+    await aplicar(fn, { proveedor: 'id', accion: 'marcarTrelloVisto', adjunto: 'd'.repeat(24), motivo: '«Otra tarjeta» n.xlsx: repite una nota que borraste de Pedidos', version: 3, huella: 'abc123' });
+    await expect(aplicar(fn, { proveedor: 'id', accion: 'guardarPedido', pedido: copia })).rejects.toThrow(/Volver a cargar/);
+    await aplicar(fn, { proveedor: 'id', accion: 'guardarPedido', pedido: copia, recargar: true });
+    expect((await leerTodo(fn, 'id')).trelloVistos['d'.repeat(24)]).toBeUndefined();
+  });
+
+  it('una nota subida a mano y borrada queda anotada aparte, y deja de contar si se vuelve a subir', async () => {
+    const { fn } = memoria();
+    const nota = { id: 'P-00002595-2026-11-01', nombre: 'Nota', fecha: '2026-11-01', lineas: [] };
+    await aplicar(fn, { proveedor: 'id', accion: 'guardarPedido', pedido: nota });
+    await aplicar(fn, { proveedor: 'id', accion: 'borrarPedido', id: nota.id, nro: '00002595', huella: 'abc123' });
+    let t = await leerTodo(fn, 'id');
+    expect(t.pedidos).toEqual([]);
+    expect(t.trelloVistos[`P:${nota.id}`]).toMatchObject({ motivo: 'borrado a mano', nro: '00002595', huella: 'abc123' });
+    await aplicar(fn, { proveedor: 'id', accion: 'guardarPedido', pedido: nota });
+    t = await leerTodo(fn, 'id');
+    expect(t.trelloVistos[`P:${nota.id}`]).toBeUndefined();
+    // Sin huella no hay nada que reconocer: no se anota.
+    await aplicar(fn, { proveedor: 'id', accion: 'borrarPedido', id: nota.id });
+    expect((await leerTodo(fn, 'id')).trelloVistos).toEqual({});
   });
 
   it('guarda el remito de cada factura y lo borra con la factura', async () => {
