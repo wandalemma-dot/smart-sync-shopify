@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { analizarFacturas, compararRecepcion, conImpuestos, fmt, mensajePagos, mismoTalle, reporteReclamo, resumenPedidos } from '../controlFacturas';
+import { analizarFacturas, compararRecepcion, conImpuestos, fmt, huellaPedido, mensajePagos, mismoTalle, reporteReclamo, resumenPedidos } from '../controlFacturas';
 import type { Factura, Pedido, RenglonFactura } from '../controlFacturas';
 import { numero, leerFacturaId, leerPedidoExcel, leerPedidoAuto, leerPedidoId, leerTextoRemito, textoRemito } from '../lectoresFacturas';
 
@@ -345,5 +345,15 @@ describe('tres partes obligatorias y remito', () => {
     ]);
     expect(errores).toHaveLength(2);
     expect(textoRemito(remito).split('\n').slice(0, 3)).toEqual(['Remito 0016-00125246', 'Fecha 04/11/2026', '571818C 5.0/2 6.0/2']);
+  });
+});
+
+describe('huellaPedido (notas de Trello borradas a mano, 11-nov-2026)', () => {
+  it('la misma nota en otro orden da la misma huella; otra cantidad, otra huella', () => {
+    const a = [{ sku: 'A13438C-055', cantidad: 4 }, { sku: 'CTO0325003-S', cantidad: 2 }];
+    const b = [{ sku: 'CTO0325003-S', cantidad: 2 }, { sku: 'A13438C-055', cantidad: 4 }];
+    expect(huellaPedido(a)).toBe(huellaPedido(b));
+    expect(huellaPedido(a)).toMatch(/^[a-z0-9]{1,16}$/);
+    expect(huellaPedido([{ sku: 'A13438C-055', cantidad: 5 }, { sku: 'CTO0325003-S', cantidad: 2 }])).not.toBe(huellaPedido(a));
   });
 });

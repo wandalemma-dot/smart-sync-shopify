@@ -19,12 +19,56 @@ function error(msg, status = 502) {
   return Object.assign(new Error(msg), { status });
 }
 
+// Solo a Trello se le mandan las claves. La descarga de un adjunto puede redirigir a otro
+// servidor (el archivo guardado): ahí se sigue la redirección SIN las claves, porque ese
+// servidor ya trae su propia firma en la dirección y rechaza el pedido si llega otra.
+const HOSTS_TRELLO = new Set(['api.trello.com', 'trello.com']);
+const esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Texto corto de un error de Trello (o del servidor de archivos), para mostrar el motivo. */
+async function detalle(r) {
+  try {
+    const t = String(await r.text());
+    const msg = /<Message>([^<]*)<\/Message>/i.exec(t)?.[1] ?? t.replace(/<[^>]*>/g, ' ');
+    return msg.replace(/\s+/g, ' ').trim().slice(0, 120);
+  } catch { return ''; }
+}
+
 async function get(ruta, fetchImpl, comoBinario = false) {
-  const r = await fetchImpl(`${API}${ruta}`, { headers: { Authorization: auth(), Accept: comoBinario ? '*/*' : 'application/json' } });
-  if (r.status === 401) throw error('Trello rechazó la clave o el token. Revisá TRELLO_KEY y TRELLO_TOKEN en Vercel.', 503);
-  if (r.status === 404) throw error('Trello no encontró el tablero, la tarjeta o el adjunto.', 404);
-  if (!r.ok) throw error(`Trello respondió ${r.status}.`);
-  return comoBinario ? Buffer.from(await r.arrayBuffer()) : r.json();
+  let url = `${API}${ruta}`;
+  for (let saltos = 0, esperas = 0; ;) {
+    const destino = new URL(url);
+    const headers = { Accept: comoBinario ? '*/*' : 'application/json' };
+    if (HOSTS_TRELLO.has(destino.hostname)) headers.Authorization = auth();
+    const r = await fetchImpl(url, { headers, redirect: 'manual' });
+    // Trello limita la cantidad de pedidos seguidos (100 cada 10 s): se espera y se reintenta.
+    // Si no dice cuánto esperar, 2, 4 y 8 segundos (alcanza para que se libere la ventana).
+    if (r.status === 429 && esperas < 3) {
+      esperas++;
+      const h = r.headers?.get?.('retry-after');
+      const pide = h == null || String(h).trim() === '' ? NaN : Number(h);
+      try { await r.body?.cancel?.(); } catch { /* sin cuerpo */ }
+      await esperar(Math.min(8000, Number.isFinite(pide) && pide >= 0 ? pide * 1000 : 1000 * 2 ** esperas));
+      continue;
+    }
+    if (r.status >= 300 && r.status < 400) {
+      const sig = r.headers?.get?.('location');
+      if (!sig || saltos >= 5) throw error('Trello respondió con una redirección inválida.');
+      const nueva = new URL(sig, url);
+      if (nueva.protocol !== 'https:') throw error('Trello redirigió a una dirección no segura.');
+      url = nueva.href;
+      saltos++;
+      continue;
+    }
+    if (!r.ok) {
+      const por = await detalle(r);
+      const y = por ? ` (${por})` : '';
+      if (r.status === 401) throw error(`Trello rechazó el pedido: 401${y}. Si pasa con todo, revisá TRELLO_KEY y TRELLO_TOKEN en Vercel.`, 503);
+      if (r.status === 404) throw error(`Trello no encontró el tablero, la tarjeta o el adjunto${y}.`, 404);
+      throw error(`Trello respondió ${r.status}${y}.`);
+    }
+    return comoBinario ? Buffer.from(await r.arrayBuffer()) : r.json();
+  }
 }
 
 const esExcel = (nombre) => /\.(xlsx|xls)$/i.test(String(nombre || ''));
@@ -54,18 +98,34 @@ export async function listarTarjetas(fetchImpl = fetch) {
       adjuntos: (t.attachments || [])
         .filter((a) => a.isUpload && esExcel(a.name) && RE_ID.test(a.id))
         .map((a) => ({ id: a.id, nombre: String(a.name), bytes: Number(a.bytes) || 0, fecha: String(a.date || '').slice(0, 10) })),
+      // Lo que no se puede leer como nota (un enlace, un PDF, una foto): solo para avisarlo.
+      otrosAdjuntos: (t.attachments || [])
+        .filter((a) => !(a.isUpload && esExcel(a.name) && RE_ID.test(a.id)))
+        .slice(0, 5)
+        .map((a) => `${String(a.name || 'sin nombre').slice(0, 80)}${a.isUpload ? '' : ' (enlace)'}`),
     })),
   };
+}
+
+// El id del tablero no cambia: se guarda mientras la función sigue viva (menos pedidos a Trello).
+const cacheTablero = new Map();
+async function idTablero(fetchImpl) {
+  const b = tablero();
+  if (cacheTablero.has(b)) return cacheTablero.get(b);
+  const tab = await get(`/boards/${encodeURIComponent(b)}?fields=id`, fetchImpl);
+  const v = RE_ID.test(String(tab?.id || '')) ? tab.id : '';
+  if (v) cacheTablero.set(b, v);
+  return v;
 }
 
 /** Baja un Excel adjunto, verificando que la tarjeta sea del tablero configurado. */
 export async function bajarAdjunto(tarjetaId, adjuntoId, fetchImpl = fetch) {
   if (!RE_ID.test(String(tarjetaId)) || !RE_ID.test(String(adjuntoId))) throw error('Identificador inválido.', 400);
-  const [tarjeta, tab] = await Promise.all([
+  const [tarjeta, idTab] = await Promise.all([
     get(`/cards/${tarjetaId}?fields=idBoard,closed`, fetchImpl),
-    get(`/boards/${encodeURIComponent(tablero())}?fields=id`, fetchImpl),
+    idTablero(fetchImpl),
   ]);
-  if (!tarjeta || tarjeta.idBoard !== tab?.id) throw error('La tarjeta no es del tablero de compras.', 403);
+  if (!tarjeta || !idTab || tarjeta.idBoard !== idTab) throw error('La tarjeta no es del tablero de compras.', 403);
   const adj = await get(`/cards/${tarjetaId}/attachments/${adjuntoId}?fields=id,name,bytes,isUpload`, fetchImpl);
   if (!adj?.isUpload || !esExcel(adj.name)) throw error('El adjunto no es un Excel subido a la tarjeta.', 400);
   if (Number(adj.bytes) > MAX_DESCARGA) throw error('El Excel pesa más de 25 MB: subilo a mano.', 413);

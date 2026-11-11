@@ -14,7 +14,7 @@ import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import Asistente from './Asistente';
 import {
-  analizarFacturas, claveRecepcion, compararRecepcion, fmt, mensajePagos, reporteReclamo, resumenPedidos,
+  analizarFacturas, claveCodigo, claveRecepcion, huellaPedido, compararRecepcion, fmt, mensajePagos, reporteReclamo, resumenPedidos,
   type ControlRenglon, type Factura, type Pedido, type Recepcion, type Remito, type ResultadoFactura,
 } from './utils/controlFacturas';
 import { leerFacturaDistrinando, leerFacturaId, leerPedidoAuto, leerTextoRemito, textoRemito, type ItemPdf } from './utils/lectoresFacturas';
@@ -35,10 +35,10 @@ interface Datos {
   remitos: Record<string, Remito>;
   config: { condicionesPago?: string };
   /** Excel de Trello ya revisados que no se cargaron (otro proveedor, no es pedido, repetido, borrado). */
-  trelloVistos: Record<string, { motivo?: string; fecha?: string; version?: number }>;
+  trelloVistos: Record<string, { motivo?: string; fecha?: string; version?: number; nro?: string; huella?: string }>;
 }
 /** Versión del lector de Excel de Trello. Subirla cuando cambie: los descartados se revisan de nuevo. */
-const LECTOR_TRELLO = 2;
+const LECTOR_TRELLO = 3;
 const VACIO: Datos = { pedidos: [], facturas: [], asignaciones: {}, recepciones: {}, remitos: {}, config: {}, trelloVistos: {} };
 const PROVS: { id: Prov; nombre: string }[] = [
   { id: 'id', nombre: 'iD (Converse, Le Coq)' },
@@ -47,7 +47,24 @@ const PROVS: { id: Prov; nombre: string }[] = [
 ];
 type Vista = 'entregas' | 'pedidos' | 'deposito' | 'reportes';
 interface AdjuntoTrello { id: string; nombre: string }
-interface TarjetaTrello { id: string; nombre: string; enlace: string; lista: string; creada: string; inicio: string; adjuntos: AdjuntoTrello[] }
+interface TarjetaTrello { id: string; nombre: string; enlace: string; lista: string; creada: string; inicio: string; adjuntos: AdjuntoTrello[]; otrosAdjuntos?: string[] }
+type EstadoTrello = 'cargada' | 'ya estaba' | 'borrada' | 'otra' | 'ilegible' | 'no es excel' | 'falla';
+/** Qué pasó con cada Excel de Trello en la última búsqueda (se muestra en la entrega). */
+interface FilaTrello {
+  tarjeta: string; enlace: string; archivo: string; adjunto?: string; estado: EstadoTrello; detalle: string;
+  /** Cuántos artículos de la factura tiene esa nota. */
+  deEstaFactura: number;
+  /** Nota leída de un Excel borrado a mano, lista para volver a cargarla. */
+  pedido?: PedidoGuardado;
+}
+interface InformeTrello {
+  facturaId?: string; hora: string; tablero: string; tarjetas: number; conExcel: number; filas: FilaTrello[];
+  /** Excel ya anotados como de otro proveedor: no se vuelven a bajar. */
+  otroProveedor: number;
+  /** Excel revisados antes que esta vez no se volvieron a bajar. */
+  sinRevisar: number;
+  error?: string;
+}
 /** Enlace a la tarjeta de Trello de un pedido importado desde ahí. */
 const enlaceTrello = (p?: PedidoGuardado) => {
   const m = /^trello:([a-f0-9]{24})$/.exec(p?.origen || '');
@@ -105,6 +122,7 @@ export default function ControlFacturas() {
   const [ocupado, setOcupado] = useState('');
   const [nuevaFactura, setNuevaFactura] = useState<File | null>(null);
   const [nuevasFotos, setNuevasFotos] = useState<File[]>([]);
+  const [informe, setInforme] = useState<InformeTrello | null>(null);
 
   const recargar = useCallback(async () => {
     if (prov === 'family') return; // Family tiene su propia pantalla (ControlFamily)
@@ -185,58 +203,173 @@ export default function ControlFacturas() {
    * Revisa las tarjetas abiertas del tablero de Trello y carga como pedidos los Excel
    * nuevos de este proveedor. Cada Excel se baja una sola vez: los que no son pedidos
    * de este proveedor (o están repetidos, o se borraron a mano) quedan anotados.
+   * Con una factura, «profunda» vuelve a revisar también los anotados (menos los que son
+   * de otro proveedor): true siempre, 'si-falta' solo si ninguna nota tiene sus artículos.
+   * Una nota borrada a mano (o una copia de ella en otra tarjeta) nunca vuelve sola.
+   * Devuelve los avisos y un informe tarjeta por tarjeta, para ver qué pasó con cada Excel.
    */
-  async function sincronizarTrello(): Promise<string[]> {
+  async function sincronizarTrello(opts: { factura?: Factura; profunda?: boolean | 'si-falta' } = {}): Promise<{ avisos: string[]; informe: InformeTrello }> {
+    const { factura, profunda = false } = opts;
+    const codigosFactura = new Set((factura?.renglones || []).map((x) => claveCodigo(x.codigo)));
+    const deLaFactura = (lineas: { codigo: string }[]) => new Set(lineas.map((l) => claveCodigo(l.codigo)).filter((c) => codigosFactura.has(c))).size;
+    const informe: InformeTrello = { facturaId: factura?.id, hora: new Date().toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }), tablero: '', tarjetas: 0, conExcel: 0, filas: [], otroProveedor: 0, sinRevisar: 0 };
     setOcupado('Buscando la nota de pedido en Trello…');
     try {
+      // Datos frescos de la base: lo que hay en pantalla puede estar viejo (otra compu, una carga que falló).
+      const frescos = { ...VACIO, ...(await api(undefined, prov)) } as Datos;
+      const vistos = frescos.trelloVistos;
+      const existentes = [...frescos.pedidos];
       const r = await fetch('/api/trello?accion=tarjetas', { cache: 'no-store' });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.sinTrello ? 'Trello no está conectado (faltan las claves en Vercel).' : d.error || `Error ${r.status}`);
-      // Los Excel descartados con un lector anterior se vuelven a revisar; los borrados a mano, nunca.
-      const vistos = Object.entries(datos.trelloVistos).filter(([, v]) => v.motivo === 'borrado a mano' || (v.version ?? 1) >= LECTOR_TRELLO);
-      const conocidos = new Set([...datos.pedidos.map((p) => p.id), ...vistos.map(([a]) => `T-${a}`)]);
-      const nuevos = (d.tarjetas as TarjetaTrello[]).flatMap((t) => t.adjuntos.map((a) => ({ t, a }))).filter(({ a }) => !conocidos.has(`T-${a.id}`));
-      const existentes = [...datos.pedidos];
+      const tarjetas = (d.tarjetas || []) as TarjetaTrello[];
+      Object.assign(informe, { tablero: String(d.tablero || ''), tarjetas: tarjetas.length, conExcel: tarjetas.filter((t) => t.adjuntos.length).length });
+      // Notas borradas a mano, por número y por huella: una copia en otra tarjeta tampoco vuelve sola.
+      const borradasNro = new Map<string, string>();
+      const borradasHuella = new Map<string, string>();
+      const anotarBorrada = (p: PedidoGuardado, tarjeta: string) => {
+        if (p.nroProveedor && !borradasNro.has(p.nroProveedor)) borradasNro.set(p.nroProveedor, tarjeta);
+        const h = huellaPedido(p.lineas);
+        if (!borradasHuella.has(h)) borradasHuella.set(h, tarjeta);
+      };
+      for (const v of Object.values(vistos)) if (v.motivo === 'borrado a mano') {
+        if (v.nro) borradasNro.set(v.nro, 'una nota borrada');
+        if (v.huella) borradasHuella.set(v.huella, 'una nota borrada');
+      }
+      const borradaIgual = (p: PedidoGuardado) => (p.nroProveedor && borradasNro.get(p.nroProveedor)) || borradasHuella.get(huellaPedido(p.lineas)) || '';
+      const ofrecidas = new Set<string>(); // «Volver a cargar» una sola vez por nota
       const cargados: string[] = [];
       const fallas: string[] = [];
       let otros = 0;
-      const LOTE = 4;
-      for (let i = 0; i < nuevos.length; i += LOTE) {
-        setOcupado(`Leyendo notas nuevas de Trello: ${Math.min(i + LOTE, nuevos.length)} de ${nuevos.length}…`);
-        const lote = nuevos.slice(i, i + LOTE);
-        const bajados = await Promise.all(lote.map(({ t, a }) => bajarAdjunto(t.id, a.id).then((b) => b, (e) => e as Error)));
-        for (let j = 0; j < lote.length; j++) {
-          const { t, a } = lote[j];
-          const buf = bajados[j];
-          // Falla de red: no se anota, se reintenta la próxima vez.
-          if (buf instanceof Error) { fallas.push(`«${t.nombre}» ${a.nombre}: ${buf.message}`); continue; }
-          let res: ReturnType<typeof prepararPedido>;
-          try {
-            res = prepararPedido(buf, a.nombre, t.inicio || t.creada, { id: `T-${a.id}`, nombre: t.nombre, origen: `trello:${t.id}`, enlace: t.enlace }, existentes);
-          } catch (e) { res = { mensajes: [], descartado: `no es un pedido (${mensaje(e)})` }; }
-          if (res.pedido) {
-            await api({ proveedor: prov, accion: 'guardarPedido', pedido: res.pedido });
-            existentes.push(res.pedido);
-            cargados.push(`«${t.nombre}»`);
-          } else {
-            await api({ proveedor: prov, accion: 'marcarTrelloVisto', adjunto: a.id, motivo: `«${t.nombre}» ${a.nombre}: ${res.descartado}`, version: LECTOR_TRELLO });
-            otros++;
-          }
+      const fila = (t: TarjetaTrello, a: AdjuntoTrello, estado: EstadoTrello, detalle: string, extra: Partial<FilaTrello> = {}) =>
+        informe.filas.push({ tarjeta: t.nombre, enlace: t.enlace, archivo: a.nombre, adjunto: a.id, estado, detalle, deEstaFactura: 0, ...extra });
+      const borrada = (t: TarjetaTrello, a: AdjuntoTrello, p: PedidoGuardado, detalle: string) => {
+        const h = huellaPedido(p.lineas);
+        const ofrecer = !ofrecidas.has(h);
+        ofrecidas.add(h);
+        fila(t, a, 'borrada', ofrecer || detalle.includes('«') ? detalle : `${detalle} (la misma nota está en otra tarjeta de esta lista)`, { deEstaFactura: deLaFactura(p.lineas), pedido: ofrecer ? p : undefined });
+      };
+      // Vuelta 0: notas borradas a mano antes de guardar su huella (se leen una sola vez).
+      // Vuelta 1: lo nuevo y lo descartado con un lector anterior. Vuelta 2: lo anotado, si hace falta.
+      const fase0: { t: TarjetaTrello; a: AdjuntoTrello }[] = [];
+      const fase1: { t: TarjetaTrello; a: AdjuntoTrello }[] = [];
+      const fase2: { t: TarjetaTrello; a: AdjuntoTrello }[] = [];
+      for (const t of tarjetas) {
+        for (const nombre of t.otrosAdjuntos || []) informe.filas.push({ tarjeta: t.nombre, enlace: t.enlace, archivo: nombre, estado: 'no es excel', detalle: 'no es un Excel subido a la tarjeta', deEstaFactura: 0 });
+        for (const a of t.adjuntos) {
+          const ya = existentes.find((p) => p.id === `T-${a.id}`);
+          if (ya) { fila(t, a, 'ya estaba', 'nota ya cargada', { deEstaFactura: deLaFactura(ya.lineas) }); continue; }
+          const marca = vistos[a.id];
+          if (marca?.motivo === 'borrado a mano') (marca.huella ? fase2 : fase0).push({ t, a });
+          else if (!marca || (marca.version ?? 1) < LECTOR_TRELLO) fase1.push({ t, a });
+          else if (/: es un pedido de /.test(marca.motivo || '')) informe.otroProveedor++;
+          else fase2.push({ t, a });
         }
       }
+      const procesar = async (lista: { t: TarjetaTrello; a: AdjuntoTrello }[]) => {
+        const LOTE = 4;
+        for (let i = 0; i < lista.length; i += LOTE) {
+          setOcupado(`Leyendo los Excel de Trello: ${Math.min(i + LOTE, lista.length)} de ${lista.length}…`);
+          const lote = lista.slice(i, i + LOTE);
+          const bajados = await Promise.all(lote.map(({ t, a }) => bajarAdjunto(t.id, a.id).then((b) => b, (e) => e as Error)));
+          for (let j = 0; j < lote.length; j++) {
+            const { t, a } = lote[j];
+            const buf = bajados[j];
+            const marca = vistos[a.id];
+            // Falla de red: no se anota, se reintenta la próxima vez.
+            if (buf instanceof Error) { fallas.push(`«${t.nombre}» ${a.nombre}: ${buf.message}`); fila(t, a, 'falla', `no lo pude bajar: ${buf.message}`); continue; }
+            try {
+              let res: ReturnType<typeof prepararPedido>;
+              try {
+                res = prepararPedido(buf, a.nombre, t.inicio || t.creada, { id: `T-${a.id}`, nombre: t.nombre, origen: `trello:${t.id}`, enlace: t.enlace }, existentes);
+              } catch (e) { res = { mensajes: [], descartado: `no es un pedido (${mensaje(e)})` }; }
+              if (res.pedido && marca?.motivo === 'borrado a mano') {
+                // La borraste de Pedidos: no vuelve sola, pero se avisa si es de esta factura.
+                if (!marca.huella) await api({ proveedor: prov, accion: 'marcarTrelloVisto', adjunto: a.id, motivo: 'borrado a mano', version: LECTOR_TRELLO, nro: res.pedido.nroProveedor, huella: huellaPedido(res.pedido.lineas) });
+                anotarBorrada(res.pedido, t.nombre);
+                borrada(t, a, res.pedido, 'la borraste de Pedidos');
+              } else if (res.pedido && borradaIgual(res.pedido)) {
+                const de = borradaIgual(res.pedido);
+                await api({ proveedor: prov, accion: 'marcarTrelloVisto', adjunto: a.id, motivo: `«${t.nombre}» ${a.nombre}: repite una nota que borraste de Pedidos`, version: LECTOR_TRELLO });
+                otros++;
+                borrada(t, a, res.pedido, `es la misma nota que borraste de Pedidos${de !== 'una nota borrada' ? ` («${de}»)` : ''}`);
+              } else if (res.pedido) {
+                await api({ proveedor: prov, accion: 'guardarPedido', pedido: res.pedido });
+                existentes.push(res.pedido);
+                cargados.push(`«${t.nombre}»`);
+                fila(t, a, 'cargada', 'nota cargada ahora', { deEstaFactura: deLaFactura(res.pedido.lineas) });
+              } else {
+                if (marca?.motivo !== 'borrado a mano') await api({ proveedor: prov, accion: 'marcarTrelloVisto', adjunto: a.id, motivo: `«${t.nombre}» ${a.nombre}: ${res.descartado}`, version: LECTOR_TRELLO });
+                otros++;
+                const leida = /^(es un pedido de|repite )/.test(res.descartado || '');
+                fila(t, a, leida ? 'otra' : 'ilegible', leida ? res.descartado || '' : `no la pude leer como nota: ${res.descartado}`);
+              }
+            } catch (e) {
+              // No se pudo guardar: se sigue con las demás y se reintenta la próxima vez.
+              fallas.push(`«${t.nombre}» ${a.nombre}: ${mensaje(e)}`);
+              fila(t, a, 'falla', `no la pude guardar: ${mensaje(e)}`);
+            }
+          }
+        }
+      };
+      await procesar(fase0);
+      await procesar(fase1);
+      const cubierta = () => existentes.some((p) => deLaFactura(p.lineas) > 0);
+      if (factura && fase2.length && (profunda === true || (profunda === 'si-falta' && !cubierta()))) await procesar(fase2);
+      else informe.sinRevisar += fase2.length;
       const out = cargados.length ? [`Trello: traje ${cargados.length} nota(s) de pedido nueva(s): ${cargados.join(', ')}.`] : [];
-      if (otros) out.push(`Trello: ${otros} Excel no eran notas de este proveedor o ya estaban cargados.`);
-      if (fallas.length) out.push(`Trello: no pude bajar ${fallas.length} Excel (${fallas.slice(0, 2).join('; ')}); se reintenta la próxima vez.`);
-      return out;
+      if (otros) out.push(`Trello: ${otros} Excel no eran notas nuevas de este proveedor (otro proveedor, repetidas, borradas o ilegibles).`);
+      if (fallas.length) out.push(`Trello: no pude bajar o guardar ${fallas.length} Excel (${fallas.slice(0, 2).join('; ')}); se reintenta la próxima vez.`);
+      const borradas = informe.filas.filter((f) => f.estado === 'borrada' && f.pedido && f.deEstaFactura > 0);
+      if (borradas.length) out.push(`Trello: ${borradas.map((f) => `«${f.tarjeta}»`).join(', ')} tiene(n) artículos de esta factura pero la(s) borraste de Pedidos: abrí la entrega y tocá «Volver a cargar».`);
+      const ilegibles = informe.filas.filter((f) => f.estado === 'ilegible' || f.estado === 'falla').length;
+      if (factura && !cubierta() && !borradas.length) out.push(`Trello: revisé ${informe.conExcel} tarjeta(s) con Excel y ninguna de las notas que pude leer tiene artículos de la factura ${factura.numero}.${ilegibles ? ` ${ilegibles} archivo(s) no los pude leer.` : ''} El detalle de cada tarjeta está en la entrega.`);
+      return { avisos: out, informe };
     } catch (e) {
-      return [`Trello: ${mensaje(e)} Se controló con las notas ya cargadas.`];
+      informe.error = mensaje(e);
+      return { avisos: [`Trello: ${mensaje(e)} Se controló con las notas ya cargadas.`], informe };
     } finally { setOcupado(''); }
   }
 
   async function buscarEnTrello() {
-    const m = await sincronizarTrello();
+    const { avisos: m, informe: inf } = await sincronizarTrello();
     await recargar();
+    setInforme(inf);
     setAvisos(m.length ? m : ['Trello: no hay notas de pedido nuevas de este proveedor.']);
+  }
+
+  /** Desde una entrega sin nota: revisa de nuevo TODOS los Excel de Trello buscando los artículos de esa factura. */
+  async function buscarEnTrelloParaFactura(factura: Factura) {
+    const { avisos: m, informe: inf } = await sincronizarTrello({ factura, profunda: true });
+    await recargar();
+    setInforme(inf);
+    setAvisos(m.length ? m : ['Trello: no hay notas de pedido nuevas de este proveedor.']);
+    setAbierta(factura.id);
+  }
+
+  /** Vuelve a cargar una nota de Trello que se había borrado a mano (si no está ya cargada de otra forma). */
+  async function recargarBorrada(f: FilaTrello) {
+    const ped = f.pedido;
+    if (!ped) return;
+    const marcar = (estado: EstadoTrello, detalle: string) =>
+      setInforme((inf) => inf && { ...inf, filas: inf.filas.map((x) => (x === f ? { ...x, estado, detalle, pedido: undefined } : x)) });
+    setOcupado('Cargando la nota de nuevo…');
+    try {
+      const frescos = { ...VACIO, ...(await api(undefined, prov)) } as Datos;
+      const h = huellaPedido(ped.lineas);
+      const igual = frescos.pedidos.find((p) => p.id !== ped.id && ((ped.nroProveedor && p.nroProveedor === ped.nroProveedor) || huellaPedido(p.lineas) === h));
+      if (igual) {
+        const cual = igual.nroProveedor ? `N° ${igual.nroProveedor}` : igual.nombre;
+        marcar('ya estaba', `ya está cargada como «${cual}»`);
+        setAvisos([`La nota «${f.tarjeta}» ya está cargada como «${cual}»: no la cargo dos veces.`]);
+      } else {
+        await api({ proveedor: prov, accion: 'guardarPedido', pedido: ped, recargar: true });
+        marcar('cargada', 'nota cargada de nuevo');
+        setAvisos([`Nota «${f.tarjeta}» cargada de nuevo.`]);
+      }
+    } catch (e) { setAvisos([`No pude cargar la nota «${f.tarjeta}»: ${mensaje(e)}`]); }
+    finally { setOcupado(''); }
+    await recargar();
   }
 
   /** Lee la foto del remito y la guarda en la factura. Si no se puede, deja el error para escribirlo a mano. */
@@ -271,7 +404,8 @@ export default function ControlFacturas() {
       factura = { ...leida.factura, id: `F-${slug(leida.factura.numero || nuevaFactura.name)}` };
       av = leida.avisos;
     } catch (e) { setAvisos([`${nuevaFactura.name}: ${mensaje(e)}`]); return; }
-    const deTrello = await sincronizarTrello();
+    const { avisos: deTrello, informe: inf } = await sincronizarTrello({ factura, profunda: 'si-falta' });
+    setInforme(inf);
     try {
       const ya = datos.facturas.some((f) => f.id === factura.id);
       await api({ proveedor: prov, accion: 'guardarFactura', factura });
@@ -286,7 +420,7 @@ export default function ControlFacturas() {
 
   const pedidosOrd = [...datos.pedidos].sort((a, b) => b.fecha.localeCompare(a.fecha));
   const facturasRes = [...res.facturas].reverse();
-  const cambiarProv = (p: Prov) => { setProv(p); setAvisos([]); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
+  const cambiarProv = (p: Prov) => { setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
 
   const cabecera = (<>
     <h2 style={{ marginTop: 0, marginBottom: 8 }}>🧾 Control de entregas</h2>
@@ -345,7 +479,8 @@ export default function ControlFacturas() {
             onGuardarRemito={(remito) => guardar({ accion: 'guardarRemito', facturaId: r.factura.id, remito })}
             onBorrarRemito={() => confirm('¿Borrar el remito de esta entrega?') && guardar({ accion: 'borrarRemito', facturaId: r.factura.id })}
             onNota={(f) => subirPedidos(f, r.factura.fecha, r.factura.id)}
-            onTrello={buscarEnTrello} />)}
+            onTrello={() => buscarEnTrelloParaFactura(r.factura)}
+            informe={informe?.facturaId === r.factura.id ? informe : null} onRecargarBorrada={recargarBorrada} />)}
 
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 16, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
             <button style={enlace} onClick={() => setVista('pedidos')}>📋 Notas de pedido cargadas ({datos.pedidos.length})</button>
@@ -392,7 +527,7 @@ export default function ControlFacturas() {
                       onChange={(e) => e.target.value && guardar({ accion: 'guardarPedido', pedido: { ...p, fecha: e.target.value } })} /></td>
                     <td style={td}>{r.pedido}</td><td style={td}>{r.facturado}</td><td style={td}>{r.pendiente}</td>
                     <td style={{ ...td, color: r.estado === 'completo' ? '#34d399' : r.estado === 'parcial' ? '#fbbf24' : undefined }}>{r.estado}</td>
-                    <td style={td}><button onClick={() => confirm(`¿Borrar la nota ${p.nombre}?${enlaceTrello(p) ? ' No se vuelve a traer de Trello.' : ''}`) && guardar({ accion: 'borrarPedido', id: p.id })}
+                    <td style={td}><button onClick={() => confirm(`¿Borrar la nota ${p.nombre}?${enlaceTrello(p) ? ' No se vuelve a traer de Trello.' : ''}`) && guardar({ accion: 'borrarPedido', id: p.id, nro: p.nroProveedor, huella: huellaPedido(p.lineas) })}
                       style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer' }}>✕</button></td>
                   </tr>
                   {abierta === p.id && <tr><td colSpan={7} style={{ ...td, background: 'rgba(255,255,255,0.03)' }}>
@@ -451,10 +586,11 @@ function estadoRenglon(x: ControlRenglon, nombrePedido: (id: string) => string):
 }
 
 
-function TarjetaEntrega({ r, abierta, onAbrir, pedidos, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello }: {
+function TarjetaEntrega({ r, abierta, onAbrir, pedidos, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, informe, onRecargarBorrada }: {
   r: ResultadoFactura; abierta: boolean; onAbrir: () => void; pedidos: PedidoGuardado[]; nombrePedido: (id: string) => string;
   manual: string[]; condiciones: string; ocupado: boolean; onAsignar: (ids: string[]) => void; onBorrar: () => void; onDeposito: () => void;
   onFotos: (f: File[]) => void; onGuardarRemito: (r: Remito) => Promise<boolean>; onBorrarRemito: () => void; onNota: (f: File[]) => void; onTrello: () => void;
+  informe: InformeTrello | null; onRecargarBorrada: (f: FilaTrello) => void;
 }) {
   const f = r.factura;
   const s = SEMAFORO[r.semaforo];
@@ -495,6 +631,7 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, nombrePedido, manual, co
         </Parte>
       </div>
       <TarjetasTrello ids={r.pedidosCubiertos} pedidos={pedidos} />
+      {informe && <InformeTrelloCaja informe={informe} ocupado={ocupado} onRecargar={onRecargarBorrada} />}
 
       {editando && (
         <div style={{ marginTop: 10, padding: 10, borderRadius: 8, background: 'rgba(0,0,0,0.2)' }}>
@@ -674,6 +811,50 @@ function Pendientes({ res, nombrePedido }: { res: ReturnType<typeof analizarFact
 }
 
 /** «Esta factura corresponde a las tarjetas…», con enlace a cada una. */
+const ICONO_TRELLO: Record<EstadoTrello, string> = { cargada: '✅', 'ya estaba': '✅', borrada: '↩️', otra: '·', ilegible: '⚠️', 'no es excel': '·', falla: '❌' };
+
+/** Qué encontró la última búsqueda en Trello para esta entrega, tarjeta por tarjeta. */
+function InformeTrelloCaja({ informe, ocupado, onRecargar }: { informe: InformeTrello; ocupado: boolean; onRecargar: (f: FilaTrello) => void }) {
+  const importa = (f: FilaTrello) => f.deEstaFactura > 0 || f.estado === 'falla' || f.estado === 'ilegible';
+  const arriba = informe.filas.filter(importa).sort((a, b) => b.deEstaFactura - a.deEstaFactura);
+  const leidas = informe.filas.filter((f) => !importa(f) && f.estado !== 'no es excel');
+  const noExcel = informe.filas.filter((f) => f.estado === 'no es excel');
+  const conArticulos = arriba.some((f) => f.deEstaFactura > 0);
+  const sinLeer = arriba.filter((f) => f.estado === 'falla' || f.estado === 'ilegible').length;
+  const linea = (f: FilaTrello, i: number) => (
+    <div key={i} style={{ margin: '3px 0' }}>
+      {ICONO_TRELLO[f.estado]}{' '}
+      {f.enlace ? <a href={f.enlace} target="_blank" rel="noreferrer" style={{ color: '#60a5fa' }}>«{f.tarjeta}»</a> : <>«{f.tarjeta}»</>}
+      <span style={{ opacity: 0.7 }}> {f.archivo}</span>: {f.detalle}
+      {f.deEstaFactura > 0 && <strong> · tiene {f.deEstaFactura} artículo(s) de esta factura</strong>}
+      {f.estado === 'borrada' && f.pedido && f.deEstaFactura > 0 && <>{' '}
+        <button style={botonChico} disabled={ocupado} onClick={() => onRecargar(f)}>↩️ Volver a cargar</button></>}
+    </div>
+  );
+  return (
+    <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.3)', fontSize: '0.82rem' }}>
+      <div style={{ fontWeight: 'bold', marginBottom: 4 }}>
+        🗂️ Lo que revisé en Trello ({informe.hora}){informe.tablero ? ` · tablero «${informe.tablero}»` : ''}: {informe.tarjetas} tarjeta(s) abiertas, {informe.conExcel} con Excel.
+      </div>
+      {informe.error && <div style={{ color: '#f87171' }}>❌ {informe.error}</div>}
+      {!informe.error && !conArticulos && <div>
+        Ninguna de las notas que pude leer tiene artículos de esta factura.{sinLeer ? ` ${sinLeer} archivo(s) no los pude leer (abajo el motivo).` : ''}
+      </div>}
+      {arriba.map(linea)}
+      {leidas.length > 0 && <details style={{ marginTop: 4 }}>
+        <summary style={{ cursor: 'pointer', opacity: 0.8 }}>{leidas.length} nota(s) o archivo(s) leídos, sin artículos de esta factura</summary>
+        {leidas.map(linea)}
+      </details>}
+      {noExcel.length > 0 && <details style={{ marginTop: 4 }}>
+        <summary style={{ cursor: 'pointer', opacity: 0.8 }}>{noExcel.length} adjunto(s) que no son Excel (enlaces, PDF, fotos)</summary>
+        {noExcel.map(linea)}
+      </details>}
+      {informe.sinRevisar > 0 && <div style={{ opacity: 0.7, marginTop: 4 }}>{informe.sinRevisar} Excel revisados antes no se volvieron a bajar: «Buscar en Trello» los revisa de nuevo.</div>}
+      {informe.otroProveedor > 0 && <div style={{ opacity: 0.7, marginTop: 4 }}>{informe.otroProveedor} Excel son de otro proveedor (no se volvieron a bajar).</div>}
+    </div>
+  );
+}
+
 function TarjetasTrello({ ids, pedidos }: { ids: string[]; pedidos: PedidoGuardado[] }) {
   const tarjetas = ids.map((id) => pedidos.find((p) => p.id === id)).filter((p): p is PedidoGuardado => !!enlaceTrello(p));
   const vistas = new Set<string>();

@@ -93,6 +93,73 @@ describe('Trello (solo lectura)', () => {
     expect(p.pedido.lineas.reduce((s, l) => s + l.cantidad, 0)).toBe(18);
   });
 
+  it('la descarga sigue la redirección al archivo SIN las claves; a Trello sí se las manda (11-nov-2026)', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    const llamadas = [];
+    const fetchImpl = vi.fn(async (url, opts) => {
+      llamadas.push({ url, auth: opts.headers.Authorization, redirect: opts.redirect });
+      const ruta = url.replace('https://api.trello.com/1', '');
+      if (url.startsWith('https://archivos.example.com/')) return { ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode('XLSX').buffer };
+      if (ruta.includes('/download/')) return { ok: false, status: 302, headers: new Headers({ location: 'https://archivos.example.com/f.xlsx?firma=abc' }) };
+      if (ruta.startsWith('/boards/')) return { ok: true, status: 200, json: async () => ({ id: BOARD_ID }) };
+      if (ruta.startsWith(`/cards/${CARD}/attachments/`)) return { ok: true, status: 200, json: async () => ({ id: ATT, name: 'f5a02c7c.xlsx', bytes: 4, isUpload: true }) };
+      return { ok: true, status: 200, json: async () => ({ idBoard: BOARD_ID }) };
+    });
+    const r = await bajarAdjunto(CARD, ATT, fetchImpl);
+    expect(Buffer.from(r.datos, 'base64').toString()).toBe('XLSX');
+    const final = llamadas.find((l) => l.url.startsWith('https://archivos.example.com/'));
+    expect(final.auth).toBeUndefined(); // el servidor del archivo rechaza un pedido con otra firma
+    expect(llamadas.filter((l) => l.url.startsWith('https://api.trello.com/')).every((l) => l.auth && l.redirect === 'manual')).toBe(true);
+  });
+
+  it('si Trello limita los pedidos (429) espera y reintenta; los errores dicen el motivo', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    let veces = 0;
+    const limitado = vi.fn(async (url) => {
+      if (url.includes('/lists')) return { ok: true, status: 200, json: async () => [] };
+      if (url.includes('/cards?')) {
+        veces++;
+        if (veces < 3) return { ok: false, status: 429, headers: new Headers({ 'retry-after': '0' }), text: async () => 'API_TOKEN_LIMIT_EXCEEDED' };
+        return { ok: true, status: 200, json: async () => [] };
+      }
+      return { ok: true, status: 200, json: async () => ({ name: 'COMPRAS Y ENTREGAS' }) };
+    });
+    expect((await listarTarjetas(limitado)).tablero).toBe('COMPRAS Y ENTREGAS');
+    expect(veces).toBe(3);
+    // Sin Retry-After (como responde Trello) espera de verdad antes de reintentar: 2 s, 4 s…
+    vi.useFakeTimers();
+    try {
+      let n = 0;
+      const sinCabecera = vi.fn(async (url) => {
+        if (url.includes('/cards?')) { n++; return n < 2 ? new Response('API_TOKEN_LIMIT_EXCEEDED', { status: 429 }) : Response.json([]); }
+        return url.includes('/lists') ? Response.json([]) : Response.json({ name: 'X' });
+      });
+      const p = listarTarjetas(sinCabecera);
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(n).toBe(1); // todavía esperando
+      await vi.advanceTimersByTimeAsync(1000);
+      expect((await p).tablero).toBe('X');
+      expect(n).toBe(2);
+    } finally { vi.useRealTimers(); }
+    const rechazo = vi.fn(async () => ({ ok: false, status: 401, text: async () => 'unauthorized permission requested' }));
+    await expect(listarTarjetas(rechazo)).rejects.toThrow(/401 \(unauthorized permission requested\)/);
+    const s3 = vi.fn(async () => ({ ok: false, status: 400, text: async () => '<Error><Code>InvalidArgument</Code><Message>Only one auth mechanism allowed</Message></Error>' }));
+    await expect(listarTarjetas(s3)).rejects.toThrow(/400 \(Only one auth mechanism allowed\)/);
+  });
+
+  it('avisa los adjuntos que no son Excel subidos (enlaces, PDF)', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    const f = falso({
+      '/boards/RzHl0YNS?': { name: 'COMPRAS Y ENTREGAS' },
+      '/boards/RzHl0YNS/lists': [],
+      '/boards/RzHl0YNS/cards': [{ id: CARD, name: 'Converse 3/11', attachments: [
+        { id: ATT, name: 'nota.xlsx', isUpload: false }, { id: OTRA, name: 'factura.pdf', isUpload: true }] }],
+    });
+    const r = await listarTarjetas(f);
+    expect(r.tarjetas[0].adjuntos).toEqual([]);
+    expect(r.tarjetas[0].otrosAdjuntos).toEqual(['nota.xlsx (enlace)', 'factura.pdf']);
+  });
+
   it('endpoint: sin sesión 401; el token del bot no entra', async () => {
     const res = () => { const r = { code: 0, setHeader() {}, status(c) { r.code = c; return r; }, json() { return r; } }; return r; };
     const r1 = res();

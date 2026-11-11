@@ -76,6 +76,19 @@ describe('guardado del control de facturas', () => {
     expect(t.trelloVistos['b'.repeat(24)].motivo).toBe('borrado a mano');
     expect((await leerTodo(fn, 'distrinando')).trelloVistos).toEqual({});
     await expect(aplicar(fn, { proveedor: 'id', accion: 'marcarTrelloVisto', adjunto: '../x' })).rejects.toThrow(/Identificador/);
+    // Una nota borrada a mano no vuelve sola: guardarla sin «recargar» se rechaza (11-nov-2026).
+    const borrada = { id: `T-${'b'.repeat(24)}`, nombre: 'Tarjeta', fecha: '2026-11-01', lineas: [] };
+    await expect(aplicar(fn, { proveedor: 'id', accion: 'guardarPedido', pedido: borrada })).rejects.toThrow(/Volver a cargar/);
+    // «Volver a cargar»: se guarda y la marca se borra en el mismo paso.
+    await aplicar(fn, { proveedor: 'id', accion: 'guardarPedido', pedido: borrada, recargar: true });
+    const t2 = await leerTodo(fn, 'id');
+    expect(t2.pedidos.some((p) => p.id === borrada.id)).toBe(true);
+    expect(t2.trelloVistos['b'.repeat(24)]).toBeUndefined();
+    // Al borrar se guarda el número y la huella, para reconocer una copia en otra tarjeta.
+    await aplicar(fn, { proveedor: 'id', accion: 'borrarPedido', id: borrada.id, nro: '00002595', huella: 'abc123', extra: 'x' });
+    expect((await leerTodo(fn, 'id')).trelloVistos['b'.repeat(24)]).toMatchObject({ motivo: 'borrado a mano', nro: '00002595', huella: 'abc123' });
+    await aplicar(fn, { proveedor: 'id', accion: 'borrarPedido', id: borrada.id, huella: '../../x' });
+    expect((await leerTodo(fn, 'id')).trelloVistos['b'.repeat(24)].huella).toBeUndefined();
   });
 
   it('guarda el remito de cada factura y lo borra con la factura', async () => {
