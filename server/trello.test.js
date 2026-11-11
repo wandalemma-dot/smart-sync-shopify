@@ -5,6 +5,7 @@ import { unzipSync, zipSync } from 'fflate';
 import { bajarAdjunto, fechaCreacion, listarTarjetas, MAX_ADJUNTO } from './trello.js';
 import { leerPedidoAuto } from '../src/utils/lectoresFacturas.ts';
 import handler from '../api/trello.js';
+import { makeSession, COOKIE } from './access.js';
 
 const CARD = '6650f0a0' + '0'.repeat(16);
 const ATT = 'a'.repeat(24);
@@ -169,5 +170,80 @@ describe('Trello (solo lectura)', () => {
     const r2 = res();
     await handler({ method: 'GET', headers: { authorization: `Bearer ${'x'.repeat(40)}` }, query: { accion: 'tarjetas' } }, r2);
     expect(r2.code).toBe(401);
+  });
+
+  describe('claves de Vercel con caracteres de más (11-nov-2026)', () => {
+    // Formato real: key de 32 hex y token ATTA… (inventados, no son los de la tienda).
+    const KEY = '0123456789abcdef0123456789abcdef';
+    const TOKEN = 'ATTA' + 'f'.repeat(64) + '0ABC1234';
+    const sesion = () => {
+      vi.stubEnv('APP_ACCESS_KEY', 's'.repeat(40));
+      return { cookie: `${COOKIE}=${makeSession()}` };
+    };
+    const res = () => { const r = { code: 0, body: null, setHeader() {}, status(c) { r.code = c; return r; }, json(b) { r.body = b; return r; } }; return r; };
+    /** Como fetch de verdad: Node valida el encabezado antes de mandar nada. */
+    const trelloReal = (respuestas = {}) => vi.fn(async (url, opts) => {
+      new Headers(opts.headers); // tira «… is an invalid header value» si hay un salto de línea
+      if (url.includes('/lists')) return Response.json([]);
+      if (url.includes('/cards?')) return Response.json(respuestas.cards ?? []);
+      return Response.json({ name: 'COMPRAS Y ENTREGAS' });
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    it.each([
+      ['salto de línea al final (el caso real)', `${TOKEN}\n`],
+      ['Windows: \\r\\n', `${TOKEN}\r\n`],
+      ['espacios alrededor', `  ${TOKEN}  `],
+      ['entre comillas', `"${TOKEN}"`],
+    ])('token con %s: se limpia y Trello se lee', async (_, sucio) => {
+      vi.stubEnv('TRELLO_KEY', `${KEY}\n`); vi.stubEnv('TRELLO_TOKEN', sucio);
+      const f = trelloReal();
+      expect((await listarTarjetas(f)).tablero).toBe('COMPRAS Y ENTREGAS');
+      for (const [, opts] of f.mock.calls) expect(opts.headers.Authorization).toBe(`OAuth oauth_consumer_key="${KEY}", oauth_token="${TOKEN}"`);
+    });
+
+    it('un carácter raro en el medio: avisa cuál de las dos claves es, sin mostrarla', async () => {
+      vi.stubEnv('TRELLO_KEY', KEY); vi.stubEnv('TRELLO_TOKEN', `${TOKEN.slice(0, 30)} ${TOKEN.slice(30)}`);
+      const f = trelloReal();
+      const e = await listarTarjetas(f).catch((x) => x);
+      expect(e.status).toBe(503);
+      expect(e.message).toMatch(/TRELLO_TOKEN en Vercel tiene caracteres que no van/);
+      expect(e.message).not.toContain(TOKEN.slice(0, 30));
+      expect(f).not.toHaveBeenCalled(); // ni se intentó
+    });
+
+    it('la pantalla nunca recibe las claves: ni del error de Node ni de lo que conteste Trello', async () => {
+      const cookie = sesion().cookie;
+      vi.stubEnv('TRELLO_KEY', KEY); vi.stubEnv('TRELLO_TOKEN', TOKEN);
+      const casos = [
+        // fetch tira un error que copia el encabezado entero (lo que pasó el 11-nov)
+        async (url, opts) => { throw new TypeError(`Headers.append: "${opts.headers.Authorization}\n" is an invalid header value.`); },
+        // se corta la conexión y el motivo trae la dirección con las claves
+        async () => { throw new TypeError(`fetch failed: https://api.trello.com/1/x?key=${KEY}&token=${TOKEN}`); },
+        // Trello responde un error que repite el token
+        async () => new Response(`invalid token ${TOKEN} for key ${KEY}`, { status: 401 }),
+        async () => new Response(`<Error><Message>bad oauth_token="${TOKEN}"</Message></Error>`, { status: 400 }),
+      ];
+      for (const caso of casos) {
+        vi.stubGlobal('fetch', vi.fn(caso));
+        const r = res();
+        await handler({ method: 'GET', headers: { cookie }, query: { accion: 'tarjetas' } }, r);
+        expect(r.code).toBeGreaterThanOrEqual(400);
+        const texto = JSON.stringify(r.body);
+        expect(texto).not.toContain(TOKEN);
+        expect(texto).not.toContain(TOKEN.slice(4, 40));
+        expect(texto).not.toContain(KEY);
+        expect(r.body.error).toBeTruthy();
+      }
+    });
+
+    it('el error de Node por un encabezado inválido se explica sin copiar el encabezado', async () => {
+      vi.stubEnv('TRELLO_KEY', KEY); vi.stubEnv('TRELLO_TOKEN', TOKEN);
+      const roto = vi.fn(async (url, opts) => { throw new TypeError(`Headers.append: "${opts.headers.Authorization}" is an invalid header value.`); });
+      const e = await listarTarjetas(roto).catch((x) => x);
+      expect(e.status).toBe(503);
+      expect(e.message).toMatch(/Las claves de Trello en Vercel tienen un carácter que no va/);
+      expect(e.message).not.toContain(TOKEN);
+    });
   });
 });

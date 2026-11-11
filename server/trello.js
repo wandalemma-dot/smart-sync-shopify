@@ -3,6 +3,7 @@
 // TRELLO_KEY y TRELLO_TOKEN (nunca en el código); TRELLO_BOARD opcional.
 // Las claves viajan en el encabezado Authorization, no en la URL.
 import * as XLSX from 'xlsx';
+import { claveEnv, ocultarSecretos } from './secretos.js';
 
 const API = 'https://api.trello.com/1';
 const RE_ID = /^[a-f0-9]{24}$/;
@@ -11,12 +12,24 @@ export const MAX_ADJUNTO = 3_000_000; // en base64 queda < 4,5 MB (límite de Ve
 // se bajan hasta 25 MB y se devuelve una copia liviana, solo con los datos de la hoja.
 export const MAX_DESCARGA = 25_000_000;
 
-export const trelloConfigurado = () => Boolean(process.env.TRELLO_KEY && process.env.TRELLO_TOKEN);
-const tablero = () => process.env.TRELLO_BOARD || 'RzHl0YNS';
-const auth = () => `OAuth oauth_consumer_key="${process.env.TRELLO_KEY}", oauth_token="${process.env.TRELLO_TOKEN}"`;
+// Las claves se leen limpias (claveEnv): el 11-nov-2026 TRELLO_TOKEN estaba guardado con un salto
+// de línea al final, Node rechazaba el encabezado y no se leía ninguna tarjeta.
+export const trelloConfigurado = () => Boolean(claveEnv('TRELLO_KEY') && claveEnv('TRELLO_TOKEN'));
+const tablero = () => claveEnv('TRELLO_BOARD') || 'RzHl0YNS';
+const CLAVE_VALIDA = /^[A-Za-z0-9]+$/;
+function auth() {
+  const key = claveEnv('TRELLO_KEY');
+  const token = claveEnv('TRELLO_TOKEN');
+  // Un carácter raro en el medio (espacio, comilla, signo) no se arregla solo: se avisa cuál
+  // de las dos es, SIN mostrarla.
+  for (const [nombre, v] of [['TRELLO_KEY', key], ['TRELLO_TOKEN', token]]) {
+    if (!CLAVE_VALIDA.test(v)) throw error(`${nombre} en Vercel tiene caracteres que no van (solo puede tener letras y números). Copiala de nuevo desde Trello y pegala sin espacios ni comillas.`, 503);
+  }
+  return `OAuth oauth_consumer_key="${key}", oauth_token="${token}"`;
+}
 
 function error(msg, status = 502) {
-  return Object.assign(new Error(msg), { status });
+  return Object.assign(new Error(ocultarSecretos(msg)), { status });
 }
 
 // Solo a Trello se le mandan las claves. La descarga de un adjunto puede redirigir a otro
@@ -30,7 +43,7 @@ async function detalle(r) {
   try {
     const t = String(await r.text());
     const msg = /<Message>([^<]*)<\/Message>/i.exec(t)?.[1] ?? t.replace(/<[^>]*>/g, ' ');
-    return msg.replace(/\s+/g, ' ').trim().slice(0, 120);
+    return ocultarSecretos(msg.replace(/\s+/g, ' ').trim()).slice(0, 120);
   } catch { return ''; }
 }
 
@@ -40,7 +53,14 @@ async function get(ruta, fetchImpl, comoBinario = false) {
     const destino = new URL(url);
     const headers = { Accept: comoBinario ? '*/*' : 'application/json' };
     if (HOSTS_TRELLO.has(destino.hostname)) headers.Authorization = auth();
-    const r = await fetchImpl(url, { headers, redirect: 'manual' });
+    let r;
+    try { r = await fetchImpl(url, { headers, redirect: 'manual' }); }
+    catch (e) {
+      // El mensaje de Node puede copiar el encabezado con las claves: nunca se manda tal cual.
+      const m = e instanceof Error ? e.message : String(e);
+      if (/header/i.test(m)) throw error('Las claves de Trello en Vercel tienen un carácter que no va. Copialas de nuevo y pegalas sin espacios ni saltos de línea.', 503);
+      throw error(`No me pude conectar con Trello (${m.slice(0, 120)}). Probá de nuevo en un rato.`);
+    }
     // Trello limita la cantidad de pedidos seguidos (100 cada 10 s): se espera y se reintenta.
     // Si no dice cuánto esperar, 2, 4 y 8 segundos (alcanza para que se libere la ventana).
     if (r.status === 429 && esperas < 3) {
