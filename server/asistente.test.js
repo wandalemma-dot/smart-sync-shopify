@@ -133,6 +133,21 @@ describe('conversación con herramientas', () => {
     expect(JSON.parse(resultado.content).costo_ponderado).toBe(15);
     expect(segunda.system[0].text).toContain('Converse');
   });
+
+  it('el error de una herramienta va a Claude sin claves (11-nov-2026)', async () => {
+    const TOKEN = 'tokendeshopify' + '9'.repeat(20);
+    vi.stubEnv('SHOPIFY_ADMIN_TOKEN', `${TOKEN}\n`);
+    const create = vi.fn()
+      .mockResolvedValueOnce({ stop_reason: 'tool_use', content: [{ type: 'tool_use', id: 't1', name: 'buscar_producto', input: { texto: 'A1' } }] })
+      .mockResolvedValueOnce({ stop_reason: 'end_turn', content: [{ type: 'text', text: 'No pude consultar Shopify.' }] });
+    const ejecutar = vi.fn(async () => { throw new TypeError(`fetch failed (X-Shopify-Access-Token: ${TOKEN})`); });
+    await conversar({ marca: 'converse', turnos: [{ rol: 'user', texto: 'stock?' }], cliente: { beta: { messages: { create } } }, ejecutar });
+    const resultado = create.mock.calls[1][0].messages.at(-1).content[0];
+    expect(resultado.is_error).toBe(true);
+    expect(resultado.content).not.toContain(TOKEN);
+    expect(resultado.content).toMatch(/fetch failed/);
+    vi.unstubAllEnvs();
+  });
 });
 
 describe('lecturas de Shopify', () => {

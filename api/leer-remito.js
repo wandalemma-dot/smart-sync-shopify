@@ -2,6 +2,7 @@
 // Necesita ANTHROPIC_API_KEY en Vercel (se paga por uso). No guarda la foto ni toca Shopify.
 import { allowedOrigin, identity, noStore } from '../server/access.js';
 import { leerRemito } from '../server/remito.js';
+import { claveEnv } from '../server/secretos.js';
 
 export const maxDuration = 120;
 
@@ -13,7 +14,7 @@ export default async function handler(req, res) {
   if (!String(req.headers?.['content-type'] || '').toLowerCase().startsWith('application/json')) {
     return res.status(415).json({ error: 'Se requiere JSON.' });
   }
-  if (!process.env.ANTHROPIC_API_KEY) {
+  if (!claveEnv('ANTHROPIC_API_KEY')) {
     return res.status(503).json({ error: 'La lectura de fotos no está activada (falta la clave de Anthropic en Vercel). Escribí el remito a mano.', sinClave: true });
   }
   try {

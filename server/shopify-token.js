@@ -1,3 +1,5 @@
+import { claveEnv } from './secretos.js';
+
 const SHOP = 'indy-com-ar.myshopify.com';
 // ---- TOKEN ----
 // Preferimos "client credentials": la app pide el token sola con el Client ID +
@@ -7,8 +9,9 @@ const SHOP = 'indy-com-ar.myshopify.com';
 let tokenCache = { valor: null, vence: 0 };
 
 export async function obtenerToken() {
-  const id = process.env.SHOPIFY_CLIENT_ID;
-  const secret = process.env.SHOPIFY_CLIENT_SECRET;
+  // Limpias (claveEnv): sin espacios, saltos de línea ni comillas pegadas al copiarlas en Vercel.
+  const id = claveEnv('SHOPIFY_CLIENT_ID');
+  const secret = claveEnv('SHOPIFY_CLIENT_SECRET');
 
   if (id && secret) {
     // Reusamos el token cacheado hasta 5 minutos antes de que venza.
@@ -33,7 +36,7 @@ export async function obtenerToken() {
     return tokenCache.valor;
   }
 
-  const fijo = process.env.SHOPIFY_ADMIN_TOKEN;
+  const fijo = claveEnv('SHOPIFY_ADMIN_TOKEN');
   if (!fijo) {
     throw new Error('Falta configurar SHOPIFY_CLIENT_ID + SHOPIFY_CLIENT_SECRET (o SHOPIFY_ADMIN_TOKEN) en Vercel.');
   }

@@ -9,6 +9,7 @@
 // Costo aproximado: US$ 0,01–0,03 por foto con el modelo por defecto.
 // ============================================================================
 import Anthropic from '@anthropic-ai/sdk';
+import { claveEnv } from './secretos.js';
 
 export const MODELO_POR_DEFECTO = 'claude-sonnet-5-5'; // el mismo que eligió gax para el asistente
 const MEDIOS = ['image/jpeg', 'image/png', 'image/webp'];
@@ -173,7 +174,7 @@ export function normalizarEntrega(crudo) {
 export async function leerRemito({ fotos, cliente, tipo = 'remito' }) {
   const validas = validarFotos(fotos);
   const esEntrega = tipo === 'entrega';
-  const client = cliente || new Anthropic();
+  const client = cliente || new Anthropic({ apiKey: claveEnv('ANTHROPIC_API_KEY') });
   const content = [
     ...validas.map((f) => ({ type: 'image', source: { type: 'base64', media_type: f.media, data: f.datos } })),
     { type: 'text', text: esEntrega ? INSTRUCCIONES_ENTREGA : INSTRUCCIONES },

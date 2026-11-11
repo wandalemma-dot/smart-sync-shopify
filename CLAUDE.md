@@ -1073,8 +1073,9 @@ Solo lectura. No escribe en Shopify ni carga la web externa.
   Se rotaron. **Nunca vuelvas a poner un secreto en el código.**
 - 11-nov-2026: `TRELLO_TOKEN` estaba guardado en Vercel con un salto de línea al final. Node
   rechazó el encabezado y su mensaje («Headers.append: "OAuth …" is an invalid header value»),
-  que copia la clave y el token enteros, llegó a la pantalla. Desde entonces: las claves se leen
-  con `claveEnv()` (sin espacios, saltos de línea ni comillas a los costados) y todo error que
+  que copia la clave y el token enteros, llegó a la pantalla. Desde entonces: las claves (Trello,
+  base de datos, Shopify, Anthropic) se leen con `claveEnv()` (sin espacios, saltos de línea ni
+  comillas a los costados), la base y Trello nunca devuelven el error crudo de `fetch`, y todo error que
   vuelve al navegador pasa por `ocultarSecretos()` / `mensajeSeguro()` (`server/secretos.js`).
   Nunca devolver `e.message` crudo de un `fetch` o un SDK que lleva claves.
 

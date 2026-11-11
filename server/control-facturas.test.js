@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { aplicar, leerEnlaces, leerRegistro, leerTodo } from './control-facturas.js';
 import { kv } from './kv.js';
 import handler from '../api/control-facturas.js';
+import { COOKIE, makeSession } from './access.js';
 
 function memoria() {
   const db = new Map();
@@ -322,5 +323,62 @@ describe('endpoint', () => {
     expect(await kv([['HSET', 'k', 'a', 'b']], f)).toEqual([1]);
     expect(f.mock.calls[0][0]).toBe('https://db.example/pipeline');
     expect(f.mock.calls[0][1].headers.Authorization).toBe('Bearer tok');
+  });
+
+  describe('claves de la base con caracteres de más (11-nov-2026)', () => {
+    const TOKEN = 'AX' + 'y'.repeat(40);
+    afterEach(() => vi.unstubAllGlobals());
+    /** Como fetch de verdad: Node valida el encabezado antes de mandar nada. */
+    const real = () => vi.fn(async (url, opts) => { new Headers(opts.headers); return { ok: true, json: async () => [{ result: 1 }] }; });
+
+    it('se limpian espacios, saltos de línea y comillas de los costados', async () => {
+      vi.stubEnv('KV_REST_API_URL', ' "https://db.example/"\n');
+      vi.stubEnv('KV_REST_API_TOKEN', `\n${TOKEN}\r\n`);
+      const f = real();
+      expect(await kv([['GET', 'k']], f)).toEqual([1]);
+      expect(f.mock.calls[0][0]).toBe('https://db.example/pipeline');
+      expect(f.mock.calls[0][1].headers.Authorization).toBe(`Bearer ${TOKEN}`);
+    });
+
+    it('un token partido en dos renglones no aparece en el error ni en la respuesta', async () => {
+      vi.stubEnv('KV_REST_API_URL', 'https://db.example');
+      vi.stubEnv('KV_REST_API_TOKEN', `${TOKEN.slice(0, 20)}\n${TOKEN.slice(20)}`);
+      const e = await kv([['GET', 'k']], real()).catch((x) => x);
+      expect(e.status).toBe(503);
+      expect(e.message).toMatch(/KV_REST_API_URL o KV_REST_API_TOKEN en Vercel tienen un formato inválido/);
+      expect(e.message).not.toContain(TOKEN.slice(0, 20));
+      // Por el endpoint, con sesión: lo que llega al navegador tampoco trae la clave.
+      vi.stubEnv('APP_ACCESS_KEY', 's'.repeat(40));
+      vi.stubGlobal('fetch', real());
+      const r = res();
+      await handler({ method: 'GET', headers: { cookie: `${COOKIE}=${makeSession()}` }, query: { proveedor: 'id' } }, r);
+      expect(r.code).toBe(503);
+      expect(JSON.stringify(r.body)).not.toContain(TOKEN.slice(0, 20));
+      expect(JSON.stringify(r.body)).not.toContain(TOKEN.slice(20));
+    });
+
+    it('un corte de red se informa como pasajero, sin el motivo crudo', async () => {
+      vi.stubEnv('KV_REST_API_URL', 'https://db.example');
+      vi.stubEnv('KV_REST_API_TOKEN', TOKEN);
+      const e = await kv([['GET', 'k']], vi.fn(async () => { throw new TypeError(`fetch failed Bearer ${TOKEN}`); })).catch((x) => x);
+      expect(e.status).toBe(502);
+      expect(e.message).toMatch(/No me pude conectar con la base de datos/);
+      expect(e.message).not.toContain(TOKEN);
+      vi.stubEnv('KV_REST_API_URL', 'db.example sin https');
+      const u = await kv([['GET', 'k']], fetch).catch((x) => x);
+      expect(u.status).toBe(503);
+    });
+
+    it('si la base contesta con la clave adentro, se tapa', async () => {
+      vi.stubEnv('KV_REST_API_URL', 'https://db.example');
+      vi.stubEnv('KV_REST_API_TOKEN', TOKEN);
+      vi.stubEnv('APP_ACCESS_KEY', 's'.repeat(40));
+      vi.stubGlobal('fetch', vi.fn(async (url, opts) => ({ ok: true, json: async () => JSON.parse(opts.body).map(() => ({ error: `WRONGPASS invalid token ${TOKEN}` })) })));
+      const r = res();
+      await handler({ method: 'GET', headers: { cookie: `${COOKIE}=${makeSession()}` }, query: { proveedor: 'id' } }, r);
+      expect(r.code).toBe(502);
+      expect(r.body.error).toMatch(/Error de la base de datos/);
+      expect(JSON.stringify(r.body)).not.toContain(TOKEN);
+    });
   });
 });
