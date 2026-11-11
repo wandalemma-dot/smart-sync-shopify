@@ -7,9 +7,11 @@
 //   · el remito (código y total por artículo, sin precios).
 // A veces trae productos NUEVOS y a veces REPOSICIÓN: se distingue buscando el
 // código en el SKU de Shopify (los SKU de Family empiezan con el código:
-// HPRST01S, RMCGA01.NEG.S, WORPT01). Si Family cambió un precio, se AVISA
+// HPRST01S, RMCGA01.NEG.S, WORPT01) o en las etiquetas (hay Family sin SKU que
+// llevan el código como etiqueta). Si Family cambió un precio, se AVISA
 // (contra Shopify y contra la entrega anterior del mismo código).
-// Los precios NUNCA se cambian desde acá. Shopify: SOLO LECTURA.
+// Los precios NUNCA se cambian desde acá. Este archivo solo LEE Shopify; la carga
+// (con confirmación) está en cargaFamily.ts.
 // ============================================================================
 import { fmt, type Remito, type TalleCantidad } from './controlFacturas';
 import { numero } from './lectoresFacturas';
@@ -208,15 +210,21 @@ export function skuEsDelCodigo(sku: string, codigo: string): boolean {
   return !resto || /^[.\-_/ ]/.test(resto) || RE_TALLE_PEGADO.test(resto);
 }
 
-export interface VarianteShopify { sku: string; talle: string; precio: number; costo: number | null; producto: string; vendor: string }
+export interface VarianteShopify { sku: string; talle: string; precio: number; costo: number | null; producto: string; vendor: string; etiquetas?: string[] }
 
-/** Agrupa las variantes de Shopify por código de Family y por producto. */
+/** El producto lleva el código como etiqueta (Family sin SKU: «Remera Familyarg + Vagoart Home Negro», etiqueta RMCH01). */
+export function etiquetaEsDelCodigo(etiquetas: string[] | undefined, codigo: string): boolean {
+  const c = String(codigo ?? '').trim().toUpperCase();
+  return !!c && (etiquetas ?? []).some((t) => String(t).trim().toUpperCase() === c);
+}
+
+/** Agrupa las variantes de Shopify por código de Family y por producto (por SKU o por etiqueta). */
 export function agruparShopify(codigos: string[], variantes: VarianteShopify[]): Record<string, ProductoFamily[]> {
   const out: Record<string, ProductoFamily[]> = {};
   for (const codigo of codigos) {
     const porProducto = new Map<string, ProductoFamily>();
     for (const v of variantes) {
-      if (!skuEsDelCodigo(v.sku, codigo)) continue;
+      if (!skuEsDelCodigo(v.sku, codigo) && !etiquetaEsDelCodigo(v.etiquetas, codigo)) continue;
       const k = `${v.producto}|${v.vendor}`;
       const p = porProducto.get(k) ?? { titulo: v.producto, vendor: v.vendor, precios: [], costos: [], talles: [] };
       if (!p.precios.some((x) => centavos(x) === centavos(v.precio))) p.precios.push(v.precio);
@@ -233,30 +241,34 @@ type Gql = (query: string, variables: Record<string, unknown>) => Promise<unknow
 const QUERY_VARIANTES = `query($q: String!, $cursor: String) {
   productVariants(first: 100, after: $cursor, query: $q) {
     pageInfo { hasNextPage endCursor }
-    nodes { sku title price inventoryItem { unitCost { amount } } product { title vendor } }
+    nodes { sku title price inventoryItem { unitCost { amount } } product { title vendor tags } }
   }
 }`;
 interface PaginaVariantes {
   productVariants: {
     pageInfo: { hasNextPage: boolean; endCursor: string | null };
-    nodes: { sku: string | null; title: string; price: string; inventoryItem?: { unitCost?: { amount: string } | null } | null; product: { title: string; vendor: string } }[];
+    nodes: { sku: string | null; title: string; price: string; inventoryItem?: { unitCost?: { amount: string } | null } | null; product: { title: string; vendor: string; tags?: string[] } }[];
   };
 }
 
-/** Busca en Shopify los códigos de la entrega (por prefijo de SKU). Solo lectura. */
+/** Consulta de variantes por código: prefijo de SKU o etiqueta igual al código. */
+export const busquedaCodigos = (codigos: string[]) => codigos.map((c) => `sku:${c}* OR tag:${c}`).join(' OR ');
+export const codigoBuscable = (c: string) => /^[A-Z0-9._-]+$/.test(c);
+
+/** Busca en Shopify los códigos de la entrega (por prefijo de SKU o etiqueta). Solo lectura. */
 export async function consultarShopifyFamily(codigos: string[], gql: Gql): Promise<ConsultaShopify> {
   const fecha = new Date().toISOString();
-  const validos = [...new Set(codigos.map((c) => c.toUpperCase()))].filter((c) => /^[A-Z0-9._-]+$/.test(c));
+  const validos = [...new Set(codigos.map((c) => c.toUpperCase()))].filter(codigoBuscable);
   const variantes: VarianteShopify[] = [];
   try {
     for (let i = 0; i < validos.length; i += 20) {
-      const q = validos.slice(i, i + 20).map((c) => `sku:${c}*`).join(' OR ');
+      const q = busquedaCodigos(validos.slice(i, i + 20));
       let cursor: string | null = null;
       for (let pagina = 0; pagina < 30; pagina++) {
         const d = (await gql(QUERY_VARIANTES, { q, cursor })) as PaginaVariantes;
         for (const n of d.productVariants.nodes) {
           const costo = n.inventoryItem?.unitCost?.amount;
-          variantes.push({ sku: n.sku || '', talle: n.title, precio: Number(n.price) || 0, costo: costo == null ? null : Number(costo), producto: n.product.title, vendor: n.product.vendor });
+          variantes.push({ sku: n.sku || '', talle: n.title, precio: Number(n.price) || 0, costo: costo == null ? null : Number(costo), producto: n.product.title, vendor: n.product.vendor, etiquetas: n.product.tags ?? [] });
         }
         if (!d.productVariants.pageInfo.hasNextPage) break;
         cursor = d.productVariants.pageInfo.endCursor;

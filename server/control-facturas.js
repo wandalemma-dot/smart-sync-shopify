@@ -1,8 +1,9 @@
 // Control de facturas contra pedidos: guardado de pedidos, facturas, remitos,
 // asignaciones manuales, recepción del depósito y condiciones de pago, por proveedor.
-// Family (sin factura): planillas de entrega + remito, con la consulta a Shopify del momento.
+// Family (sin factura): planillas de entrega + remito, con la consulta a Shopify del momento,
+// y la marca de qué artículos de cada entrega ya se cargaron en Shopify («cargas»).
 // Los archivos se leen en el navegador; acá solo se valida y se guarda el JSON.
-// No toca Shopify.
+// No toca Shopify: la carga la hace el navegador por /api/shopify, con confirmación.
 export const PROVEEDORES = ['distrinando', 'id', 'family'];
 // «entregas»: planillas de Family (marketplace, sin factura). El resto, factura + remito + nota.
 const TIPOS = ['pedidos', 'facturas', 'asignaciones', 'recepciones', 'remitos', 'entregas'];
@@ -124,6 +125,30 @@ export function limpiarEntrega(e) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// CARGAS DE FAMILY EN SHOPIFY: una marca por entrega y artículo, para no cargar dos veces.
+// «en curso» se pone con HSETNX ANTES de escribir en Shopify (si ya existe, no se carga);
+// después queda «cargada», «parcial» o «dudosa» (respuesta incompleta: revisar en Shopify).
+// Solo «liberarCarga» (a mano, con confirmación) la borra. Borrar la entrega no la borra.
+// ---------------------------------------------------------------------------
+const RE_COD_CARGA = /^[A-Z0-9][A-Z0-9._/-]{1,79}$/;
+const ESTADOS_CARGA = ['cargada', 'parcial', 'dudosa'];
+const campoCarga = (body) => {
+  const cod = String(body?.codigo ?? '');
+  if (!RE_COD_CARGA.test(cod)) throw new Error('Código inválido.');
+  return `${id(body?.entregaId)}|${cod}`;
+};
+function limpiarDetalleCarga(d) {
+  const x = d && typeof d === 'object' ? d : {};
+  const out = {};
+  if (['alta', 'reposicion'].includes(x.accion)) out.accion = x.accion;
+  if (/^gid:\/\/shopify\/Product\/\d{1,20}$/.test(String(x.productoId ?? ''))) out.productoId = String(x.productoId);
+  if (x.titulo) out.titulo = txt(x.titulo, 200);
+  if (x.unidades !== undefined) out.unidades = num(x.unidades);
+  if (x.mensaje) out.mensaje = txt(x.mensaje, 600);
+  return out;
+}
+
 /** Número de la nota y huella de sus líneas (para reconocer una nota borrada a mano en otra tarjeta). */
 function firmaNota(body) {
   const out = {};
@@ -144,12 +169,15 @@ const parsear = (hash) => {
 };
 
 export async function leerTodo(kv, prov) {
-  const res = await kv([...TIPOS.map((t) => ['HGETALL', clave(prov, t)]), ['HGET', 'cf:config', prov], ['HGETALL', clave(prov, 'trello')]]);
+  const extra = prov === 'family' ? [['HGETALL', clave(prov, 'cargas')]] : [];
+  const res = await kv([...TIPOS.map((t) => ['HGETALL', clave(prov, t)]), ['HGET', 'cf:config', prov], ['HGETALL', clave(prov, 'trello')], ...extra]);
   const [pedidos, facturas, asignaciones, recepciones, remitos, entregas] = res.slice(0, TIPOS.length).map(parsear);
   const crudo = res[TIPOS.length];
   let config = {};
   try { config = crudo ? JSON.parse(crudo) : {}; } catch { config = {}; }
-  return { pedidos: Object.values(pedidos), facturas: Object.values(facturas), asignaciones, recepciones, remitos, entregas: Object.values(entregas), config, trelloVistos: parsear(res[TIPOS.length + 1]) };
+  const out = { pedidos: Object.values(pedidos), facturas: Object.values(facturas), asignaciones, recepciones, remitos, entregas: Object.values(entregas), config, trelloVistos: parsear(res[TIPOS.length + 1]) };
+  if (prov === 'family') out.cargas = parsear(res[TIPOS.length + 2]);
+  return out;
 }
 
 /** Aplica una acción de guardado o borrado. Valida todo antes de escribir. */
@@ -224,8 +252,36 @@ export async function aplicar(kv, body) {
       return { ok: true };
     }
     case 'borrarEntrega': {
+      // Las marcas de carga en Shopify quedan: si se vuelve a subir la misma planilla, no se carga dos veces.
       const eid = id(body.id);
       await kv([['HDEL', clave(prov, 'entregas'), eid], ['HDEL', clave(prov, 'remitos'), eid]]);
+      return { ok: true };
+    }
+    case 'reservarCarga': {
+      if (prov !== 'family') throw new Error('Acción inválida.');
+      const campo = campoCarga(body);
+      const marca = { estado: 'en curso', fecha: new Date().toISOString(), firma: txt(body.firma, 400), detalle: limpiarDetalleCarga(body.detalle) };
+      const [puesto, actual] = await kv([['HSETNX', clave(prov, 'cargas'), campo, JSON.stringify(marca)], ['HGET', clave(prov, 'cargas'), campo]]);
+      if (Number(puesto) === 1) return { ok: true };
+      let existente = null;
+      try { existente = actual ? JSON.parse(actual) : null; } catch { existente = null; }
+      return { ok: false, existente };
+    }
+    case 'terminarCarga': {
+      if (prov !== 'family') throw new Error('Acción inválida.');
+      const campo = campoCarga(body);
+      if (!ESTADOS_CARGA.includes(body.estado)) throw new Error('Estado inválido.');
+      const [actual] = await kv([['HGET', clave(prov, 'cargas'), campo]]);
+      let previa = null;
+      try { previa = actual ? JSON.parse(actual) : null; } catch { previa = null; }
+      if (!previa) throw new Error('No encontré la marca de esa carga.');
+      const marca = { ...previa, estado: body.estado, fecha: new Date().toISOString(), detalle: { ...(previa.detalle || {}), ...limpiarDetalleCarga(body.detalle) } };
+      await kv([['HSET', clave(prov, 'cargas'), campo, JSON.stringify(marca)]]);
+      return { ok: true };
+    }
+    case 'liberarCarga': {
+      if (prov !== 'family') throw new Error('Acción inválida.');
+      await kv([['HDEL', clave(prov, 'cargas'), campoCarga(body)]]);
       return { ok: true };
     }
     case 'marcarTrelloVisto': {

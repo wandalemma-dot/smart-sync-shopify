@@ -9,6 +9,7 @@ function memoria() {
     const h = db.get(key) ?? new Map();
     db.set(key, h);
     if (op === 'HSET') { h.set(campo, valor); return 1; }
+    if (op === 'HSETNX') { if (h.has(campo)) return 0; h.set(campo, valor); return 1; }
     if (op === 'HDEL') return h.delete(campo) ? 1 : 0;
     if (op === 'HGET') return h.get(campo) ?? null;
     if (op === 'HGETALL') return [...h.entries()].flat();
@@ -37,6 +38,32 @@ describe('Family: entregas sin factura (11-nov-2026)', () => {
     t = await leerTodo(fn, 'family');
     expect(t.entregas).toEqual([]);
     expect(t.remitos).toEqual({});
+  });
+
+  it('marca de carga en Shopify: una sola vez por entrega y artículo, sobrevive al borrado de la entrega', async () => {
+    const { fn } = memoria();
+    const base = { proveedor: 'family', entregaId: 'E-2026-10-30-x', codigo: 'SHBSPEC' };
+    expect(await aplicar(fn, { ...base, accion: 'reservarCarga', firma: '2026-10-30|SHBSPEC|20|S:2', detalle: { accion: 'alta', titulo: 'Bermuda Short Familyarg Spectrum' } })).toEqual({ ok: true });
+    // Otra pantalla (o un doble clic) no puede cargarla otra vez.
+    const otra = await aplicar(fn, { ...base, accion: 'reservarCarga', firma: 'x' });
+    expect(otra.ok).toBe(false);
+    expect(otra.existente).toMatchObject({ estado: 'en curso', firma: '2026-10-30|SHBSPEC|20|S:2' });
+    await aplicar(fn, { ...base, accion: 'terminarCarga', estado: 'cargada', detalle: { productoId: 'gid://shopify/Product/77', unidades: 20, productoFalso: 1 } });
+    let t = await leerTodo(fn, 'family');
+    expect(t.cargas['E-2026-10-30-x|SHBSPEC']).toMatchObject({ estado: 'cargada', detalle: { accion: 'alta', productoId: 'gid://shopify/Product/77', unidades: 20, titulo: 'Bermuda Short Familyarg Spectrum' } });
+    expect(t.cargas['E-2026-10-30-x|SHBSPEC'].detalle.productoFalso).toBeUndefined();
+    await aplicar(fn, { proveedor: 'family', accion: 'borrarEntrega', id: base.entregaId });
+    t = await leerTodo(fn, 'family');
+    expect(Object.keys(t.cargas)).toEqual(['E-2026-10-30-x|SHBSPEC']);
+    await aplicar(fn, { ...base, accion: 'liberarCarga' });
+    expect((await leerTodo(fn, 'family')).cargas).toEqual({});
+    // Validaciones: estado, código, proveedor, y no se termina una carga que no se reservó.
+    await expect(aplicar(fn, { ...base, accion: 'terminarCarga', estado: 'cargada' })).rejects.toThrow(/No encontré la marca/);
+    await aplicar(fn, { ...base, accion: 'reservarCarga', firma: 'f' });
+    await expect(aplicar(fn, { ...base, accion: 'terminarCarga', estado: 'en curso' })).rejects.toThrow(/Estado inválido/);
+    await expect(aplicar(fn, { ...base, accion: 'reservarCarga', codigo: 'shb spec' })).rejects.toThrow(/Código inválido/);
+    await expect(aplicar(fn, { ...base, proveedor: 'id', accion: 'reservarCarga' })).rejects.toThrow(/Acción inválida/);
+    expect((await leerTodo(fn, 'id')).cargas).toBeUndefined();
   });
 });
 
