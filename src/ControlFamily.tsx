@@ -195,7 +195,8 @@ export default function ControlFamily() {
       : `${codigo}: ${textoCarga(c)}\n\nAntes de liberar, mirá en Shopify si quedó cargado y corregilo a mano si hace falta. Si liberás, la app lo deja cargar de nuevo. ¿Liberar?`;
     if (!confirm(aviso)) return;
     setArmado(null);
-    await guardar({ accion: 'liberarCarga', entregaId, codigo });
+    // manual: queda anotada en el registro de cargas (la que libera la app sola cuando Shopify rechazó la carga, no).
+    await guardar({ accion: 'liberarCarga', entregaId, codigo, manual: true });
   }
 
   async function reconsultar(e: EntregaFamily) {
@@ -318,8 +319,13 @@ function TarjetaFamily({ r, abierta, ocupado, cargas, plan, onArmar, onConfirmar
   const cargados = r.filas.filter((f) => cargas[f.codigo]?.estado === 'cargada').length;
   const aRevisar = Object.entries(cargas).filter(([, c]) => c.estado !== 'cargada');
   const puedeCargar = r.semaforo === 'ok' || r.semaforo === 'observaciones';
-  // Ya cargada entera: «hay que darlos de alta» deja de ser cierto.
-  const motivos = cargados === r.filas.length ? [...r.motivos.filter((m) => !/^(🆕|🔁)/.test(m)), '✔ Entrega cargada en Shopify.'] : r.motivos;
+  // Cargada entera o en parte: «hay que darlos de alta» deja de ser cierto para lo ya cargado.
+  const pendientes = r.filas.filter((f) => !cargas[f.codigo]).map((f) => f.codigo);
+  const motivos = cargados === r.filas.length ? [...r.motivos.filter((m) => !/^(🆕|🔁)/.test(m)), '✔ Entrega cargada en Shopify.']
+    : cargados ? [...r.motivos.filter((m) => !/^(🆕|🔁)/.test(m)),
+      `✔ Ya cargado en Shopify: ${r.filas.filter((f) => cargas[f.codigo]?.estado === 'cargada').map((f) => f.codigo).join(', ')}.`,
+      ...(pendientes.length ? [`⏳ Falta cargar: ${pendientes.join(', ')}. Cuando llegue, tocá «⬆️ Cargar en Shopify».`] : [])]
+    : r.motivos;
   return (
     <div style={{ border: `1px solid ${s.color}66`, borderRadius: 10, padding: '10px 12px', marginBottom: 12, background: `${s.color}0d` }}>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', cursor: 'pointer' }} onClick={onAbrir}>
@@ -420,6 +426,9 @@ function PanelCarga({ plan, ocupado, onConfirmar, onCancelar }: { plan: PlanCarg
         Los nuevos se crean activos y solo en Point of Sale (las fotos se agregan a mano), con el precio público de la planilla y el costo por mayor − 15%. La reposición se SUMA a lo que hay. Los precios de lo que ya existe no se tocan.
       </div>
       {plan.avisos.map((a, i) => <div key={i} style={{ color: '#fbbf24', fontSize: '0.84rem' }}>⚠️ {a}</div>)}
+      {plan.items.some((it) => it.estado === 'listo') && <div style={{ fontSize: '0.8rem', opacity: 0.8, marginBottom: 4 }}>
+        ¿Algo no llegó todavía? Destildalo: queda pendiente y lo cargás otro día con el mismo botón.
+      </div>}
       {plan.items.map((it) => <FilaCarga key={it.codigo} it={it} eleccion={elecciones[it.codigo]} onElegir={(c) => elegir(it.codigo, c)} />)}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
         <button style={{ ...botonPrincipal, opacity: res.lineas.length && !ocupado ? 1 : 0.5, cursor: res.lineas.length && !ocupado ? 'pointer' : 'not-allowed' }}
@@ -436,11 +445,18 @@ function PanelCarga({ plan, ocupado, onConfirmar, onCancelar }: { plan: PlanCarg
 function FilaCarga({ it, eleccion, onElegir }: { it: ItemCarga; eleccion?: { clave: string; titulo?: string }; onElegir: (c: Partial<{ clave: string; titulo: string }>) => void }) {
   const op = it.opciones.find((o) => o.clave === (eleccion?.clave ?? it.opciones[0]?.clave));
   const a = op?.accion;
+  // Con una sola cosa para hacer, una casilla deja dejarlo para otro día (lo que no llegó todavía).
+  const casilla = it.estado === 'listo' && it.opciones.length === 1;
+  const fuera = casilla && !a;
   return (
     <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', padding: '7px 0', fontSize: '0.84rem' }}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        <strong style={{ color: COLOR_ITEM[it.estado] }}>{it.codigo}</strong>
-        <span style={{ opacity: 0.8 }}>{it.descripcion} · {it.unidades} u.</span>
+        {casilla && <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', cursor: 'pointer' }} title="Destildalo si todavía no llegó: queda pendiente">
+          <input type="checkbox" checked={!fuera} onChange={(ev) => onElegir({ clave: ev.target.checked ? it.opciones[0].clave : 'no' })} />
+        </label>}
+        <strong style={{ color: COLOR_ITEM[it.estado], opacity: fuera ? 0.55 : 1 }}>{it.codigo}</strong>
+        <span style={{ opacity: fuera ? 0.5 : 0.8 }}>{it.descripcion} · {it.unidades} u.</span>
+        {fuera && <span style={{ fontSize: '0.8rem', color: '#fbbf24' }}>queda pendiente: no se carga ahora</span>}
         {it.opciones.length > 1 && <select value={eleccion?.clave ?? it.opciones[0].clave} onChange={(ev) => onElegir({ clave: ev.target.value })} style={{ ...inputSt, maxWidth: '100%' }}>
           {it.opciones.map((o) => <option key={o.clave} value={o.clave} disabled={!!o.bloqueo}>{o.etiqueta}{o.bloqueo ? ' (no se puede)' : ''}</option>)}
         </select>}

@@ -104,7 +104,9 @@ export interface CargaFamily {
   estado: 'en curso' | 'cargada' | 'parcial' | 'dudosa';
   fecha: string;
   firma: string;
-  detalle?: { accion?: 'alta' | 'reposicion'; productoId?: string; titulo?: string; unidades?: number; mensaje?: string };
+  detalle?: { accion?: 'alta' | 'reposicion'; productoId?: string; titulo?: string; unidades?: number; mensaje?: string; talles?: { talle: string; cantidad: number }[] };
+  /** Ya quedó anotada en el registro de cargas. */
+  registrado?: boolean;
 }
 
 /** Productos parecidos por nombre (Family sin SKU ni etiqueta con el código). */
@@ -406,7 +408,8 @@ export interface DepsCarga {
   onProgreso?: (hechos: number, total: number) => void;
 }
 export interface ResultadoCarga { codigo: string; estado: 'cargada' | 'parcial' | 'dudosa' | 'error' | 'saltado'; mensaje: string; productoId?: string }
-type Paso = { estado: 'cargada' | 'parcial' | 'dudosa' | 'error'; mensaje: string; productoId?: string; titulo?: string; unidades?: number };
+/** talles: lo mandado a Shopify por talle, sin lo que Shopify rechazó (para el registro de cargas). */
+type Paso = { estado: 'cargada' | 'parcial' | 'dudosa' | 'error'; mensaje: string; productoId?: string; titulo?: string; unidades?: number; talles?: { talle: string; cantidad: number }[] };
 
 const errores = (ue: { message?: string }[]) => ue.map((x) => x.message).filter(Boolean).join('; ') || 'error de Shopify';
 const NO_SE_SABE = 'la respuesta de Shopify no llegó completa. Revisá en Shopify antes de volver a intentar';
@@ -445,17 +448,18 @@ async function crearAlta(codigo: string, a: AltaFamily, plan: PlanCarga, deps: D
     })),
   };
   const unidades = a.variantes.reduce((s, v) => s + v.cantidad, 0);
+  const talles = a.variantes.map((v) => ({ talle: v.talle, cantidad: v.cantidad }));
   let data: { productSet?: { product?: { id?: string } | null; userErrors?: { message?: string }[] } } | null;
   try { data = (await deps.gql(CREAR, { input })) as typeof data; }
   catch (e) {
     if (noSeEjecuto(e)) return { estado: 'error', mensaje: `Shopify no creó «${a.titulo}» (${motivo(e)}).` };
-    return { estado: 'dudosa', mensaje: `No sé si se creó «${a.titulo}»: ${NO_SE_SABE}.`, titulo: a.titulo };
+    return { estado: 'dudosa', mensaje: `No sé si se creó «${a.titulo}»: ${NO_SE_SABE}.`, titulo: a.titulo, talles };
   }
   const ue = data?.productSet?.userErrors;
-  if (!Array.isArray(ue)) return { estado: 'dudosa', mensaje: `No sé si se creó «${a.titulo}»: ${NO_SE_SABE}.`, titulo: a.titulo };
+  if (!Array.isArray(ue)) return { estado: 'dudosa', mensaje: `No sé si se creó «${a.titulo}»: ${NO_SE_SABE}.`, titulo: a.titulo, talles };
   if (ue.length) return { estado: 'error', mensaje: `Shopify no creó «${a.titulo}»: ${errores(ue)}.` };
   const pid = data?.productSet?.product?.id;
-  if (!pid) return { estado: 'dudosa', mensaje: `No sé si se creó «${a.titulo}»: ${NO_SE_SABE}.`, titulo: a.titulo };
+  if (!pid) return { estado: 'dudosa', mensaje: `No sé si se creó «${a.titulo}»: ${NO_SE_SABE}.`, titulo: a.titulo, talles };
   let publicado = '';
   if (plan.posId) {
     try {
@@ -464,7 +468,7 @@ async function crearAlta(codigo: string, a: AltaFamily, plan: PlanCarga, deps: D
       if (!Array.isArray(pe) || pe.length) publicado = ' No pude publicarlo en Point of Sale: publicalo a mano.';
     } catch { publicado = ' No pude publicarlo en Point of Sale: publicalo a mano.'; }
   }
-  return { estado: 'cargada', productoId: pid, titulo: a.titulo, unidades, mensaje: `Creado «${a.titulo}» con ${unidades} u. en ${SUCURSAL_FAMILY} (${a.variantes.map((v) => `${v.talle}:${v.cantidad}`).join(' ')}).${publicado}` };
+  return { estado: 'cargada', productoId: pid, titulo: a.titulo, unidades, talles, mensaje: `Creado «${a.titulo}» con ${unidades} u. en ${SUCURSAL_FAMILY} (${a.variantes.map((v) => `${v.talle}:${v.cantidad}`).join(' ')}).${publicado}` };
 }
 
 async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga, deps: DepsCarga): Promise<Paso> {
@@ -472,6 +476,7 @@ async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga
   const sinAlta = rep.lineas.filter((l) => l.actual === null);
   const hechas: string[] = [];
   let unidades = 0;
+  const talles = (ls: LineaReposicion[]) => ls.map((l) => ({ talle: l.talle, cantidad: l.suma }));
   if (activas.length) {
     const input = {
       name: 'available',
@@ -483,29 +488,30 @@ async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga
     try { data = (await deps.gql(SUMAR, { input, key: deps.clave() })) as typeof data; }
     catch (e) {
       if (noSeEjecuto(e)) return { estado: 'error', mensaje: `Shopify no sumó el stock en «${rep.titulo}» (${motivo(e)}). No se sumó nada.` };
-      return { estado: 'dudosa', mensaje: `No sé si se sumó el stock en «${rep.titulo}»: ${NO_SE_SABE}.`, productoId: rep.productoId, titulo: rep.titulo };
+      return { estado: 'dudosa', mensaje: `No sé si se sumó el stock en «${rep.titulo}»: ${NO_SE_SABE}.`, productoId: rep.productoId, titulo: rep.titulo, talles: talles(activas) };
     }
     const ue = data?.inventorySetQuantities?.userErrors;
-    if (!Array.isArray(ue)) return { estado: 'dudosa', mensaje: `No sé si se sumó el stock en «${rep.titulo}»: ${NO_SE_SABE}.`, productoId: rep.productoId, titulo: rep.titulo };
+    if (!Array.isArray(ue)) return { estado: 'dudosa', mensaje: `No sé si se sumó el stock en «${rep.titulo}»: ${NO_SE_SABE}.`, productoId: rep.productoId, titulo: rep.titulo, talles: talles(activas) };
     if (ue.length) {
       const cambio = ue.some((x) => /CHANGE_FROM_QUANTITY_STALE|COMPARE_QUANTITY_STALE/.test(String(x.code)));
       return { estado: 'error', mensaje: cambio
         ? `El stock de «${rep.titulo}» en ${SUCURSAL_FAMILY} cambió desde que armaste la carga (por ejemplo, una venta). No se sumó nada: armá la carga de nuevo.`
         : `Shopify no sumó el stock en «${rep.titulo}»: ${errores(ue)}. No se sumó nada.` };
     }
-    if (!data?.inventorySetQuantities?.inventoryAdjustmentGroup) return { estado: 'dudosa', mensaje: `No sé si se sumó el stock en «${rep.titulo}»: ${NO_SE_SABE}.`, productoId: rep.productoId, titulo: rep.titulo };
+    if (!data?.inventorySetQuantities?.inventoryAdjustmentGroup) return { estado: 'dudosa', mensaje: `No sé si se sumó el stock en «${rep.titulo}»: ${NO_SE_SABE}.`, productoId: rep.productoId, titulo: rep.titulo, talles: talles(activas) };
     for (const l of activas) { hechas.push(`${l.talle} ${l.actual}→${l.actual! + l.suma}`); unidades += l.suma; }
   }
   const fallas: string[] = [], dudas: string[] = [];
+  const enviadas: LineaReposicion[] = [...activas];
   for (const l of sinAlta) {
     try {
       const d = (await deps.gql(ACTIVAR, { inventoryItemId: l.inventoryItemId, locationId: plan.locationId, available: l.suma, key: deps.clave() })) as
         { inventoryActivate?: { inventoryLevel?: { id?: string } | null; userErrors?: { message?: string }[] } } | null;
       const ue = d?.inventoryActivate?.userErrors;
-      if (!Array.isArray(ue) || (!ue.length && !d?.inventoryActivate?.inventoryLevel?.id)) dudas.push(l.talle);
+      if (!Array.isArray(ue) || (!ue.length && !d?.inventoryActivate?.inventoryLevel?.id)) { dudas.push(l.talle); enviadas.push(l); }
       else if (ue.length) fallas.push(`${l.talle} (${errores(ue)})`);
-      else { hechas.push(`${l.talle} alta con ${l.suma}`); unidades += l.suma; }
-    } catch (e) { if (noSeEjecuto(e)) fallas.push(`${l.talle} (${motivo(e)})`); else dudas.push(l.talle); }
+      else { hechas.push(`${l.talle} alta con ${l.suma}`); unidades += l.suma; enviadas.push(l); }
+    } catch (e) { if (noSeEjecuto(e)) fallas.push(`${l.talle} (${motivo(e)})`); else { dudas.push(l.talle); enviadas.push(l); } }
   }
   let etiqueta = '';
   if (rep.etiquetar && hechas.length) {
@@ -514,7 +520,7 @@ async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga
       if (!t?.tagsAdd?.node?.id || t.tagsAdd.userErrors?.length) etiqueta = ` No pude agregarle la etiqueta ${codigo}: agregala a mano.`;
     } catch { etiqueta = ` No pude agregarle la etiqueta ${codigo}: agregala a mano.`; }
   }
-  const comun = { productoId: rep.productoId, titulo: rep.titulo, unidades };
+  const comun = { productoId: rep.productoId, titulo: rep.titulo, unidades, talles: talles(enviadas) };
   if (!hechas.length && !dudas.length) return { estado: 'error', mensaje: `Shopify no dio de alta el stock en «${rep.titulo}»: ${fallas.join(', ')}. No se sumó nada.` };
   const resumen = hechas.length ? `Sumado en «${rep.titulo}»: ${hechas.join(', ')}.` : '';
   if (dudas.length) return { ...comun, estado: 'dudosa', mensaje: `${resumen} No sé si se dio de alta el talle ${dudas.join(', ')}: ${NO_SE_SABE}.${fallas.length ? ` Falló: ${fallas.join(', ')}.` : ''}${etiqueta}`.trim() };
@@ -549,7 +555,7 @@ export async function ejecutarCargaFamily(plan: PlanCarga, elecciones: Eleccione
       // Shopify no escribió nada: se libera la marca para poder volver a armar la carga.
       try { await deps.liberar(codigo); } catch { mensaje += ' (No pude liberar la marca: liberala a mano después de revisar.)'; }
     } else {
-      try { await deps.terminar(codigo, paso.estado, { accion: accion.tipo, productoId: paso.productoId, titulo: paso.titulo ?? accion.titulo, unidades: paso.unidades, mensaje: paso.mensaje.slice(0, 600) }); }
+      try { await deps.terminar(codigo, paso.estado, { accion: accion.tipo, productoId: paso.productoId, titulo: paso.titulo ?? accion.titulo, unidades: paso.unidades, mensaje: paso.mensaje.slice(0, 600), ...(paso.talles ? { talles: paso.talles } : {}) }); }
       catch { mensaje += ' (No pude anotar el resultado en la base: NO lo vuelvas a cargar.)'; }
     }
     out.push({ codigo, estado: paso.estado, mensaje, ...(paso.productoId ? { productoId: paso.productoId } : {}) });
