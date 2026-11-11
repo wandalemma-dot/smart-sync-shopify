@@ -278,9 +278,15 @@ export async function leerEnlaces(kv) {
 }
 
 async function guardarEnlaces(kv, body) {
-  if (!Array.isArray(body?.enlaces)) throw new Error('Faltan los enlaces.');
+  if (!Array.isArray(body?.enlaces) || !Array.isArray(body?.antes)) throw new Error('Faltan los enlaces.');
   if (body.enlaces.length > MAX_ENLACES) throw new Error(`Se pueden guardar hasta ${MAX_ENLACES} enlaces.`);
   const enlaces = body.enlaces.map(limpiarEnlace);
+  // Se guarda la lista ENTERA: si cambió desde que la pantalla la leyó (otra computadora, otra
+  // pestaña), no se pisa, para no borrar un enlace que alguien agregó en el medio.
+  const plano = (l) => JSON.stringify(l.map((x) => [String(x?.nombre ?? ''), String(x?.url ?? '')]));
+  if (plano((await leerEnlaces(kv)).enlaces) !== plano(body.antes)) {
+    throw new Error('Las planillas guardadas cambiaron desde que abriste el editor (¿desde otra computadora?). Volvé a abrirlo.');
+  }
   await kv([['HSET', 'cf:config', 'enlaces', JSON.stringify(enlaces)]]);
   return { ok: true, enlaces };
 }

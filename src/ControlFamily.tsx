@@ -241,13 +241,15 @@ export default function ControlFamily() {
       </div>
 
       {!resultados.length && !cargando && <p style={{ opacity: 0.7, fontSize: '0.85rem' }}>Todavía no hay entregas de Family cargadas.</p>}
-      {pendientes.length > 0 && cargadas.length > 0 && <Separador color={AMARILLO} texto={`⏳ Falta cargar en Shopify (${pendientes.length})`} />}
-      {pendientes.map(tarjeta)}
-      {cargadas.length > 0 && <>
-        {!pendientes.length && <p style={{ opacity: 0.7, fontSize: '0.85rem' }}>No hay entregas pendientes de cargar en Shopify.</p>}
-        <Separador color={VERDE} texto={`✔ Cargadas en Shopify (${cargadas.length})`} />
-        {cargadas.map(tarjeta)}
-      </>}
+      {/* Una sola lista con claves: una entrega que pasa de pendiente a cargada (o vuelve) se MUEVE, no se
+          vuelve a montar, así no se pierde lo que se estaba escribiendo en su remito o planilla. */}
+      {[
+        ...(pendientes.length && cargadas.length ? [<Separador key="sep-pendientes" color={AMARILLO} texto={`⏳ Falta cargar en Shopify (${pendientes.length})`} />] : []),
+        ...pendientes.map(tarjeta),
+        ...(cargadas.length && !pendientes.length ? [<p key="sin-pendientes" style={{ opacity: 0.7, fontSize: '0.85rem' }}>No hay entregas pendientes de cargar en Shopify.</p>] : []),
+        ...(cargadas.length ? [<Separador key="sep-cargadas" color={VERDE} texto={`✔ Cargadas en Shopify (${cargadas.length})`} />] : []),
+        ...cargadas.map(tarjeta),
+      ]}
     </div>
   );
 

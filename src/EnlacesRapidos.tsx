@@ -6,7 +6,7 @@
 // Google Sheets). El enlace lo pega la usuaria una vez y queda guardado en la
 // base (cf:config, campo «enlaces»), nunca en el código: el repositorio es público.
 // ============================================================================
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { apiControl, boton, botonChico, inputSt, mensaje } from './utils/entregasUi';
 
 interface EnlaceRapido { nombre: string; url: string }
@@ -26,23 +26,28 @@ function errorEnlaces(lista: EnlaceRapido[]): string {
 
 export default function EnlacesRapidos() {
   const [enlaces, setEnlaces] = useState<EnlaceRapido[]>([]);
-  const [leido, setLeido] = useState(false);
+  // Si no se pudieron leer, NO se muestra como «sin enlaces»: guardar desde ahí borraría los que hay.
+  const [estado, setEstado] = useState<'leyendo' | 'ok' | 'error'>('leyendo');
   const [editando, setEditando] = useState<EnlaceRapido[] | null>(null);
+  /** La lista guardada cuando se abrió el editor: el servidor no guarda si cambió en el medio. */
+  const [base, setBase] = useState<EnlaceRapido[]>([]);
   const [error, setError] = useState('');
   const [guardando, setGuardando] = useState(false);
 
-  useEffect(() => {
-    let vivo = true;
-    fetch('/api/control-facturas?enlaces=1', { cache: 'no-store' })
-      .then((r) => (r.ok ? r.json() : { enlaces: [] }))
-      .then((d) => { if (vivo) setEnlaces(Array.isArray(d?.enlaces) ? d.enlaces : []); })
-      .catch(() => { /* sin base o sin red: se muestra igual el botón para agregar */ })
-      .finally(() => { if (vivo) setLeido(true); });
-    return () => { vivo = false; };
+  const leer = useCallback(async () => {
+    setEstado('leyendo');
+    try {
+      const r = await fetch('/api/control-facturas?enlaces=1', { cache: 'no-store' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !Array.isArray(d?.enlaces)) throw new Error(d?.error || `Error ${r.status}`);
+      setEnlaces(d.enlaces); setEstado('ok');
+    } catch { setEstado('error'); }
   }, []);
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- lectura inicial
+  useEffect(() => { leer(); }, [leer]);
 
   function abrir() {
-    setError('');
+    setError(''); setBase(enlaces);
     setEditando(enlaces.length ? enlaces.map((e) => ({ ...e })) : [{ nombre: NOMBRE_SUGERIDO, url: '' }]);
   }
   const cambiar = (i: number, campo: keyof EnlaceRapido, valor: string) =>
@@ -56,10 +61,14 @@ export default function EnlacesRapidos() {
     if (err) { setError(err); return; }
     setGuardando(true); setError('');
     try {
-      const d = await apiControl({ accion: 'guardarEnlaces', enlaces: lista });
+      const d = await apiControl({ accion: 'guardarEnlaces', enlaces: lista, antes: base });
       setEnlaces(Array.isArray(d.enlaces) ? d.enlaces : lista);
       setEditando(null);
-    } catch (e) { setError(mensaje(e)); }
+    } catch (e) {
+      setError(mensaje(e));
+      // Otra pantalla los cambió: se leen de nuevo para que al volver a abrir se parta de lo guardado.
+      if (/cambiaron/.test(mensaje(e))) { setEditando(null); await leer(); }
+    }
     finally { setGuardando(false); }
   }
 
@@ -72,7 +81,12 @@ export default function EnlacesRapidos() {
             📊 {e.nombre}
           </a>
         ))}
-        {leido && (
+        {estado === 'error' && (
+          <span style={{ fontSize: '0.8rem', color: '#fbbf24' }}>
+            No pude leer las planillas guardadas. <button style={botonChico} onClick={leer}>🔄 Reintentar</button>
+          </span>
+        )}
+        {estado === 'ok' && (
           <button style={enlaces.length ? botonChico : boton} onClick={() => (editando ? setEditando(null) : abrir())}
             title={enlaces.length ? 'Agregar, cambiar o quitar planillas' : 'Guardar el enlace de una planilla para abrirla desde acá'}>
             {enlaces.length ? '✏️' : '➕ Agregar planilla (Excel)'}

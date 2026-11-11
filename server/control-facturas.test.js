@@ -145,28 +145,46 @@ describe('Registro de cargas en Shopify (11-nov-2026)', () => {
 
 describe('Enlaces rápidos a planillas propias (11-nov-2026)', () => {
   const url = 'https://docs.google.com/spreadsheets/d/ABC123/edit?usp=sharing';
+  const guardar = (fn, enlaces, antes) => aplicar(fn, { accion: 'guardarEnlaces', enlaces, antes });
   it('guarda y lee los enlaces: solo https, sin usuario ni clave, hasta 5, sin pisar la configuración de los proveedores', async () => {
     const { fn, db } = memoria();
     expect(await leerEnlaces(fn)).toEqual({ enlaces: [] });
-    const r = await aplicar(fn, { accion: 'guardarEnlaces', enlaces: [{ nombre: '  Control de ingreso   de mercadería ', url: `  ${url} ` }] });
-    expect(r.enlaces).toEqual([{ nombre: 'Control de ingreso de mercadería', url }]);
-    expect(await leerEnlaces(fn)).toEqual({ enlaces: [{ nombre: 'Control de ingreso de mercadería', url }] });
+    const r = await guardar(fn, [{ nombre: '  Control de ingreso   de mercadería ', url: `  ${url} ` }], []);
+    const uno = [{ nombre: 'Control de ingreso de mercadería', url }];
+    expect(r.enlaces).toEqual(uno);
+    expect(await leerEnlaces(fn)).toEqual({ enlaces: uno });
     await aplicar(fn, { proveedor: 'id', accion: 'guardarConfig', config: { condicionesPago: '30 días' } });
     expect((await leerTodo(fn, 'id')).config).toEqual({ condicionesPago: '30 días' });
     expect((await leerEnlaces(fn)).enlaces).toHaveLength(1);
     for (const mala of ['javascript:alert(1)', 'http://docs.google.com/x', 'https://yo:clave@docs.google.com/x', 'no es un enlace', '', `https://x.com/${'a'.repeat(500)}`]) {
-      await expect(aplicar(fn, { accion: 'guardarEnlaces', enlaces: [{ nombre: 'x', url: mala }] })).rejects.toThrow();
+      await expect(guardar(fn, [{ nombre: 'x', url: mala }], uno)).rejects.toThrow();
     }
-    await expect(aplicar(fn, { accion: 'guardarEnlaces', enlaces: Array.from({ length: 6 }, () => ({ url })) })).rejects.toThrow(/hasta 5/);
-    await expect(aplicar(fn, { accion: 'guardarEnlaces', enlaces: 'x' })).rejects.toThrow(/Faltan/);
+    await expect(guardar(fn, Array.from({ length: 6 }, () => ({ url })), uno)).rejects.toThrow(/hasta 5/);
+    await expect(aplicar(fn, { accion: 'guardarEnlaces', enlaces: 'x', antes: uno })).rejects.toThrow(/Faltan/);
+    await expect(aplicar(fn, { accion: 'guardarEnlaces', enlaces: [] })).rejects.toThrow(/Faltan/);
     // Lo rechazado no cambió nada.
-    expect((await leerEnlaces(fn)).enlaces).toEqual([{ nombre: 'Control de ingreso de mercadería', url }]);
-    expect((await aplicar(fn, { accion: 'guardarEnlaces', enlaces: [{ url }] })).enlaces[0].nombre).toBe('Planilla');
-    await aplicar(fn, { accion: 'guardarEnlaces', enlaces: [] });
+    expect((await leerEnlaces(fn)).enlaces).toEqual(uno);
+    expect((await guardar(fn, [{ url }], uno)).enlaces[0].nombre).toBe('Planilla');
+    await guardar(fn, [], [{ nombre: 'Planilla', url }]);
     expect(await leerEnlaces(fn)).toEqual({ enlaces: [] });
     // Un valor dañado en la base no rompe la pantalla.
     db.get('cf:config').set('enlaces', '{roto');
     expect(await leerEnlaces(fn)).toEqual({ enlaces: [] });
+  });
+
+  it('no pisa enlaces que se agregaron desde otra pantalla mientras se editaba', async () => {
+    const { fn } = memoria();
+    const a = { nombre: 'Control de ingreso de mercadería', url };
+    const b = { nombre: 'Otra', url: 'https://docs.google.com/spreadsheets/d/OTRA/edit' };
+    await guardar(fn, [a], []);
+    // La computadora 1 leyó [a]; la 2 agrega b.
+    await guardar(fn, [a, b], [a]);
+    // La 1 guarda a partir de lo que había leído: se rechaza y b sigue.
+    await expect(guardar(fn, [{ ...a, nombre: 'Ingreso' }], [a])).rejects.toThrow(/cambiaron/);
+    expect((await leerEnlaces(fn)).enlaces).toEqual([a, b]);
+    // Una pantalla que no pudo leer (y cree que no hay ninguno) tampoco puede borrarlos.
+    await expect(guardar(fn, [a], [])).rejects.toThrow(/cambiaron/);
+    expect((await leerEnlaces(fn)).enlaces).toEqual([a, b]);
   });
 
   it('se leen solo con sesión iniciada', async () => {

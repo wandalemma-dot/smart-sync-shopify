@@ -65,14 +65,15 @@ const FRASE_BRAND_CO = /(?:^|\s)(?:X\s+)?BRAND\s*(?:&|AND|Y)?\s*CO\.?(?=\s|$)/gi
  * lleva Brand & Co. También vale si la planilla lo escribe en la descripción.
  */
 export function esBrandCo(codigo: string, descripcion = ''): boolean {
-  return /^BF[A-Z0-9]/.test(norm(codigo)) || new RegExp(FRASE_BRAND_CO.source, 'i').test(norm(descripcion));
+  return /^BF[A-Z0-9]/.test(norm(codigo)) || new RegExp(FRASE_BRAND_CO.source, 'i').test(norm(String(descripcion ?? '').replace(/\//g, ' ')));
 }
 
 /** Separa la descripción de la planilla (ARTICULO MODELO CORTE COLOR) en el tipo y el resto. */
 export function partesFamily(descripcion: string, codigo = ''): { articulo: string; resto: string[]; tipo: TipoFamily | null; brandCo: boolean } {
   const brandCo = esBrandCo(codigo, descripcion);
   // «Brand & Co» va una sola vez, en su lugar del título: se saca de la descripción.
-  const palabras = String(descripcion ?? '').replace(FRASE_BRAND_CO, ' ').replace(/\//g, ' ').split(/\s+/).filter(Boolean);
+  // La barra separa palabras («NEGRO/MULTI», «NEGRO/BRAND & CO»): se cambia por espacio ANTES de sacar la frase.
+  const palabras = String(descripcion ?? '').replace(/\//g, ' ').replace(FRASE_BRAND_CO, ' ').split(/\s+/).filter(Boolean);
   const [primera = '', ...resto] = palabras;
   const tipo = TIPOS.find(([re]) => re.test(norm(primera)))?.[1] ?? null;
   return { articulo: primera, resto: resto.filter((w) => !/^FAMILY(ARG)?$/.test(norm(w))), tipo, brandCo };

@@ -47,6 +47,9 @@ describe('Family: título, talles y costo de los nuevos (como se cargan a mano)'
     // Si la planilla lo escribe, va una sola vez y en su lugar, con o sin código BF.
     expect(tituloFamily('REMERA X BRAND & CO DUNCAN NEGRO', 'BFRMCSD01')).toBe('Remera Familyarg x Brand & Co Duncan Negro');
     expect(tituloFamily('REMERA BRAND AND CO DUNCAN NEGRO', 'RMCX01')).toBe('Remera Familyarg x Brand & Co Duncan Negro');
+    // Pegada a una barra (como «NEGRO/MULTI») también se saca: no se repite.
+    expect(tituloFamily('REMERA DUNCAN NEGRO/BRAND & CO', 'BFRMCSD01')).toBe('Remera Familyarg x Brand & Co Duncan Negro');
+    expect(tituloFamily('REMERA BRAND & CO/DUNCAN NEGRO', 'RMCX01')).toBe('Remera Familyarg x Brand & Co Duncan Negro');
     // Sin BF ni la frase, no es Brand & Co; «BRAND & COURT» tampoco.
     expect(tituloFamily('SHORT SPECTRUM BASKET NEGRO/MULTI', 'SHBSPEC')).toBe('Bermuda Short Familyarg Spectrum Basket Negro Multi');
     expect(esBrandCo('HPRST01', 'BUZO STICKERS NEGRO')).toBe(false);
