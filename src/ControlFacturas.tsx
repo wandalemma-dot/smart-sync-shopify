@@ -19,6 +19,7 @@ import {
 } from './utils/controlFacturas';
 import { leerFacturaDistrinando, leerFacturaId, leerPedidoAuto, leerTextoRemito, textoRemito, type ItemPdf } from './utils/lectoresFacturas';
 import ControlFamily from './ControlFamily';
+import RegistroCargas from './RegistroCargas';
 import { Archivo, Copiar, Parte } from './EntregasPartes';
 import {
   apiControl, boton, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, slug, td, th,
@@ -118,6 +119,9 @@ const api = (body?: object, proveedor?: Prov) => apiControl(body, proveedor);
 export default function ControlFacturas() {
   const [prov, setProv] = useState<Prov>('id');
   const [vista, setVista] = useState<Vista>('entregas');
+  // Registro de cargas en Shopify (todos los proveedores). Las pantallas de abajo quedan montadas
+  // (ocultas) mientras se mira, así una carga en curso no se corta.
+  const [verRegistro, setVerRegistro] = useState(false);
   const [datos, setDatos] = useState<Datos>(VACIO);
   const [cargando, setCargando] = useState(false);
   const [error, setError] = useState('');
@@ -481,10 +485,14 @@ export default function ControlFacturas() {
   // Las notas subidas a mano y borradas también se anotan ahí (con «P:»), pero no son Excel de Trello.
   const excelTrello = Object.entries(datos.trelloVistos).filter(([k]) => /^[a-f0-9]{24}$/.test(k)).map(([, v]) => v);
   const facturasRes = [...res.facturas].reverse();
-  const cambiarProv = (p: Prov) => { provRef.current = p; setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
+  const cambiarProv = (p: Prov) => { setVerRegistro(false); provRef.current = p; setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
 
   const cabecera = (<>
-    <h2 style={{ marginTop: 0, marginBottom: 8 }}>🧾 Control de entregas</h2>
+    <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
+      <h2 style={{ margin: 0 }}>🧾 Control de entregas</h2>
+      <button style={{ ...boton, background: verRegistro ? '#6366f1' : boton.background, border: verRegistro ? '1px solid #6366f1' : boton.border }}
+        onClick={() => setVerRegistro((v) => !v)} title="Qué se cargó en Shopify desde acá, con remito y factura">📋 Registro de cargas</button>
+    </div>
     <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
       <span style={{ fontSize: '0.88rem', opacity: 0.8 }}>Proveedor:</span>
       {PROVS.map((p) => (
@@ -498,11 +506,18 @@ export default function ControlFacturas() {
     </div>
   </>);
   // Family no factura: entrega + remito, con su propia pantalla.
-  if (prov === 'family') return <div className="glass-panel" style={{ padding: '1.5rem', marginTop: '0.5rem' }}>{cabecera}<ControlFamily /></div>;
+  const registro = verRegistro && <RegistroCargas onVolver={() => setVerRegistro(false)} />;
+  if (prov === 'family') return (
+    <div className="glass-panel" style={{ padding: '1.5rem', marginTop: '0.5rem' }}>
+      {cabecera}{registro}
+      <div style={{ display: verRegistro ? 'none' : undefined }}><ControlFamily /></div>
+    </div>
+  );
 
   return (
     <div className="glass-panel" style={{ padding: '1.5rem', marginTop: '0.5rem' }}>
-      {cabecera}
+      {cabecera}{registro}
+      <div style={{ display: verRegistro ? 'none' : undefined }}>
 
       {sinBase && <p style={{ color: '#fbbf24', fontSize: '0.9rem' }}>⚠ Falta conectar la base de datos al proyecto en Vercel. Sin ella no se pueden guardar las entregas.</p>}
       {error && !sinBase && <p style={{ color: '#f87171', fontWeight: 'bold' }}>⚠ {error}</p>}
@@ -626,6 +641,7 @@ export default function ControlFacturas() {
           <Pendientes res={res} nombrePedido={nombrePedido} />
         </div>
       )}
+      </div>
     </div>
   );
 }

@@ -2,6 +2,8 @@
 // asignaciones manuales, recepción del depósito y condiciones de pago, por proveedor.
 // Family (sin factura): planillas de entrega + remito, con la consulta a Shopify del momento,
 // y la marca de qué artículos de cada entrega ya se cargaron en Shopify («cargas»).
+// Registro de cargas (cf:registro): cada carga en Shopify y cada marca liberada a mano, con el
+// remito y la factura de la entrega, para ver después qué se cargó y cuándo.
 // Los archivos se leen en el navegador; acá solo se valida y se guarda el JSON.
 // No toca Shopify: la carga la hace el navegador por /api/shopify, con confirmación.
 export const PROVEEDORES = ['distrinando', 'id', 'family'];
@@ -146,7 +148,76 @@ function limpiarDetalleCarga(d) {
   if (x.titulo) out.titulo = txt(x.titulo, 200);
   if (x.unidades !== undefined) out.unidades = num(x.unidades);
   if (x.mensaje) out.mensaje = txt(x.mensaje, 600);
+  if (x.talles !== undefined) out.talles = talles(x.talles);
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// REGISTRO DE CARGAS (pedido de gax, 11-nov-2026): una lista para todos los proveedores, la más
+// nueva primero. Cada evento guarda lo que había al momento (fecha y nombre de la entrega, número
+// de remito y de factura), así no depende de que la entrega siga guardada. Solo se agrega: nadie
+// lo edita ni lo borra desde la app.
+// ---------------------------------------------------------------------------
+const REGISTRO = 'cf:registro';
+const MAX_REGISTRO = 5000;
+export const VER_REGISTRO = 500;
+const json = (v) => { try { return v ? JSON.parse(v) : null; } catch { return null; } };
+
+/** Fecha y talles de la firma de la carga: «2026-10-30|SHBSPEC|20|L:4,S:2». */
+function deFirma(firma) {
+  const [f = '', , , ts = ''] = String(firma || '').split('|');
+  return {
+    fecha: /^\d{4}-\d{2}-\d{2}$/.test(f) ? f : '',
+    talles: ts.split(',').map((x) => /^(.+):(\d+(?:\.\d+)?)$/.exec(x)).filter(Boolean).map((m) => ({ talle: m[1], cantidad: Number(m[2]) })),
+  };
+}
+
+/** Un evento del registro a partir de la marca de carga y lo guardado de la entrega en ese momento. */
+function eventoRegistro({ tipo, prov, campo, marca, entrega, remito, hora, estado }) {
+  const [entregaId, codigo] = campo.split('|');
+  const d = marca?.detalle || {};
+  const f = deFirma(marca?.firma);
+  const ent = json(entrega);
+  const rem = json(remito);
+  return {
+    tipo, hora, proveedor: prov, entregaId, codigo,
+    entrega: { fecha: f.fecha || txt(ent?.fecha, 10), nombre: txt(ent?.nombre, 160) },
+    remito: txt(rem?.numero, 40),
+    // Family no factura. Los demás proveedores, cuando carguen desde acá, mandan la suya.
+    factura: txt(marca?.factura, 40),
+    estado,
+    ...(d.accion ? { accion: d.accion } : {}),
+    ...(d.titulo ? { titulo: d.titulo } : {}),
+    ...(d.productoId ? { productoId: d.productoId } : {}),
+    ...(d.unidades !== undefined ? { unidades: d.unidades } : {}),
+    talles: Array.isArray(d.talles) ? d.talles : f.talles,
+    ...(d.mensaje ? { mensaje: d.mensaje } : {}),
+  };
+}
+const agregarAlRegistro = (evento) => [['LPUSH', REGISTRO, JSON.stringify(evento)], ['LTRIM', REGISTRO, 0, MAX_REGISTRO - 1]];
+
+/**
+ * Registro de cargas: los últimos eventos, la más nueva primero. Las cargas hechas antes de que
+ * existiera el registro (o que se cortaron sin terminar) se arman con su marca, para que también se vean.
+ */
+export async function leerRegistro(kv) {
+  const [crudos, hash] = await kv([['LRANGE', REGISTRO, 0, VER_REGISTRO - 1], ['HGETALL', clave('family', 'cargas')]]);
+  const eventos = (Array.isArray(crudos) ? crudos : []).map(json).filter((e) => e && typeof e === 'object');
+  const sinRegistro = Object.entries(parsear(hash)).filter(([, m]) => m && !m.registrado);
+  if (sinRegistro.length) {
+    const ids = [...new Set(sinRegistro.map(([campo]) => campo.split('|')[0]))];
+    const [ents, rems] = await kv([['HMGET', clave('family', 'entregas'), ...ids], ['HMGET', clave('family', 'remitos'), ...ids]]);
+    const pos = new Map(ids.map((x, i) => [x, i]));
+    for (const [campo, marca] of sinRegistro) {
+      const i = pos.get(campo.split('|')[0]);
+      eventos.push({
+        ...eventoRegistro({ tipo: 'carga', prov: 'family', campo, marca, entrega: ents?.[i], remito: rems?.[i], hora: txt(marca.fecha, 30), estado: marca.estado }),
+        deMarca: true,
+      });
+    }
+  }
+  eventos.sort((a, b) => String(b.hora).localeCompare(String(a.hora)));
+  return { eventos, completo: !Array.isArray(crudos) || crudos.length < VER_REGISTRO };
 }
 
 /** Número de la nota y huella de sus líneas (para reconocer una nota borrada a mano en otra tarjeta). */
@@ -271,17 +342,39 @@ export async function aplicar(kv, body) {
       if (prov !== 'family') throw new Error('Acción inválida.');
       const campo = campoCarga(body);
       if (!ESTADOS_CARGA.includes(body.estado)) throw new Error('Estado inválido.');
-      const [actual] = await kv([['HGET', clave(prov, 'cargas'), campo]]);
-      let previa = null;
-      try { previa = actual ? JSON.parse(actual) : null; } catch { previa = null; }
+      const eid = campo.split('|')[0];
+      const [actual, entrega, remito] = await kv([['HGET', clave(prov, 'cargas'), campo], ['HGET', clave(prov, 'entregas'), eid], ['HGET', clave(prov, 'remitos'), eid]]);
+      const previa = json(actual);
       if (!previa) throw new Error('No encontré la marca de esa carga.');
-      const marca = { ...previa, estado: body.estado, fecha: new Date().toISOString(), detalle: { ...(previa.detalle || {}), ...limpiarDetalleCarga(body.detalle) } };
-      await kv([['HSET', clave(prov, 'cargas'), campo, JSON.stringify(marca)]]);
+      const hora = new Date().toISOString();
+      const marca = { ...previa, estado: body.estado, fecha: hora, detalle: { ...(previa.detalle || {}), ...limpiarDetalleCarga(body.detalle) } };
+      // Al registro va una sola vez: cuando la carga termina (de «en curso» a su resultado).
+      const nueva = previa.estado === 'en curso' && !previa.registrado;
+      if (nueva) marca.registrado = true;
+      await kv([
+        ['HSET', clave(prov, 'cargas'), campo, JSON.stringify(marca)],
+        ...(nueva ? agregarAlRegistro(eventoRegistro({ tipo: 'carga', prov, campo, marca, entrega, remito, hora, estado: body.estado })) : []),
+      ]);
       return { ok: true };
     }
     case 'liberarCarga': {
       if (prov !== 'family') throw new Error('Acción inválida.');
-      await kv([['HDEL', clave(prov, 'cargas'), campoCarga(body)]]);
+      const campo = campoCarga(body);
+      // La app libera sola la marca cuando Shopify rechazó la carga (no se escribió nada): eso no se
+      // anota. Lo que libera la usuaria a mano sí, porque permite cargar ese artículo otra vez.
+      if (body.manual !== true) {
+        await kv([['HDEL', clave(prov, 'cargas'), campo]]);
+        return { ok: true };
+      }
+      const eid = campo.split('|')[0];
+      const [actual, entrega, remito] = await kv([['HGET', clave(prov, 'cargas'), campo], ['HGET', clave(prov, 'entregas'), eid], ['HGET', clave(prov, 'remitos'), eid]]);
+      const previa = json(actual);
+      const cmds = [['HDEL', clave(prov, 'cargas'), campo]];
+      if (previa) {
+        const ev = eventoRegistro({ tipo: 'liberada', prov, campo, marca: previa, entrega, remito, hora: new Date().toISOString(), estado: previa.estado });
+        cmds.push(...agregarAlRegistro({ ...ev, mensaje: txt(`Marca liberada a mano: la app deja cargar este artículo otra vez. Antes estaba «${previa.estado}».`, 600) }));
+      }
+      await kv(cmds);
       return { ok: true };
     }
     case 'marcarTrelloVisto': {

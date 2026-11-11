@@ -2,7 +2,7 @@
 // Guarda en la base de Vercel (Upstash Redis). No toca Shopify.
 import { allowedOrigin, identity, noStore } from '../server/access.js';
 import { kv, kvConfigurado } from '../server/kv.js';
-import { aplicar, leerTodo, PROVEEDORES } from '../server/control-facturas.js';
+import { aplicar, leerRegistro, leerTodo, PROVEEDORES } from '../server/control-facturas.js';
 
 export default async function handler(req, res) {
   noStore(res);
@@ -11,6 +11,8 @@ export default async function handler(req, res) {
   if (!kvConfigurado()) return res.status(503).json({ error: 'Falta conectar la base de datos (Upstash Redis) al proyecto en Vercel.', sinBase: true });
   try {
     if (req.method === 'GET') {
+      // Registro de cargas en Shopify: de todos los proveedores juntos.
+      if (req.query?.registro === '1') return res.status(200).json(await leerRegistro(kv));
       const prov = String(req.query?.proveedor || '');
       if (!PROVEEDORES.includes(prov)) return res.status(400).json({ error: 'Proveedor inválido.' });
       return res.status(200).json(await leerTodo(kv, prov));

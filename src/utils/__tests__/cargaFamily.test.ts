@@ -209,7 +209,11 @@ describe('Family: carga en Shopify (después de confirmar)', () => {
     });
     expect(gql.mock.calls.find(([q]) => q.includes('publishablePublish'))![1]).toEqual({ id: 'gid://shopify/Product/77', input: [{ publicationId: POS }] });
     expect(d.reservar).toHaveBeenCalledWith('SHBSPEC', expect.stringContaining('2026-10-30|SHBSPEC|20|'), expect.objectContaining({ accion: 'alta' }));
-    expect(d.terminar).toHaveBeenCalledWith('SHBSPEC', 'cargada', expect.objectContaining({ productoId: 'gid://shopify/Product/77', unidades: 20 }));
+    expect(d.terminar).toHaveBeenCalledWith('SHBSPEC', 'cargada', expect.objectContaining({
+      productoId: 'gid://shopify/Product/77', unidades: 20,
+      // Para el registro de cargas: qué talles se cargaron.
+      talles: [{ talle: 'S', cantidad: 2 }, { talle: 'M', cantidad: 4 }, { talle: 'L', cantidad: 4 }, { talle: 'XL', cantidad: 6 }, { talle: 'XXL', cantidad: 4 }],
+    }));
     expect(d.liberar).not.toHaveBeenCalled();
   });
 
@@ -280,7 +284,43 @@ describe('Family: carga en Shopify (después de confirmar)', () => {
     });
     expect(gql.mock.calls.find(([q]) => q.includes('inventoryActivate'))![1]).toEqual({ inventoryItemId: `${p.id}/inv/XL`, locationId: LOC, available: 6, key: 'clave-1' });
     expect(gql.mock.calls.some(([q]) => /productSet|productVariantsBulkUpdate|price/.test(q))).toBe(false);
-    expect(d.terminar).toHaveBeenCalledWith('SHBSPEC', 'cargada', expect.objectContaining({ unidades: 20, productoId: p.id }));
+    expect(d.terminar).toHaveBeenCalledWith('SHBSPEC', 'cargada', expect.objectContaining({
+      unidades: 20, productoId: p.id,
+      talles: [{ talle: 'S', cantidad: 2 }, { talle: 'M', cantidad: 4 }, { talle: 'L', cantidad: 4 }, { talle: 'XXL', cantidad: 4 }, { talle: 'XL', cantidad: 6 }],
+    }));
+  });
+
+  it('reposición en parte: al registro van solo los talles que Shopify no rechazó', async () => {
+    const p = producto('gid://shopify/Product/1', 'Bermuda', { S: 1, M: 0, L: 3, XL: null, XXL: 2 });
+    const gql = shopify({
+      inventorySetQuantities: () => ({ inventorySetQuantities: { inventoryAdjustmentGroup: { createdAt: 'x' }, userErrors: [] } }),
+      inventoryActivate: () => ({ inventoryActivate: { inventoryLevel: null, userErrors: [{ message: 'no se puede' }] } }),
+    });
+    const d = deps(gql);
+    const [res] = await ejecutarCargaFamily(planSolo('SHBSPEC', estadoVacio({ porCodigo: { SHBSPEC: [p.id], GSKPT23: [] }, productos: { [p.id]: p } })), {}, d);
+    expect(res.estado).toBe('parcial');
+    expect(d.terminar).toHaveBeenCalledWith('SHBSPEC', 'parcial', expect.objectContaining({
+      unidades: 14, talles: [{ talle: 'S', cantidad: 2 }, { talle: 'M', cantidad: 4 }, { talle: 'L', cantidad: 4 }, { talle: 'XXL', cantidad: 4 }],
+    }));
+  });
+
+  it('cargar solo una parte de la entrega: lo destildado no se carga y queda para otro día', async () => {
+    const gql = shopify({
+      productVariants: () => ({ productVariants: { pageInfo: sinPagina, nodes: [] } }),
+      productSet: () => ({ productSet: { product: { id: 'gid://shopify/Product/78' }, userErrors: [] } }),
+      publishablePublish: () => ({ publishablePublish: { userErrors: [] } }),
+    });
+    const plan = planCargaFamily(resultado(), estadoVacio(), {});
+    const elecciones = { GSKPT23: { clave: 'no' } };
+    expect(accionesElegidas(plan, elecciones).map((a) => a.codigo)).toEqual(['SHBSPEC']);
+    expect(resumenCarga(plan, elecciones)).toMatchObject({ altas: 1, unidades: 20 });
+    const d = deps(gql);
+    const res = await ejecutarCargaFamily(plan, elecciones, d);
+    expect(res.map((r) => r.codigo)).toEqual(['SHBSPEC']);
+    expect(d.reservar).toHaveBeenCalledTimes(1);
+    // Al otro día, con la marca del primero, el plan deja cargar solo lo que falta.
+    const otroDia = planCargaFamily(resultado(), estadoVacio(), { 'E1|SHBSPEC': { estado: 'cargada', fecha: '2026-11-11T19:00:00Z', firma: 'x' } });
+    expect(otroDia.items.map((i) => [i.codigo, i.estado])).toEqual([['SHBSPEC', 'cargado'], ['GSKPT23', 'listo']]);
   });
 
   it('si el stock cambió desde la vista previa, Shopify rechaza todo y no se suma nada', async () => {

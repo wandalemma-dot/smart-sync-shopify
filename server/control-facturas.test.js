@@ -1,13 +1,21 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { aplicar, leerTodo } from './control-facturas.js';
+import { aplicar, leerRegistro, leerTodo } from './control-facturas.js';
 import { kv } from './kv.js';
 import handler from '../api/control-facturas.js';
 
 function memoria() {
   const db = new Map();
-  const fn = async (cmds) => cmds.map(([op, key, campo, valor]) => {
+  const fn = async (cmds) => cmds.map(([op, key, campo, valor, ...mas]) => {
+    if (op.startsWith('L')) {
+      const l = db.get(key) ?? [];
+      db.set(key, l);
+      if (op === 'LPUSH') { l.unshift(campo); return l.length; }
+      if (op === 'LTRIM') { l.splice(valor + 1); return 'OK'; }
+      if (op === 'LRANGE') return l.slice(campo, valor + 1);
+    }
     const h = db.get(key) ?? new Map();
     db.set(key, h);
+    if (op === 'HMGET') return [campo, valor, ...mas].filter((x) => x !== undefined).map((c) => h.get(c) ?? null);
     if (op === 'HSET') { h.set(campo, valor); return 1; }
     if (op === 'HSETNX') { if (h.has(campo)) return 0; h.set(campo, valor); return 1; }
     if (op === 'HDEL') return h.delete(campo) ? 1 : 0;
@@ -64,6 +72,74 @@ describe('Family: entregas sin factura (11-nov-2026)', () => {
     await expect(aplicar(fn, { ...base, accion: 'reservarCarga', codigo: 'shb spec' })).rejects.toThrow(/Código inválido/);
     await expect(aplicar(fn, { ...base, proveedor: 'id', accion: 'reservarCarga' })).rejects.toThrow(/Acción inválida/);
     expect((await leerTodo(fn, 'id')).cargas).toBeUndefined();
+  });
+});
+
+describe('Registro de cargas en Shopify (11-nov-2026)', () => {
+  const entrega = { id: 'E-2026-11-10-x', nombre: 'Planilla (foto)', fecha: '2026-11-10', origen: 'foto', renglones: [] };
+  const base = { proveedor: 'family', entregaId: entrega.id };
+  async function preparar() {
+    const m = memoria();
+    await aplicar(m.fn, { proveedor: 'family', accion: 'guardarEntrega', entrega });
+    await aplicar(m.fn, { proveedor: 'family', accion: 'guardarRemito', facturaId: entrega.id, remito: { numero: '0001-00002716', renglones: [{ codigo: 'BFRMCPC29', cantidad: 8 }] } });
+    return m;
+  }
+
+  it('cada carga terminada queda anotada una sola vez, con remito, entrega y talles, y sobrevive al borrado de la entrega', async () => {
+    const { fn } = await preparar();
+    const c = { ...base, codigo: 'BFRMCPC29' };
+    await aplicar(fn, { ...c, accion: 'reservarCarga', firma: '2026-11-10|BFRMCPC29|8|L:2,M:2,S:1,XL:2,XXL:1', detalle: { accion: 'alta', titulo: 'Remera Familyarg Panchart Cry Regular Ladrillo' } });
+    // Mientras está «en curso» no figura en el registro como carga terminada.
+    expect((await leerRegistro(fn)).eventos[0]).toMatchObject({ estado: 'en curso', deMarca: true });
+    await aplicar(fn, { ...c, accion: 'terminarCarga', estado: 'cargada', detalle: { productoId: 'gid://shopify/Product/5', unidades: 8, talles: [{ talle: 'S', cantidad: 1 }, { talle: 'XXL', cantidad: 1 }], mensaje: 'Creado' } });
+    // Un segundo «terminar» (reintento) no la anota dos veces.
+    await aplicar(fn, { ...c, accion: 'terminarCarga', estado: 'cargada', detalle: {} });
+    await aplicar(fn, { proveedor: 'family', accion: 'borrarEntrega', id: entrega.id });
+    const { eventos, completo } = await leerRegistro(fn);
+    expect(completo).toBe(true);
+    expect(eventos).toHaveLength(1);
+    expect(eventos[0]).toMatchObject({
+      tipo: 'carga', proveedor: 'family', entregaId: entrega.id, codigo: 'BFRMCPC29', estado: 'cargada', accion: 'alta',
+      entrega: { fecha: '2026-11-10', nombre: 'Planilla (foto)' }, remito: '0001-00002716', factura: '',
+      titulo: 'Remera Familyarg Panchart Cry Regular Ladrillo', productoId: 'gid://shopify/Product/5', unidades: 8,
+      talles: [{ talle: 'S', cantidad: 1 }, { talle: 'XXL', cantidad: 1 }],
+    });
+    expect(eventos[0].deMarca).toBeUndefined();
+  });
+
+  it('liberar a mano se anota; la liberación automática (Shopify rechazó la carga) no', async () => {
+    const { fn } = await preparar();
+    await aplicar(fn, { ...base, codigo: 'BFRMCSD01', accion: 'reservarCarga', firma: 'f' });
+    await aplicar(fn, { ...base, codigo: 'BFRMCSD01', accion: 'liberarCarga' });
+    expect((await leerRegistro(fn)).eventos).toEqual([]);
+    await aplicar(fn, { ...base, codigo: 'BFRMCSD15', accion: 'reservarCarga', firma: '2026-11-10|BFRMCSD15|8|S:1', detalle: { accion: 'alta', titulo: 'Remera Arboleda' } });
+    await aplicar(fn, { ...base, codigo: 'BFRMCSD15', accion: 'terminarCarga', estado: 'dudosa', detalle: { mensaje: 'No sé si se creó' } });
+    await aplicar(fn, { ...base, codigo: 'BFRMCSD15', accion: 'liberarCarga', manual: true });
+    const { eventos } = await leerRegistro(fn);
+    expect(eventos.map((e) => [e.tipo, e.estado])).toEqual([['liberada', 'dudosa'], ['carga', 'dudosa']]);
+    expect(eventos[0]).toMatchObject({ codigo: 'BFRMCSD15', remito: '0001-00002716', titulo: 'Remera Arboleda' });
+    expect(eventos[0].mensaje).toMatch(/liberada a mano/);
+    // Liberar a mano algo que ya no tiene marca no inventa un evento.
+    await aplicar(fn, { ...base, codigo: 'BFRMCSD15', accion: 'liberarCarga', manual: true });
+    expect((await leerRegistro(fn)).eventos).toHaveLength(2);
+  });
+
+  it('las cargas de antes del registro se arman con su marca: fecha y talles de la firma, remito de la entrega', async () => {
+    const { db, fn } = await preparar();
+    const vieja = { estado: 'cargada', fecha: '2026-11-11T19:20:58.000Z', firma: '2026-10-30|GSKPT23|10|L:2,M:2,S:1,XL:2,XXL:2,XXXL:1', detalle: { accion: 'alta', productoId: 'gid://shopify/Product/15571635142899', titulo: 'Pantalon Familyarg Garage', unidades: 10 } };
+    db.set('cf:family:cargas', new Map([[`${entrega.id}|GSKPT23`, JSON.stringify(vieja)], ['E-borrada|SHBSPEC', JSON.stringify({ ...vieja, fecha: '2026-11-11T19:20:55.000Z', firma: '2026-10-30|SHBSPEC|20|S:2' })]]));
+    const { eventos } = await leerRegistro(fn);
+    expect(eventos.map((e) => e.codigo)).toEqual(['GSKPT23', 'SHBSPEC']);
+    expect(eventos[0]).toMatchObject({ tipo: 'carga', deMarca: true, hora: vieja.fecha, estado: 'cargada', remito: '0001-00002716', unidades: 10, entrega: { fecha: '2026-10-30', nombre: 'Planilla (foto)' } });
+    expect(eventos[0].talles).toContainEqual({ talle: 'XXXL', cantidad: 1 });
+    // Entrega borrada: igual figura, sin remito.
+    expect(eventos[1]).toMatchObject({ entregaId: 'E-borrada', remito: '', entrega: { fecha: '2026-10-30', nombre: '' }, talles: [{ talle: 'S', cantidad: 2 }] });
+  });
+
+  it('el registro se lee solo con sesión iniciada', async () => {
+    const r = { headers: {}, code: 0, body: null, setHeader(k, v) { r.headers[k] = v; }, status(c) { r.code = c; return r; }, json(b) { r.body = b; return r; } };
+    await handler({ method: 'GET', headers: {}, query: { registro: '1' } }, r);
+    expect(r.code).toBe(401);
   });
 });
 
