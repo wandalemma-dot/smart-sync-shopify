@@ -89,13 +89,17 @@ describe('Family: nuevo o reposición según Shopify (solo lectura)', () => {
       },
     }));
     const c = await consultarShopifyFamily(['HPRST01', 'SHBSPEC', 'NO VALE'], gql);
-    expect(gql.mock.calls[0][1]).toEqual({ q: 'sku:HPRST01* OR sku:SHBSPEC*', cursor: null });
+    expect(gql.mock.calls[0][1]).toEqual({ q: 'sku:HPRST01* OR tag:HPRST01 OR sku:SHBSPEC* OR tag:SHBSPEC', cursor: null });
     expect(c.codigos.HPRST01).toEqual([{ titulo: 'Buzo Familyarg Stickers Negro', vendor: 'Familyarg', precios: [79200], costos: [33660], talles: ['S', 'XXL'] }]);
     expect(c.codigos.SHBSPEC).toEqual([]);
     expect('NO VALE' in c.codigos).toBe(false);
     const falla = await consultarShopifyFamily(['A1'], async () => { throw new Error('sin conexión'); });
     expect(falla.error).toMatch(/sin conexión/);
     expect(agruparShopify(['X1'], [])).toEqual({ X1: [] });
+    // Family sin SKU que lleva el código como etiqueta (Remera Familyarg + Vagoart Home Negro, RMCH01): es reposición.
+    const v = { sku: '', talle: 'S', precio: 39000, costo: 16575, producto: 'Remera Familyarg + Vagoart Home Negro', vendor: 'Familyarg' };
+    expect(agruparShopify(['RMCH01'], [{ ...v, etiquetas: ['Ropa', 'rmch01'] }]).RMCH01).toHaveLength(1);
+    expect(agruparShopify(['RMCH0'], [{ ...v, etiquetas: ['RMCH01'] }]).RMCH0).toEqual([]);
   });
 });
 
