@@ -374,7 +374,7 @@ export function leerFacturaId(paginas: ItemPdf[][], id: string): LecturaFactura 
 // ---------------------------------------------------------------------------
 const RE_COD_REMITO = /^[A-Z0-9][A-Z0-9._/-]{2,}$/;
 
-export function leerTextoRemito(texto: string): { remito: Pick<Remito, 'numero' | 'fecha' | 'renglones'>; errores: string[] } {
+export function leerTextoRemito(texto: string, opciones: { codigoSinNumeros?: boolean } = {}): { remito: Pick<Remito, 'numero' | 'fecha' | 'renglones'>; errores: string[] } {
   const errores: string[] = [];
   let numero = '';
   let fecha = '';
@@ -387,7 +387,8 @@ export function leerTextoRemito(texto: string): { remito: Pick<Remito, 'numero' 
     if (/^fecha\b/i.test(linea)) { fecha = fechaDeCelda(linea) || fecha; return; }
     const tokens = linea.replace(/\s*([/×:=])\s*/g, '$1').replace(/\s+x\s+/gi, 'x').split(/[\s,;]+/).filter(Boolean);
     const codigo = tokens[0].toUpperCase();
-    if (!RE_COD_REMITO.test(codigo) || !/\d/.test(codigo)) { errores.push(`Línea ${i + 1}: no reconozco el código «${tokens[0]}».`); return; }
+    // Family usa códigos sin números (SHBSPEC); los demás proveedores siempre traen alguno.
+    if (!RE_COD_REMITO.test(codigo) || (!opciones.codigoSinNumeros && !/\d/.test(codigo))) { errores.push(`Línea ${i + 1}: no reconozco el código «${tokens[0]}».`); return; }
     const resto = tokens.slice(1);
     const r = porCodigo.get(codigo) ?? { codigo, cantidad: 0, talles: [] };
     if (resto.length === 1 && /^\d+$/.test(resto[0])) {

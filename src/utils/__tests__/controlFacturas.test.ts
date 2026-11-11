@@ -297,6 +297,16 @@ describe('tres partes obligatorias y remito', () => {
     expect(r.checklist[0].talles).toEqual([{ talle: '5.0', cantidad: 1 }, { talle: '6.0', cantidad: 2 }, { talle: '7.5', cantidad: 3 }]);
   });
 
+  it('la O y el 0 cuentan igual entre factura, nota y remito (factura 0011-00139953: CTN0225003O / CTN02250030)', () => {
+    const pedO: Pedido = { id: 'P2', nombre: 'P2', fecha: '2026-11-01', lineas: [linea('CTN02250030', 'S', 2), linea('CTN02250030', 'M', 2), linea('CTO0226101', 'L', 1)] };
+    const fO = factura('9', '2026-11-06', [ren('CTN0225003O', 4), ren('CTO0226101', 1)]);
+    fO.remito = '00125274';
+    const r = analizarFacturas([pedO], [fO], {}, { 9: rem('Remito 0013-00125274\nCTN02250030 4\nCT00226101 1') }).facturas[0];
+    expect(r.renglones.map((x) => [x.codigo, x.sinPedir, x.remito])).toEqual([['CTN0225003O', 0, 4], ['CTO0226101', 0, 1]]);
+    expect(r.difRemito).toEqual([]);
+    expect(r.semaforo).toBe('ok');
+  });
+
   it('remito con menos que la factura es reclamo; con más, observación; otro número, observación', () => {
     const menos = analizarFacturas([ped], [f], {}, { 1: rem('571818C 5.0/1 6.0/2 7.5/2\nA12744C 4') }).facturas[0];
     expect(menos.semaforo).toBe('reclamar');

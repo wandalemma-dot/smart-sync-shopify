@@ -2,9 +2,14 @@
 // SOLO LECTURA: el token se generó con scope=read. Claves en Vercel:
 // TRELLO_KEY y TRELLO_TOKEN (nunca en el código); TRELLO_BOARD opcional.
 // Las claves viajan en el encabezado Authorization, no en la URL.
+import * as XLSX from 'xlsx';
+
 const API = 'https://api.trello.com/1';
 const RE_ID = /^[a-f0-9]{24}$/;
 export const MAX_ADJUNTO = 3_000_000; // en base64 queda < 4,5 MB (límite de Vercel)
+// Los Excel de iD traen las fotos de los productos y suelen pesar más de 3 MB (11-nov-2026):
+// se bajan hasta 25 MB y se devuelve una copia liviana, solo con los datos de la hoja.
+export const MAX_DESCARGA = 25_000_000;
 
 export const trelloConfigurado = () => Boolean(process.env.TRELLO_KEY && process.env.TRELLO_TOKEN);
 const tablero = () => process.env.TRELLO_BOARD || 'RzHl0YNS';
@@ -63,8 +68,25 @@ export async function bajarAdjunto(tarjetaId, adjuntoId, fetchImpl = fetch) {
   if (!tarjeta || tarjeta.idBoard !== tab?.id) throw error('La tarjeta no es del tablero de compras.', 403);
   const adj = await get(`/cards/${tarjetaId}/attachments/${adjuntoId}?fields=id,name,bytes,isUpload`, fetchImpl);
   if (!adj?.isUpload || !esExcel(adj.name)) throw error('El adjunto no es un Excel subido a la tarjeta.', 400);
-  if (Number(adj.bytes) > MAX_ADJUNTO) throw error('El Excel pesa más de 3 MB: subilo a mano.', 413);
+  if (Number(adj.bytes) > MAX_DESCARGA) throw error('El Excel pesa más de 25 MB: subilo a mano.', 413);
   const datos = await get(`/cards/${tarjetaId}/attachments/${adjuntoId}/download/${encodeURIComponent(adj.name)}`, fetchImpl, true);
-  if (datos.length > MAX_ADJUNTO) throw error('El Excel pesa más de 3 MB: subilo a mano.', 413);
-  return { nombre: String(adj.name), datos: datos.toString('base64') };
+  if (datos.length > MAX_DESCARGA) throw error('El Excel pesa más de 25 MB: subilo a mano.', 413);
+  const liviano = datos.length > MAX_ADJUNTO ? sinFotos(datos) : datos;
+  if (liviano.length > MAX_ADJUNTO) throw error('El Excel tiene demasiados datos para leerlo desde Trello: subilo a mano.', 413);
+  return { nombre: String(adj.name), datos: liviano.toString('base64') };
+}
+
+/**
+ * Copia del Excel con SOLO los valores de la primera hoja visible (sin fotos ni estilos).
+ * Las fechas y números quedan como en el original, así el lector de pedidos lo lee igual.
+ */
+export function sinFotos(datos) {
+  let wb;
+  try { wb = XLSX.read(datos, { type: 'buffer', cellStyles: false }); }
+  catch { throw error('El adjunto no se pudo abrir como Excel.', 400); }
+  const hoja = wb.SheetNames.find((_, i) => !wb.Workbook?.Sheets?.[i]?.Hidden) || wb.SheetNames[0];
+  if (!hoja) throw error('El Excel no tiene hojas.', 400);
+  const nuevo = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(nuevo, wb.Sheets[hoja], hoja.slice(0, 31));
+  return Buffer.from(XLSX.write(nuevo, { type: 'buffer', bookType: 'xlsx', compression: true }));
 }

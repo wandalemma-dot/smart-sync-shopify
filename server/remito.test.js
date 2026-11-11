@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { COOKIE, makeSession } from './access.js';
-import { leerRemito, normalizarRemito, validarFotos } from './remito.js';
+import { leerRemito, normalizarEntrega, normalizarRemito, validarFotos } from './remito.js';
 import handler from '../api/leer-remito.js';
 
 const foto = { media: 'image/jpeg', datos: 'QUJD' };
@@ -31,6 +31,22 @@ describe('lectura de la foto del remito', () => {
     ]);
     expect(r.dudas.join(' ')).toMatch(/total impreso \(9\) no coincide con la suma de talles \(3\)/);
     expect(r.origen).toBe('foto');
+  });
+
+  it('con tipo entrega lee la planilla de Family: descripción, precios y talles', async () => {
+    const { create, cliente: c } = cliente(json({
+      fecha: '2026-10-30', dudas: [],
+      renglones: [{ codigo: 'gskpt23', descripcion: 'PANTALON GARAGE SKT PANT LOOSE FIT GRIS', precioMayor: 49000, precioPublico: 98000, cantidad: 11,
+        talles: [{ talle: 'S', cantidad: 1 }, { talle: 'M', cantidad: 2 }, { talle: 'L', cantidad: 2 }, { talle: 'XL', cantidad: 2 }, { talle: '2XL', cantidad: 2 }, { talle: '3XL', cantidad: 1 }] }],
+    }));
+    const r = await leerRemito({ fotos: [foto], cliente: c, tipo: 'entrega' });
+    const pedido = create.mock.calls[0][0];
+    expect(pedido.output_config.format.schema.properties.renglones.items.required).toContain('precioPublico');
+    expect(pedido.messages[0].content.at(-1).text).toMatch(/PRECIOXMAYOR/);
+    expect(r.renglones[0]).toMatchObject({ codigo: 'GSKPT23', precioMayor: 49000, precioPublico: 98000, cantidad: 10, totalImpreso: 11 });
+    expect(r.dudas.join(' ')).toMatch(/TOTAL impreso \(11\) no coincide con la suma de talles \(10\)/);
+    expect(normalizarEntrega({ renglones: [{ codigo: 'X1', precioMayor: -5, precioPublico: 'abc', cantidad: 3, talles: [] }] }).renglones[0])
+      .toMatchObject({ precioMayor: 0, precioPublico: 0, cantidad: 3 });
   });
 
   it('rechaza fotos inválidas, demasiadas y respuestas sin artículos', async () => {
