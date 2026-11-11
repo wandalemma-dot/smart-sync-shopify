@@ -18,8 +18,13 @@ import {
   type ControlRenglon, type Factura, type Pedido, type Recepcion, type Remito, type ResultadoFactura,
 } from './utils/controlFacturas';
 import { leerFacturaDistrinando, leerFacturaId, leerPedidoAuto, leerTextoRemito, textoRemito, type ItemPdf } from './utils/lectoresFacturas';
+import ControlFamily from './ControlFamily';
+import { Archivo, Copiar, Parte } from './EntregasPartes';
+import {
+  apiControl, boton, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, slug, td, th,
+} from './utils/entregasUi';
 
-type Prov = 'distrinando' | 'id';
+type Prov = 'distrinando' | 'id' | 'family';
 type PedidoGuardado = Pedido & { nroProveedor?: string; origen?: string; enlace?: string };
 type RecepcionGuardada = Recepcion & { nota?: string; actualizado?: string };
 interface Datos {
@@ -30,17 +35,19 @@ interface Datos {
   remitos: Record<string, Remito>;
   config: { condicionesPago?: string };
   /** Excel de Trello ya revisados que no se cargaron (otro proveedor, no es pedido, repetido, borrado). */
-  trelloVistos: Record<string, { motivo?: string; fecha?: string }>;
+  trelloVistos: Record<string, { motivo?: string; fecha?: string; version?: number }>;
 }
+/** Versión del lector de Excel de Trello. Subirla cuando cambie: los descartados se revisan de nuevo. */
+const LECTOR_TRELLO = 2;
 const VACIO: Datos = { pedidos: [], facturas: [], asignaciones: {}, recepciones: {}, remitos: {}, config: {}, trelloVistos: {} };
 const PROVS: { id: Prov; nombre: string }[] = [
   { id: 'id', nombre: 'iD (Converse, Le Coq)' },
   { id: 'distrinando', nombre: 'Distrinando (Reebok, Kappa, Crocs)' },
+  { id: 'family', nombre: 'Family (sin factura)' },
 ];
 type Vista = 'entregas' | 'pedidos' | 'deposito' | 'reportes';
 interface AdjuntoTrello { id: string; nombre: string }
 interface TarjetaTrello { id: string; nombre: string; enlace: string; lista: string; creada: string; inicio: string; adjuntos: AdjuntoTrello[] }
-interface Foto { media: string; datos: string }
 /** Enlace a la tarjeta de Trello de un pedido importado desde ahí. */
 const enlaceTrello = (p?: PedidoGuardado) => {
   const m = /^trello:([a-f0-9]{24})$/.exec(p?.origen || '');
@@ -57,60 +64,17 @@ async function bajarAdjunto(tarjeta: string, adjunto: string): Promise<ArrayBuff
   return buf.buffer;
 }
 
-/** Achica las fotos del remito (2000 px, JPG) para mandarlas a leer. */
-async function prepararFotos(files: File[]): Promise<Foto[]> {
-  const out: Foto[] = [];
-  for (const file of files) {
-    if (file.type && !file.type.startsWith('image/')) throw new Error(`${file.name} no es una foto.`);
-    const bmp = await createImageBitmap(file).catch(() => { throw new Error(`No pude abrir ${file.name}: subí la foto en JPG o PNG.`); });
-    const escala = Math.min(1, 2000 / Math.max(bmp.width, bmp.height));
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.round(bmp.width * escala);
-    canvas.height = Math.round(bmp.height * escala);
-    canvas.getContext('2d')!.drawImage(bmp, 0, 0, canvas.width, canvas.height);
-    out.push({ media: 'image/jpeg', datos: canvas.toDataURL('image/jpeg', 0.82).split(',')[1] });
-  }
-  if (out.length > 5) throw new Error('Máximo 5 fotos por remito.');
-  if (out.reduce((s, f) => s + f.datos.length, 0) > 4_000_000) throw new Error('Las fotos pesan demasiado juntas: subí menos fotos.');
-  return out;
-}
-
-async function leerFotosRemito(files: File[]): Promise<Remito> {
-  const fotos = await prepararFotos(files);
-  const r = await fetch('/api/leer-remito', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fotos }) });
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(d.error || `Error ${r.status}`);
-  return d as Remito;
-}
-
-const inputSt: React.CSSProperties = {
-  padding: '5px 7px', borderRadius: 5, border: '1px solid rgba(255,255,255,0.18)',
-  background: 'rgba(0,0,0,0.3)', color: 'white', fontSize: '0.85rem',
-};
-const boton: React.CSSProperties = {
-  padding: '6px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.06)',
-  color: 'white', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 6,
-};
-const botonChico: React.CSSProperties = { ...boton, padding: '3px 9px', fontSize: '0.8rem', fontWeight: 500 };
-const botonPrincipal: React.CSSProperties = { ...boton, background: '#6366f1', border: '1px solid #6366f1', padding: '8px 18px', fontSize: '0.92rem' };
-const enlace: React.CSSProperties = { background: 'none', border: 'none', color: '#93c5fd', cursor: 'pointer', padding: 0, fontSize: '0.85rem', textDecoration: 'underline' };
-const th: React.CSSProperties = { padding: '4px 8px', textAlign: 'left', borderBottom: '1px solid rgba(255,255,255,0.2)', whiteSpace: 'nowrap' };
-const td: React.CSSProperties = { padding: '4px 8px', borderBottom: '1px solid rgba(255,255,255,0.07)', verticalAlign: 'top' };
 const SEMAFORO = {
   ok: { icono: '✅', texto: 'OK para pagar', color: '#34d399' },
   observaciones: { icono: '⚠️', texto: 'Con observaciones', color: '#fbbf24' },
   reclamar: { icono: '❌', texto: 'Reclamar, no pagar', color: '#f87171' },
   incompleta: { icono: '⏳', texto: 'Incompleta, no pagar todavía', color: '#94a3b8' },
 } as const;
-const hoy = () => new Date().toISOString().slice(0, 10);
-const slug = (s: string) => s.replace(/[^A-Za-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 70) || 'x';
-const fechaAr = (iso?: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); return m ? `${m[3]}/${m[2]}/${m[1]}` : ''; };
 
 interface PdfJs {
   GlobalWorkerOptions: { workerSrc: string };
   getDocument(o: { data: ArrayBuffer }): { promise: Promise<{ numPages: number; getPage(i: number): Promise<{ getTextContent(): Promise<{ items: ItemPdf[] }> }> }> };
 }
-const mensaje = (e: unknown) => (e instanceof Error ? e.message : 'Error inesperado.');
 
 async function itemsPdf(file: File): Promise<ItemPdf[][]> {
   const pdfjsLib = (window as unknown as { pdfjsLib?: PdfJs }).pdfjsLib;
@@ -122,34 +86,9 @@ async function itemsPdf(file: File): Promise<ItemPdf[][]> {
   return paginas;
 }
 
-async function api(body?: object, proveedor?: Prov) {
-  const r = body
-    ? await fetch('/api/control-facturas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
-    : await fetch(`/api/control-facturas?proveedor=${proveedor}`, { cache: 'no-store' });
-  const d = await r.json().catch(() => ({}));
-  if (!r.ok) throw Object.assign(new Error(d.error || `Error ${r.status}`), { sinBase: d.sinBase === true });
-  return d;
-}
+const api = (body?: object, proveedor?: Prov) => apiControl(body, proveedor);
 
-function Copiar({ texto, etiqueta }: { texto: string; etiqueta: string }) {
-  const [ok, setOk] = useState(false);
-  return <button style={botonChico}
-    onClick={() => navigator.clipboard.writeText(texto).then(() => { setOk(true); setTimeout(() => setOk(false), 1500); })}>
-    {ok ? '✔ Copiado' : etiqueta}</button>;
-}
 
-/** Botón que abre el selector de archivos. */
-function Archivo({ etiqueta, accept, multiple, disabled, estilo = boton, onArchivos }: {
-  etiqueta: string; accept: string; multiple?: boolean; disabled?: boolean; estilo?: React.CSSProperties; onArchivos: (f: File[]) => void;
-}) {
-  return (
-    <label style={{ ...estilo, cursor: disabled ? 'wait' : 'pointer', opacity: disabled ? 0.55 : 1 }}>
-      {etiqueta}
-      <input type="file" accept={accept} multiple={multiple} hidden disabled={disabled}
-        onChange={(e) => { const f = [...(e.target.files ?? [])]; e.target.value = ''; if (f.length) onArchivos(f); }} />
-    </label>
-  );
-}
 
 export default function ControlFacturas() {
   const [prov, setProv] = useState<Prov>('id');
@@ -168,6 +107,7 @@ export default function ControlFacturas() {
   const [nuevasFotos, setNuevasFotos] = useState<File[]>([]);
 
   const recargar = useCallback(async () => {
+    if (prov === 'family') return; // Family tiene su propia pantalla (ControlFamily)
     setCargando(true); setError('');
     try {
       const d = await api(undefined, prov);
@@ -252,7 +192,9 @@ export default function ControlFacturas() {
       const r = await fetch('/api/trello?accion=tarjetas', { cache: 'no-store' });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.sinTrello ? 'Trello no está conectado (faltan las claves en Vercel).' : d.error || `Error ${r.status}`);
-      const conocidos = new Set([...datos.pedidos.map((p) => p.id), ...Object.keys(datos.trelloVistos).map((a) => `T-${a}`)]);
+      // Los Excel descartados con un lector anterior se vuelven a revisar; los borrados a mano, nunca.
+      const vistos = Object.entries(datos.trelloVistos).filter(([, v]) => v.motivo === 'borrado a mano' || (v.version ?? 1) >= LECTOR_TRELLO);
+      const conocidos = new Set([...datos.pedidos.map((p) => p.id), ...vistos.map(([a]) => `T-${a}`)]);
       const nuevos = (d.tarjetas as TarjetaTrello[]).flatMap((t) => t.adjuntos.map((a) => ({ t, a }))).filter(({ a }) => !conocidos.has(`T-${a.id}`));
       const existentes = [...datos.pedidos];
       const cargados: string[] = [];
@@ -277,14 +219,14 @@ export default function ControlFacturas() {
             existentes.push(res.pedido);
             cargados.push(`«${t.nombre}»`);
           } else {
-            await api({ proveedor: prov, accion: 'marcarTrelloVisto', adjunto: a.id, motivo: `«${t.nombre}» ${a.nombre}: ${res.descartado}` });
+            await api({ proveedor: prov, accion: 'marcarTrelloVisto', adjunto: a.id, motivo: `«${t.nombre}» ${a.nombre}: ${res.descartado}`, version: LECTOR_TRELLO });
             otros++;
           }
         }
       }
       const out = cargados.length ? [`Trello: traje ${cargados.length} nota(s) de pedido nueva(s): ${cargados.join(', ')}.`] : [];
       if (otros) out.push(`Trello: ${otros} Excel no eran notas de este proveedor o ya estaban cargados.`);
-      if (fallas.length) out.push(`Trello: no pude bajar ${fallas.length} Excel; se reintenta la próxima vez.`);
+      if (fallas.length) out.push(`Trello: no pude bajar ${fallas.length} Excel (${fallas.slice(0, 2).join('; ')}); se reintenta la próxima vez.`);
       return out;
     } catch (e) {
       return [`Trello: ${mensaje(e)} Se controló con las notas ya cargadas.`];
@@ -301,7 +243,7 @@ export default function ControlFacturas() {
   async function remitoDeFotos(facturaId: string, files: File[]): Promise<string[]> {
     setOcupado('Leyendo la foto del remito… (puede tardar un minuto)');
     try {
-      const remito = await leerFotosRemito(files);
+      const remito = await leerFotos<Remito>(files);
       await api({ proveedor: prov, accion: 'guardarRemito', facturaId, remito });
       const u = remito.renglones.reduce((s, r) => s + r.cantidad, 0);
       return [`Remito ${remito.numero || ''} leído de la foto: ${remito.renglones.length} artículos, ${u} unidades.${remito.dudas?.length ? ' Revisá las dudas que marqué.' : ''}`];
@@ -346,19 +288,25 @@ export default function ControlFacturas() {
   const facturasRes = [...res.facturas].reverse();
   const cambiarProv = (p: Prov) => { setProv(p); setAvisos([]); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
 
+  const cabecera = (<>
+    <h2 style={{ marginTop: 0, marginBottom: 8 }}>🧾 Control de entregas</h2>
+    <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
+      <span style={{ fontSize: '0.88rem', opacity: 0.8 }}>Proveedor:</span>
+      {PROVS.map((p) => (
+        <button key={p.id} onClick={() => cambiarProv(p.id)}
+          style={{ ...boton, background: prov === p.id ? '#6366f1' : 'rgba(255,255,255,0.04)', border: prov === p.id ? '1px solid #6366f1' : boton.border, opacity: prov === p.id ? 1 : 0.75 }}>
+          {p.nombre}
+        </button>
+      ))}
+      {cargando && <span style={{ fontSize: '0.8rem', opacity: 0.7 }}>Cargando…</span>}
+    </div>
+  </>);
+  // Family no factura: entrega + remito, con su propia pantalla.
+  if (prov === 'family') return <div className="glass-panel" style={{ padding: '1.5rem', marginTop: '0.5rem' }}>{cabecera}<ControlFamily /></div>;
+
   return (
     <div className="glass-panel" style={{ padding: '1.5rem', marginTop: '0.5rem' }}>
-      <h2 style={{ marginTop: 0, marginBottom: 8 }}>🧾 Control de entregas</h2>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginBottom: 14 }}>
-        <span style={{ fontSize: '0.88rem', opacity: 0.8 }}>Proveedor:</span>
-        {PROVS.map((p) => (
-          <button key={p.id} onClick={() => cambiarProv(p.id)}
-            style={{ ...boton, background: prov === p.id ? '#6366f1' : 'rgba(255,255,255,0.04)', border: prov === p.id ? '1px solid #6366f1' : boton.border, opacity: prov === p.id ? 1 : 0.75 }}>
-            {p.nombre}
-          </button>
-        ))}
-        {cargando && <span style={{ fontSize: '0.8rem', opacity: 0.7 }}>Cargando…</span>}
-      </div>
+      {cabecera}
 
       {sinBase && <p style={{ color: '#fbbf24', fontSize: '0.9rem' }}>⚠ Falta conectar la base de datos al proyecto en Vercel. Sin ella no se pueden guardar las entregas.</p>}
       {error && !sinBase && <p style={{ color: '#f87171', fontWeight: 'bold' }}>⚠ {error}</p>}
@@ -502,14 +450,6 @@ function estadoRenglon(x: ControlRenglon, nombrePedido: (id: string) => string):
   return ['✅', '#34d399'];
 }
 
-function Parte({ ok, titulo, detalle, children }: { ok: boolean; titulo: string; detalle: string; children?: React.ReactNode }) {
-  return (
-    <div style={{ border: `1px solid ${ok ? 'rgba(52,211,153,0.35)' : 'rgba(251,191,36,0.6)'}`, borderRadius: 8, padding: '6px 10px', background: ok ? 'rgba(52,211,153,0.06)' : 'rgba(251,191,36,0.08)', display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', fontSize: '0.84rem' }}>
-      <span><strong>{ok ? '✔' : '✗'} {titulo}</strong> <span style={{ opacity: 0.8 }}>{detalle}</span></span>
-      {children}
-    </div>
-  );
-}
 
 function TarjetaEntrega({ r, abierta, onAbrir, pedidos, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello }: {
   r: ResultadoFactura; abierta: boolean; onAbrir: () => void; pedidos: PedidoGuardado[]; nombrePedido: (id: string) => string;

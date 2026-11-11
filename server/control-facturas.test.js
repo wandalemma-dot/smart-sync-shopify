@@ -17,6 +17,29 @@ function memoria() {
   return { db, fn };
 }
 
+describe('Family: entregas sin factura (11-nov-2026)', () => {
+  it('guarda la planilla con su consulta a Shopify, la lee y la borra junto con su remito', async () => {
+    const { fn } = memoria();
+    const entrega = {
+      id: 'E-2026-10-30-x', nombre: 'Planilla', fecha: '2026-10-30', origen: 'excel',
+      renglones: [{ codigo: 'SHBSPEC', descripcion: 'SHORT', precioMayor: 34500, precioPublico: 69000, cantidad: 20, totalImpreso: 20, talles: [{ talle: 'S', cantidad: 2 }] }],
+      shopify: { fecha: '2026-11-11T12:00:00Z', codigos: { SHBSPEC: [], HPRST01: [{ titulo: 'Buzo', vendor: 'Familyarg', precios: [79200], costos: [33660], talles: ['S'] }] } },
+    };
+    await aplicar(fn, { proveedor: 'family', accion: 'guardarEntrega', entrega });
+    await aplicar(fn, { proveedor: 'family', accion: 'guardarRemito', facturaId: entrega.id, remito: { numero: '0001-00002715', renglones: [{ codigo: 'SHBSPEC', cantidad: 20 }] } });
+    let t = await leerTodo(fn, 'family');
+    expect(t.entregas[0].renglones[0]).toMatchObject({ codigo: 'SHBSPEC', precioMayor: 34500, precioPublico: 69000, totalImpreso: 20 });
+    expect(t.entregas[0].shopify.codigos.HPRST01[0].precios).toEqual([79200]);
+    expect(t.remitos[entrega.id].numero).toBe('0001-00002715');
+    expect((await leerTodo(fn, 'id')).entregas).toEqual([]);
+    await expect(aplicar(fn, { proveedor: 'family', accion: 'guardarEntrega', entrega: { ...entrega, fecha: '30/10' } })).rejects.toThrow(/Fecha/);
+    await aplicar(fn, { proveedor: 'family', accion: 'borrarEntrega', id: entrega.id });
+    t = await leerTodo(fn, 'family');
+    expect(t.entregas).toEqual([]);
+    expect(t.remitos).toEqual({});
+  });
+});
+
 describe('guardado del control de facturas', () => {
   it('guarda, lee y borra por proveedor', async () => {
     const { fn } = memoria();
@@ -43,6 +66,9 @@ describe('guardado del control de facturas', () => {
     await aplicar(fn, { proveedor: 'id', accion: 'guardarPedido', pedido: { id: 'p2', nombre: 'X', fecha: '2026-11-01', enlace: 'javascript:alert(1)', lineas: [] } });
     let t = await leerTodo(fn, 'id');
     expect(t.trelloVistos[adj].motivo).toBe('es de Distrinando');
+    expect(t.trelloVistos[adj].version).toBe(1); // marcas viejas: se vuelven a revisar con el lector nuevo
+    await aplicar(fn, { proveedor: 'id', accion: 'marcarTrelloVisto', adjunto: 'c'.repeat(24), motivo: 'no es pedido', version: 2 });
+    expect((await leerTodo(fn, 'id')).trelloVistos['c'.repeat(24)].version).toBe(2);
     expect(t.pedidos.find((p) => p.id === 'p2').enlace).toBe('');
     expect(t.pedidos.find((p) => p.id.startsWith('T-')).enlace).toBe('https://trello.com/c/AbC123');
     await aplicar(fn, { proveedor: 'id', accion: 'borrarPedido', id: `T-${'b'.repeat(24)}` });

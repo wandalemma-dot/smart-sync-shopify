@@ -1,4 +1,4 @@
-// Lee la foto del remito con IA (11-nov-2026). Solo sesión humana y mismo origen; nunca el bot.
+// Lee la foto del remito (o la planilla de entrega de Family) con IA (11-nov-2026). Solo sesión humana y mismo origen; nunca el bot.
 // Necesita ANTHROPIC_API_KEY en Vercel (se paga por uso). No guarda la foto ni toca Shopify.
 import { allowedOrigin, identity, noStore } from '../server/access.js';
 import { leerRemito } from '../server/remito.js';
@@ -17,7 +17,8 @@ export default async function handler(req, res) {
     return res.status(503).json({ error: 'La lectura de fotos no está activada (falta la clave de Anthropic en Vercel). Escribí el remito a mano.', sinClave: true });
   }
   try {
-    return res.status(200).json(await leerRemito({ fotos: req.body?.fotos }));
+    const tipo = req.body?.tipo === 'entrega' ? 'entrega' : 'remito';
+    return res.status(200).json(await leerRemito({ fotos: req.body?.fotos, tipo }));
   } catch (e) {
     if (e && typeof e === 'object' && 'propio' in e) return res.status(400).json({ error: e.message });
     const status = e && typeof e === 'object' && 'status' in e ? e.status : 0;

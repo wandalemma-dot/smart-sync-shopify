@@ -217,6 +217,8 @@ export interface ResultadoGeneral {
 }
 
 export const normCodigo = (s: string) => String(s ?? '').trim().toUpperCase().replace(/\s+/g, '');
+/** Clave para comparar códigos entre documentos: la O y el 0 cuentan igual. */
+export const claveCodigo = (s: string) => normCodigo(s).replace(/O/g, '0');
 const c = (n: number) => Math.round((Number(n) || 0) * 100);
 const p = (cent: number) => cent / 100;
 const neto = (precio: number, bonif: number) => precio * (1 - (Number(bonif) || 0) / 100);
@@ -321,11 +323,21 @@ const etiqueta = (x?: Pedido) => (x ? (x.nroProveedor ? `N° ${x.nroProveedor}` 
  * `remitos` (factura id → remito): si se pasa, una factura sin remito queda «incompleta».
  */
 export function analizarFacturas(
-  pedidos: Pedido[],
-  facturas: Factura[],
+  pedidosIn: Pedido[],
+  facturasIn: Factura[],
   asignacionManual: Record<string, string[]> = {},
-  remitos?: Record<string, Remito | undefined>,
+  remitosIn?: Record<string, Remito | undefined>,
 ): ResultadoGeneral {
+  // La O y el 0 se confunden (en el PDF, en la foto del remito o al tipear: CTN0225003O / CTN02250030).
+  // Se comparan como iguales y se muestra la escritura de la factura (o, si no está, la del pedido).
+  const escritura = new Map<string, string>();
+  const anotar = (s: string) => { const k = claveCodigo(s); if (!escritura.has(k)) escritura.set(k, normCodigo(s)); };
+  for (const f of facturasIn) for (const r of f.renglones) anotar(r.codigo);
+  for (const x of pedidosIn) for (const l of x.lineas) anotar(l.codigo);
+  const canon = (s: string) => escritura.get(claveCodigo(s)) ?? normCodigo(s);
+  const pedidos = pedidosIn.map((x) => ({ ...x, lineas: x.lineas.map((l) => ({ ...l, codigo: canon(l.codigo) })) }));
+  const facturas = facturasIn.map((f) => ({ ...f, renglones: f.renglones.map((r) => ({ ...r, codigo: canon(r.codigo) })) }));
+  const remitos = remitosIn && Object.fromEntries(Object.entries(remitosIn).map(([k, r]) => [k, r && { ...r, renglones: r.renglones.map((x) => ({ ...x, codigo: canon(x.codigo) })) }]));
   const mapa = porCodigo(pedidos);
   const porId = new Map(pedidos.map((x) => [x.id, x]));
   const fechaPedido = new Map(pedidos.map((x) => [x.id, x.fecha]));

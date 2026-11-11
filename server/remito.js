@@ -2,7 +2,8 @@
 // LECTURA DE LA FOTO DEL REMITO (11-nov-2026, pedido de gax)
 // ----------------------------------------------------------------------------
 // La usa api/leer-remito.js. Pasa la foto a texto (código, talles y cantidades)
-// para compararla con la factura. No decide nada: solo transcribe. Lo que no se
+// para compararla con la factura. Con tipo 'entrega' lee la planilla de Family
+// (también descripción y precios). No decide nada: solo transcribe. Lo que no se
 // lee bien vuelve en «dudas» y la usuaria lo corrige en pantalla antes de usarlo.
 // La foto no se guarda. SOLO LECTURA: no toca Shopify ni la base.
 // Costo aproximado: US$ 0,01–0,03 por foto con el modelo por defecto.
@@ -60,6 +61,47 @@ Reglas:
 - Ignorá firmas y sellos. Las marcas a mano (tildes, cruces, «NO», números escritos) no cambian lo impreso, pero anotalas en «dudas» indicando el código y el talle, porque el depósito las usa para marcar lo que no llegó.
 - Si hay una «cantidad total» o «total de unidades» impresa, compará con la suma de los artículos y anotá en «dudas» si no coincide.`;
 
+// Planilla «ENTREGA MERCADERIA» de Family (11-nov-2026): además de talles trae precios.
+const ESQUEMA_ENTREGA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['fecha', 'renglones', 'dudas'],
+  properties: {
+    fecha: { type: 'string', description: 'Fecha de la planilla en formato AAAA-MM-DD, o vacío.' },
+    renglones: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['codigo', 'descripcion', 'precioMayor', 'precioPublico', 'cantidad', 'talles'],
+        properties: {
+          codigo: { type: 'string' },
+          descripcion: { type: 'string', description: 'Artículo, modelo, corte y color, tal como figuran.' },
+          precioMayor: { type: 'number', description: 'Precio por mayor, sin símbolos (0 si no figura).' },
+          precioPublico: { type: 'number', description: 'Precio público, sin símbolos (0 si no figura).' },
+          cantidad: { type: 'number', description: 'TOTAL impreso del artículo.' },
+          talles: ESQUEMA.properties.renglones.items.properties.talles,
+        },
+      },
+    },
+    dudas: { type: 'array', items: { type: 'string' } },
+  },
+};
+
+const INSTRUCCIONES_ENTREGA = `Transcribí esta planilla de entrega de mercadería de un proveedor de indumentaria (la foto puede estar girada; puede venir en varias fotos).
+Columnas habituales: CODIGO, ARTICULO, MODELO, CORTE, COLOR, PRECIOXMAYOR, PRECIO PUBLICO, una columna por talle (S, M, L, XL, 2XL, 3XL…) y TOTAL.
+Por cada artículo devolvé:
+- codigo: exacto como está impreso (por ejemplo SHBSPEC, GSKPT23).
+- descripcion: artículo, modelo, corte y color, en ese orden, como figuran.
+- precioMayor y precioPublico: como número, sin $ ni separadores de miles ($34,500.00 → 34500).
+- talles: cada talle con su cantidad; las celdas vacías no van.
+- cantidad: el TOTAL impreso del artículo.
+También la fecha de la planilla (AAAA-MM-DD) si se lee.
+Reglas:
+- No corrijas, no completes y no adivines. Si algo no se lee con seguridad, transcribí lo más probable y explicalo en «dudas» (código y qué no se lee).
+- Si el TOTAL impreso no coincide con la suma de los talles, anotalo en «dudas».
+- Ignorá firmas y sellos; las marcas a mano anotalas en «dudas».`;
+
 /** Valida las fotos que manda la pantalla. */
 export function validarFotos(fotos) {
   if (!Array.isArray(fotos) || !fotos.length) throw falla('Falta la foto del remito.');
@@ -97,22 +139,51 @@ export function normalizarRemito(crudo) {
   return { numero: txt(crudo?.numero, 40), fecha, renglones, dudas, origen: 'foto' };
 }
 
+const precio = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 && n <= 1e9 ? Math.round(n * 100) / 100 : 0;
+};
+
+/** Normaliza la planilla de entrega de Family: como el remito, más descripción y precios. */
+export function normalizarEntrega(crudo) {
+  const dudas = (Array.isArray(crudo?.dudas) ? crudo.dudas : []).slice(0, 50).map((d) => txt(d, 300)).filter(Boolean);
+  const renglones = [];
+  for (const r of (Array.isArray(crudo?.renglones) ? crudo.renglones : []).slice(0, 500)) {
+    const codigo = txt(r?.codigo, 80).toUpperCase().replace(/\s+/g, '');
+    if (!codigo) continue;
+    const talles = (Array.isArray(r?.talles) ? r.talles : []).slice(0, 60)
+      .map((t) => ({ talle: txt(t?.talle, 20).toUpperCase().replace(',', '.'), cantidad: cant(t?.cantidad) }))
+      .filter((t) => t.talle && t.cantidad > 0);
+    const suma = talles.reduce((s, t) => s + t.cantidad, 0);
+    const total = cant(r?.cantidad);
+    if (talles.length && total && total !== suma) dudas.push(`${codigo}: el TOTAL impreso (${total}) no coincide con la suma de talles (${suma}); se usa la suma.`);
+    renglones.push({
+      codigo, descripcion: txt(r?.descripcion, 200), precioMayor: precio(r?.precioMayor), precioPublico: precio(r?.precioPublico),
+      cantidad: talles.length ? suma : total, talles, ...(total ? { totalImpreso: total } : {}),
+    });
+  }
+  const fecha = /^\d{4}-\d{2}-\d{2}$/.test(String(crudo?.fecha || '')) ? crudo.fecha : '';
+  return { fecha, renglones, dudas, origen: 'foto' };
+}
+
 /**
- * Lee el remito de las fotos. `cliente` se inyecta en los tests para no llamar a la API real.
+ * Lee el remito (o, con tipo 'entrega', la planilla de entrega de Family) de las fotos.
+ * `cliente` se inyecta en los tests para no llamar a la API real.
  */
-export async function leerRemito({ fotos, cliente }) {
+export async function leerRemito({ fotos, cliente, tipo = 'remito' }) {
   const validas = validarFotos(fotos);
+  const esEntrega = tipo === 'entrega';
   const client = cliente || new Anthropic();
   const content = [
     ...validas.map((f) => ({ type: 'image', source: { type: 'base64', media_type: f.media, data: f.datos } })),
-    { type: 'text', text: INSTRUCCIONES },
+    { type: 'text', text: esEntrega ? INSTRUCCIONES_ENTREGA : INSTRUCCIONES },
   ];
   const respuesta = await client.beta.messages.create({
     model: process.env.ANTHROPIC_MODEL || MODELO_POR_DEFECTO,
     max_tokens: 16000,
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
-    output_config: { effort: process.env.ANTHROPIC_EFFORT || 'medium', format: { type: 'json_schema', schema: ESQUEMA } },
+    output_config: { effort: process.env.ANTHROPIC_EFFORT || 'medium', format: { type: 'json_schema', schema: esEntrega ? ESQUEMA_ENTREGA : ESQUEMA } },
     messages: [{ role: 'user', content }],
   });
   if (respuesta.stop_reason === 'refusal') throw falla('No se pudo leer la foto. Escribí el remito a mano.');
@@ -120,7 +191,7 @@ export async function leerRemito({ fotos, cliente }) {
   const texto = (respuesta.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
   let crudo;
   try { crudo = JSON.parse(texto); } catch { throw falla('No se pudo leer la foto. Probá de nuevo o escribí el remito a mano.'); }
-  const remito = normalizarRemito(crudo);
-  if (!remito.renglones.length) throw falla('No encontré artículos en la foto. ¿Es el remito? Probá con una foto más clara o escribilo a mano.');
-  return remito;
+  const leido = esEntrega ? normalizarEntrega(crudo) : normalizarRemito(crudo);
+  if (!leido.renglones.length) throw falla(`No encontré artículos en la foto. ¿Es ${esEntrega ? 'la planilla de entrega' : 'el remito'}? Probá con una foto más clara o escribilo a mano.`);
+  return leido;
 }

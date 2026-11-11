@@ -3,6 +3,8 @@
 import { identity, noStore } from '../server/access.js';
 import { bajarAdjunto, listarTarjetas, trelloConfigurado } from '../server/trello.js';
 
+export const maxDuration = 60; // un Excel grande de iD (con fotos) se baja y se aliviana acá
+
 export default async function handler(req, res) {
   noStore(res);
   if (identity(req) !== 'user') return res.status(401).json({ error: 'Iniciá sesión en la app.' });
