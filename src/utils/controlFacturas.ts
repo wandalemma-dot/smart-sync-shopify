@@ -219,6 +219,24 @@ export interface ResultadoGeneral {
 export const normCodigo = (s: string) => String(s ?? '').trim().toUpperCase().replace(/\s+/g, '');
 /** Clave para comparar códigos entre documentos: la O y el 0 cuentan igual. */
 export const claveCodigo = (s: string) => normCodigo(s).replace(/O/g, '0');
+
+/**
+ * Huella de una nota de pedido: las mismas líneas y cantidades dan la misma huella aunque
+ * vengan en otro archivo o en otra tarjeta. Se guarda al borrar una nota de Trello, para que
+ * una copia de esa misma nota no vuelva a cargarse sola.
+ */
+export function huellaPedido(lineas: { sku: string; cantidad: number }[]): string {
+  const s = lineas.map((l) => `${l.sku}:${l.cantidad}`).sort().join('|');
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < s.length; i++) {
+    const ch = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ ch, 2654435761);
+    h2 = Math.imul(h2 ^ ch, 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(36);
+}
 const c = (n: number) => Math.round((Number(n) || 0) * 100);
 const p = (cent: number) => cent / 100;
 const neto = (precio: number, bonif: number) => precio * (1 - (Number(bonif) || 0) / 100);

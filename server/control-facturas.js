@@ -124,6 +124,15 @@ export function limpiarEntrega(e) {
   };
 }
 
+/** Número de la nota y huella de sus líneas (para reconocer una nota borrada a mano en otra tarjeta). */
+function firmaNota(body) {
+  const out = {};
+  const nro = txt(body?.nro, 40).trim();
+  if (nro) out.nro = nro;
+  if (/^[a-z0-9]{1,16}$/.test(String(body?.huella ?? ''))) out.huella = String(body.huella);
+  return out;
+}
+
 const parsear = (hash) => {
   const out = {};
   // Upstash devuelve HGETALL como [campo, valor, campo, valor…].
@@ -150,15 +159,32 @@ export async function aplicar(kv, body) {
   switch (body?.accion) {
     case 'guardarPedido': {
       const p = limpiarPedido(body.pedido);
-      await kv([['HSET', clave(prov, 'pedidos'), p.id, JSON.stringify(p)]]);
+      const cmds = [['HSET', clave(prov, 'pedidos'), p.id, JSON.stringify(p)]];
+      const adj = /^T-([a-f0-9]{24})$/.exec(p.id);
+      if (adj) {
+        // Una nota de Trello borrada a mano (o una copia de ella) solo vuelve si la usuaria toca «Volver a cargar».
+        if (body.recargar === true) cmds.push(['HDEL', clave(prov, 'trello'), adj[1]]);
+        else {
+          const [marca] = await kv([['HGET', clave(prov, 'trello'), adj[1]]]);
+          let motivo = '';
+          try { motivo = marca ? String(JSON.parse(marca).motivo || '') : ''; } catch { motivo = ''; }
+          if (motivo === 'borrado a mano' || /: repite una nota que borraste/.test(motivo)) throw new Error('Esa nota la borraste de Pedidos: para traerla de nuevo usá «Volver a cargar».');
+        }
+      } else cmds.push(['HDEL', clave(prov, 'trello'), `P:${p.id}`]); // subida a mano otra vez: ya no cuenta como borrada
+      await kv(cmds);
       return { ok: true };
     }
     case 'borrarPedido': {
       const pid = id(body.id);
       const cmds = [['HDEL', clave(prov, 'pedidos'), pid]];
-      // Un pedido traído de Trello que se borra a mano no vuelve a importarse solo.
+      // Un pedido traído de Trello que se borra a mano no vuelve a importarse solo. Se guarda
+      // su número y su huella para reconocer también una copia en otra tarjeta.
       const adj = /^T-([a-f0-9]{24})$/.exec(pid);
-      if (adj) cmds.push(['HSET', clave(prov, 'trello'), adj[1], JSON.stringify({ motivo: 'borrado a mano', fecha: new Date().toISOString().slice(0, 10) })]);
+      const firma = firmaNota(body);
+      const marca = JSON.stringify({ motivo: 'borrado a mano', fecha: new Date().toISOString().slice(0, 10), ...firma });
+      if (adj) cmds.push(['HSET', clave(prov, 'trello'), adj[1], marca]);
+      // Una nota subida a mano no tiene adjunto: se anota aparte («P:»), para que su copia en Trello tampoco vuelva sola.
+      else if (firma.huella) cmds.push(['HSET', clave(prov, 'trello'), `P:${pid}`, marca]);
       await kv(cmds);
       return { ok: true };
     }
@@ -207,7 +233,7 @@ export async function aplicar(kv, body) {
       const adj = String(body.adjunto ?? '');
       if (!/^[a-f0-9]{24}$/.test(adj)) throw new Error('Identificador inválido.');
       const version = Number.isInteger(body.version) && body.version > 0 && body.version < 1000 ? body.version : 1;
-      await kv([['HSET', clave(prov, 'trello'), adj, JSON.stringify({ motivo: txt(body.motivo, 200), fecha: new Date().toISOString().slice(0, 10), version })]]);
+      await kv([['HSET', clave(prov, 'trello'), adj, JSON.stringify({ motivo: txt(body.motivo, 200), fecha: new Date().toISOString().slice(0, 10), version, ...firmaNota(body) })]]);
       return { ok: true };
     }
     case 'guardarConfig': {
