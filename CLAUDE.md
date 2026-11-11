@@ -1071,6 +1071,12 @@ Solo lectura. No escribe en Shopify ni carga la web externa.
   Desde el 11-nov-2026 la foto del remito se lee con `api/leer-remito.js`: SOLO sesión humana y mismo origen (el bot no entra), no guarda la foto ni toca Shopify. No volver a abrirlo al público.
 - Antecedente: hubo un token y un client secret hardcodeados en el repo público.
   Se rotaron. **Nunca vuelvas a poner un secreto en el código.**
+- 11-nov-2026: `TRELLO_TOKEN` estaba guardado en Vercel con un salto de línea al final. Node
+  rechazó el encabezado y su mensaje («Headers.append: "OAuth …" is an invalid header value»),
+  que copia la clave y el token enteros, llegó a la pantalla. Desde entonces: las claves se leen
+  con `claveEnv()` (sin espacios, saltos de línea ni comillas a los costados) y todo error que
+  vuelve al navegador pasa por `ocultarSecretos()` / `mensajeSeguro()` (`server/secretos.js`).
+  Nunca devolver `e.message` crudo de un `fetch` o un SDK que lleva claves.
 
 ---
 

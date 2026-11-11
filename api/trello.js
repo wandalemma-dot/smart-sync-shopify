@@ -2,6 +2,7 @@
 // baja sus Excel. Solo sesión humana; solo lectura. No toca Shopify.
 import { identity, noStore } from '../server/access.js';
 import { bajarAdjunto, listarTarjetas, trelloConfigurado } from '../server/trello.js';
+import { mensajeSeguro } from '../server/secretos.js';
 
 export const maxDuration = 60; // un Excel grande de iD (con fotos) se baja y se aliviana acá
 
@@ -17,6 +18,6 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Acción inválida.' });
   } catch (e) {
     const status = e && typeof e === 'object' && 'status' in e ? Number(e.status) : 502;
-    return res.status([400, 403, 404, 413, 503].includes(status) ? status : 502).json({ error: e instanceof Error ? e.message : 'Error con Trello.' });
+    return res.status([400, 403, 404, 413, 503].includes(status) ? status : 502).json({ error: mensajeSeguro(e, 'Error con Trello.') });
   }
 }
