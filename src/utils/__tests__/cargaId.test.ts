@@ -318,13 +318,41 @@ describe('iD: lo que llegó y ya está vendido en iD se separa (gax, 12-nov-2026
     expect(igual.separarAplicado).toBe(false);
   });
 
-  it('si todo lo que llegó está vendido, no se suma nada pero se puede cargar igual', () => {
-    const r = resultado([fila([{ talle: 'S', cantidad: 1 }])]);
+  it('si todo lo que llegó está vendido, no se suma stock pero el precio y el costo se actualizan igual', async () => {
+    const r = resultado([fila([{ talle: 'S', cantidad: 1 }])], [renglon(30000)]);
+    const e = conPendientes({ [VS]: [orden('#210776', 2, '2026-10-29')] });
+    const plan = planCargaId(r, e, {});
+    const it = plan.items[0];
+    expect(it.estado).toBe('listo');
+    const op = it.opciones[0];
+    if (op.accion?.tipo !== 'reposicion') throw new Error('esperaba reposición');
+    expect(op.accion.lineas).toEqual([]);
+    expect(op.separar).toEqual([{ talle: 'S', cantidad: 1, ordenes: [{ nombre: '#210776', cantidad: 1 }] }]);
+    expect(op.avisos.join(' ')).toMatch(/no se suma stock en Martínez, pero se actualizan el precio y el costo/);
+    // Margen bajo el 50%: sin precio nuevo no se carga; con precio, se cambia precio y costo y no se toca el stock.
+    expect(accionesElegidas(plan, {})).toEqual([]);
+    const el = { CTO0325003: { clave: op.clave, precio: 69900 } };
+    expect(resumenCarga(plan, el).lineas[0]).toMatch(/no se suma stock \(vendido en iD\), solo precio y costo de .*→ \$ 69\.900,00/);
+    const gql = shopify({});
+    const precios = vi.fn(async () => ({ productVariantsBulkUpdate: { userErrors: [], productVariants: [] } }));
+    const [res] = await ejecutarCargaFamily(plan, el, {
+      gql, reservar: vi.fn(async () => ({ ok: true })), terminar: vi.fn(async () => undefined), liberar: vi.fn(async () => undefined),
+      clave: () => 'k', antes: precioYCostoAntes(precios as never),
+    });
+    expect(res.estado).toBe('cargada');
+    expect(res.mensaje).toMatch(/Cambiado precio de toda la curva.*No se sumó stock: todo lo que llegó está vendido en iD/);
+    expect(precios).toHaveBeenCalledOnce();
+    expect(gql).not.toHaveBeenCalled();
+    expect(planCargaId(r, e, {}, new Set(['CTO0325003'])).items[0].opciones[0].accion).toMatchObject({ lineas: [{ talle: 'S', suma: 1 }] });
+  });
+
+  it('si todo está vendido y no hay precio ni costo para cambiar, queda bloqueado con la opción de cargarlo igual', () => {
+    const r = resultado([fila([{ talle: 'S', cantidad: 1 }])], []);
     const e = conPendientes({ [VS]: [orden('#210776', 2, '2026-10-29')] });
     const it = planCargaId(r, e, {}).items[0];
     expect(it.estado).toBe('bloqueado');
     expect(it.motivo).toMatch(/ya está vendido en iD/);
-    expect(it.opciones[0].separar).toEqual([{ talle: 'S', cantidad: 1, ordenes: [{ nombre: '#210776', cantidad: 1 }] }]);
+    expect(it.opciones[0].separar).toHaveLength(1);
     expect(accionesElegidas(planCargaId(r, e, {}), {})).toEqual([]);
     expect(planCargaId(r, e, {}, new Set(['CTO0325003'])).items[0].estado).toBe('listo');
   });

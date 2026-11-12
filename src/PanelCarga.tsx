@@ -81,7 +81,7 @@ function FilaCarga({ it, eleccion, onElegir, onCargarIgual, ocupado }: {
         </div>
       </div>}
       {a?.tipo === 'reposicion' && <div style={{ marginTop: 6 }}>
-        🔁 Sumar en «{a.titulo}»: {a.lineas.map((l) => (l.actual === null ? `${l.talle} alta con ${l.suma}` : `${l.talle} ${l.actual}→${l.actual + l.suma}`)).join(' · ')}
+        🔁 {a.lineas.length ? <>Sumar en «{a.titulo}»: </> : <>«{a.titulo}»: no se suma stock (vendido en iD), solo precio y costo</>}{a.lineas.map((l) => (l.actual === null ? `${l.talle} alta con ${l.suma}` : `${l.talle} ${l.actual}→${l.actual + l.suma}`)).join(' · ')}
       </div>}
       {a?.tipo === 'reposicion' && a.ajuste && <Ajuste a={a.ajuste} precio={eleccion?.precio} onPrecio={(precio) => onElegir({ precio })} />}
       {op?.avisos.map((x, i) => <div key={i} style={{ color: AMARILLO, marginTop: 6, fontSize: '0.8rem' }}>⚠️ {x}</div>)}
