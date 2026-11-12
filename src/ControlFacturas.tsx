@@ -282,6 +282,11 @@ export default function ControlFacturas() {
   const cerradas = useMemo(() => new Set(pedidosControl.filter((p) => p.cerradaDesde).map((p) => p.id)), [pedidosControl]);
   const nombrePedido = (id: string) => { const p = datos.pedidos.find((x) => x.id === id); return p ? (p.nroProveedor ? `N° ${p.nroProveedor}` : p.nombre) : id; };
 
+  /** Si cambia el remito, la vista previa de la carga de esa entrega ya no vale: se cierra. */
+  function soltarPlan(facturaId: string) {
+    setPlanCarga((p) => (p?.entregaId === facturaId ? null : p));
+  }
+
   async function guardar(body: object) {
     setError('');
     try { await api({ proveedor: prov, ...body }); await recargar(); return true; }
@@ -866,9 +871,9 @@ export default function ControlFacturas() {
             onAsignar={(ids) => guardar({ accion: 'guardarAsignacion', facturaId: r.factura.id, pedidos: ids })}
             onBorrar={() => confirm(`¿Borrar la entrega de la factura ${r.factura.numero}? Se borran también el remito y lo que contó el depósito.`) && guardar({ accion: 'borrarFactura', id: r.factura.id })}
             onDeposito={() => { setFacturaDeposito(r.factura.id); setVista('deposito'); }}
-            onFotos={(f) => fotosParaFactura(r.factura.id, f)}
-            onGuardarRemito={(remito) => guardar({ accion: 'guardarRemito', facturaId: r.factura.id, remito })}
-            onBorrarRemito={() => confirm('¿Borrar el remito de esta entrega?') && guardar({ accion: 'borrarRemito', facturaId: r.factura.id })}
+            onFotos={(f) => { soltarPlan(r.factura.id); fotosParaFactura(r.factura.id, f); }}
+            onGuardarRemito={(remito) => { soltarPlan(r.factura.id); return guardar({ accion: 'guardarRemito', facturaId: r.factura.id, remito }); }}
+            onBorrarRemito={() => { if (confirm('¿Borrar el remito de esta entrega?')) { soltarPlan(r.factura.id); guardar({ accion: 'borrarRemito', facturaId: r.factura.id }); } }}
             onNota={(f) => subirPedidos(f, r.factura.fecha, r.factura.id)}
             onTrello={() => buscarEnTrelloParaFactura(r.factura)} res={res} todas={pedidosControl} consejos={consejos}
             informe={informe?.prov === prov && informe.facturaId === r.factura.id ? informe : null} onRecargarBorrada={recargarBorrada}
@@ -1036,24 +1041,6 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
             onClick={carga.onArmar}>⬆️ Cargar en Shopify</button>}
         </Parte>}
       </div>
-      <Controles r={r} unidadesRemito={unidadesRemito} pendiente={pendiente} />
-      {r.retirados.length > 0 && <div style={{ marginTop: 4, fontSize: '0.86rem', color: '#a5b4fc' }}>
-        ✋ Salieron para órdenes (marcado a mano en el remito, no se cargan): {r.retirados.map((x) => `${x.codigo}${x.talle ? ` T ${x.talle}` : ''} −${x.cantidad}`).join(' · ')}.
-        {' '}Hay que cargar {unidadesRemito - r.retirados.reduce((t, x) => t + x.cantidad, 0)} u. de las {unidadesRemito} del remito.
-      </div>}
-      {aRevisar.length > 0 && carga && <div style={{ marginTop: 8, fontSize: '0.84rem', color: '#fbbf24' }}>
-        {aRevisar.map(([codigo, c]) => <div key={codigo}>
-          {codigo}: {textoCarga(c)}{' '}
-          <button style={{ ...botonChico, padding: '1px 7px' }} disabled={ocupado} onClick={() => carga.onLiberar(codigo, c)}>🔓 Ya lo revisé: liberar</button>
-        </div>)}
-      </div>}
-      {carga?.plan && <PanelCarga plan={carga.plan} ocupado={ocupado} onConfirmar={carga.onConfirmar} onCancelar={carga.onCancelar} sucursal={SUCURSAL_CARGA_ID}
-        onModoVenta={carga.onModoVenta} sinTildar
-        explicacion="Lo que llegó (el remito, menos lo que salió para órdenes y lo que ya está vendido en iD, que se separa) se SUMA al stock de Martínez; el stock de iD lo lleva la sincronización. Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (si un talle que llega ya tenía stock, lleva el promedio ponderado), y si el margen no llega al 50% hay que poner un precio nuevo para toda la curva. Los productos que no están en Shopify se crean desde Sincronización." />}
-      <TarjetasTrello ids={r.pedidosCubiertos} pedidos={pedidos} />
-      {r.semaforo !== 'incompleta' && r.pedidosCubiertos.length > 0 && <PlanillasMarcadas r={r} res={res} pedidos={todas} nombrePedido={nombrePedido} ocupado={ocupado} consejos={consejos} />}
-      {informe && <InformeTrelloCaja informe={informe} ocupado={ocupado} onRecargar={onRecargarBorrada} />}
-
       {editando && (
         <div style={{ marginTop: 10, padding: 10, borderRadius: 8, background: 'rgba(0,0,0,0.2)' }}>
           <div style={{ fontSize: '0.82rem', opacity: 0.85, marginBottom: 6 }}>
@@ -1072,6 +1059,23 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
           </div>
         </div>
       )}
+      <Controles r={r} unidadesRemito={unidadesRemito} pendiente={pendiente} />
+      {r.retirados.length > 0 && <div style={{ marginTop: 4, fontSize: '0.86rem', color: '#a5b4fc' }}>
+        ✋ Salieron para órdenes (marcado a mano en el remito, no se cargan): {r.retirados.map((x) => `${x.codigo}${x.talle ? ` T ${x.talle}` : ''} −${x.cantidad}`).join(' · ')}.
+        {' '}Hay que cargar {unidadesRemito - r.retirados.reduce((t, x) => t + x.cantidad, 0)} u. de las {unidadesRemito} del remito.
+      </div>}
+      {aRevisar.length > 0 && carga && <div style={{ marginTop: 8, fontSize: '0.84rem', color: '#fbbf24' }}>
+        {aRevisar.map(([codigo, c]) => <div key={codigo}>
+          {codigo}: {textoCarga(c)}{' '}
+          <button style={{ ...botonChico, padding: '1px 7px' }} disabled={ocupado} onClick={() => carga.onLiberar(codigo, c)}>🔓 Ya lo revisé: liberar</button>
+        </div>)}
+      </div>}
+      {carga?.plan && <PanelCarga plan={carga.plan} ocupado={ocupado} onConfirmar={carga.onConfirmar} onCancelar={carga.onCancelar} sucursal={SUCURSAL_CARGA_ID}
+        onModoVenta={carga.onModoVenta} sinTildar
+        explicacion="Lo que llegó (el remito, menos lo que salió para órdenes y lo que ya está vendido en iD, que se separa) se SUMA al stock de Martínez; el stock de iD lo lleva la sincronización. Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (si un talle que llega ya tenía stock, lleva el promedio ponderado), y si el margen no llega al 50% hay que poner un precio nuevo para toda la curva. Los productos que no están en Shopify se crean desde Sincronización." />}
+      <TarjetasTrello ids={r.pedidosCubiertos} pedidos={pedidos} />
+      {r.semaforo !== 'incompleta' && r.pedidosCubiertos.length > 0 && <PlanillasMarcadas r={r} res={res} pedidos={todas} nombrePedido={nombrePedido} ocupado={ocupado} consejos={consejos} />}
+      {informe && <InformeTrelloCaja informe={informe} ocupado={ocupado} onRecargar={onRecargarBorrada} />}
 
       {r.motivos.length > 0 && <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: '0.84rem' }}>{r.motivos.map((m, i) => <li key={i}>{m}</li>)}</ul>}
       {!abierta && <button style={{ ...enlace, marginTop: 6 }} onClick={onAbrir}>Ver el detalle artículo por artículo</button>}
