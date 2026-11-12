@@ -266,7 +266,7 @@ export async function leerTodo(kv, prov) {
   const extra = CARGAN.includes(prov) ? [['HGETALL', clave(prov, 'cargas')]] : [];
   const res = await kv([
     ...TIPOS.map((t) => ['HGETALL', clave(prov, t)]), ['HGET', 'cf:config', prov], ['HGETALL', clave(prov, 'trello')],
-    ['HGETALL', clave(prov, 'tarjetas')], ['HGET', 'cf:config', 'listasTrello'], ...extra,
+    ['HGETALL', clave(prov, 'tarjetas')], ['HGET', 'cf:config', 'listasTrello'], ['HGET', 'cf:config', 'mailsAviso'], ...extra,
   ]);
   const [pedidos, facturas, asignaciones, recepciones, remitos, entregas] = res.slice(0, TIPOS.length).map(parsear);
   const crudo = res[TIPOS.length];
@@ -279,8 +279,9 @@ export async function leerTodo(kv, prov) {
     // En qué lista de Trello está cada tarjeta con notas (ver guardarTarjetas) y qué listas son de pedidos pendientes.
     tarjetasTrello: parsear(res[TIPOS.length + 2]),
     listasTrello: Array.isArray(listas) ? listas.filter((x) => RE_TRELLO.test(String(x))) : [],
+    mailsAviso: leerMails(json(res[TIPOS.length + 4])),
   };
-  if (CARGAN.includes(prov)) out.cargas = parsear(res[TIPOS.length + 4]);
+  if (CARGAN.includes(prov)) out.cargas = parsear(res[TIPOS.length + 5]);
   return out;
 }
 
@@ -316,6 +317,37 @@ export function limpiarTarjetas(v) {
       lista: txt(e?.lista, 100),
     }];
   });
+}
+
+// ---------------------------------------------------------------------------
+// MAILS DEL AVISO DE CAMBIO DE PRECIO (12-nov-2026, gax): «botón de enviar aviso de cambio
+// de precio, que copie a Wanda». La app no manda mails: arma un mailto y lo envía la persona
+// desde su correo. Las direcciones son datos personales: van a la base, nunca al código
+// (el repositorio es público). Campo «mailsAviso» de cf:config.
+// ---------------------------------------------------------------------------
+const RE_MAIL = /^[^\s@<>(),;:"\[\]\\]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$/;
+const MAX_MAILS = 5;
+function limpiarMails(xs, campo) {
+  if (!Array.isArray(xs) || xs.length > MAX_MAILS) throw new Error(`Hasta ${MAX_MAILS} direcciones en «${campo}».`);
+  const out = [];
+  for (const x of xs) {
+    const m = String(x ?? '').trim().toLowerCase();
+    if (!m) continue;
+    if (m.length > 120 || !RE_MAIL.test(m)) throw new Error(`«${m.slice(0, 60)}» no es una dirección de mail.`);
+    if (!out.includes(m)) out.push(m);
+  }
+  return out;
+}
+function leerMails(v) {
+  try { return { para: limpiarMails(v?.para ?? [], 'Para'), copia: limpiarMails(v?.copia ?? [], 'Copia') }; }
+  catch { return { para: [], copia: [] }; }
+}
+async function guardarMailsAviso(kv, body) {
+  const para = limpiarMails(body?.para ?? [], 'Para');
+  const copia = limpiarMails(body?.copia ?? [], 'Copia').filter((m) => !para.includes(m));
+  if (!para.length && copia.length) throw new Error('Falta a quién va el mail («Para»).');
+  await kv([para.length ? ['HSET', 'cf:config', 'mailsAviso', JSON.stringify({ para, copia })] : ['HDEL', 'cf:config', 'mailsAviso']]);
+  return { ok: true, mailsAviso: { para, copia } };
 }
 
 // ---------------------------------------------------------------------------
@@ -363,6 +395,7 @@ export async function aplicar(kv, body) {
   // Los enlaces rápidos son de toda la pantalla, no de un proveedor.
   if (body?.accion === 'guardarEnlaces') return guardarEnlaces(kv, body);
   if (body?.accion === 'guardarListasTrello') return guardarListasTrello(kv, body);
+  if (body?.accion === 'guardarMailsAviso') return guardarMailsAviso(kv, body);
   const prov = String(body?.proveedor || '');
   if (!PROVEEDORES.includes(prov)) throw new Error('Proveedor inválido.');
   switch (body?.accion) {
