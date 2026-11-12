@@ -47,6 +47,23 @@ describe('Trello (solo lectura)', () => {
     }
   });
 
+  it('devuelve las listas abiertas y la lista de cada tarjeta (una lista archivada no cuenta)', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    const P = '1'.repeat(24), I = '2'.repeat(24), V = '3'.repeat(24);
+    const f = falso({
+      '/boards/RzHl0YNS?': { name: 'COMPRAS Y ENTREGAS' },
+      '/boards/RzHl0YNS/lists': [{ id: P, name: 'PEDIDOS PENDIENTES' }, { id: I, name: 'PENDIENDE DE INDUMENTARIA/CALZADO' }, { id: V, name: 'Viejos', closed: true }],
+      '/boards/RzHl0YNS/cards': [
+        { id: CARD, name: 'CONVERSE PEDIDO el 9/11', idList: P, attachments: [] },
+        { id: OTRA, name: 'CONVERSE PEDIDO el 16/7', idList: V, attachments: [] },
+      ],
+    });
+    const r = await listarTarjetas(f);
+    expect(r.listas).toEqual([{ id: P, nombre: 'PEDIDOS PENDIENTES' }, { id: I, nombre: 'PENDIENDE DE INDUMENTARIA/CALZADO' }]);
+    expect(r.tarjetas.map((t) => [t.nombre, t.idLista, t.lista])).toEqual([['CONVERSE PEDIDO el 9/11', P, 'PEDIDOS PENDIENTES'], ['CONVERSE PEDIDO el 16/7', '', 'Viejos']]);
+    expect(f.mock.calls.some(([u]) => /\/lists\?fields=id,name,closed&filter=all/.test(u))).toBe(true);
+  });
+
   it('baja el adjunto solo si la tarjeta es del tablero', async () => {
     vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
     const base = {

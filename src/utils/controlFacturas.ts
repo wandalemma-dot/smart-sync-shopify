@@ -7,9 +7,11 @@
 // Reglas:
 // - El código de artículo (modelo + color) se compara EXACTO. El mismo modelo en
 //   otro color tiene otro código y el mismo precio: nunca son equivalentes.
-// - Lo facturado se acumula entre TODAS las facturas, en orden de fecha, y se
-//   descuenta de lo pedido por orden de pedido (el más viejo primero). Lo que
-//   supera lo pedido es FACTURADO SIN PEDIR (alerta roja).
+// - Lo facturado se acumula entre TODAS las facturas, en orden de fecha. Cada
+//   factura se descuenta de las notas que mejor la explican (elegirNotas: la que
+//   más artículos de la factura tiene y, si falta algo, las siguientes), nunca
+//   de la más vieja por ser vieja. Lo que supera lo pedido en todas las notas es
+//   FACTURADO SIN PEDIR (alerta roja).
 // - Si una factura toma unidades de un pedido posterior al suyo, es un ADELANTO;
 //   si después se vuelven a facturar, se marca como posible DOBLE COBRO.
 // - El precio se controla contra la lista del Excel DEL PEDIDO al que se asignó
@@ -54,7 +56,18 @@ export interface Pedido {
   fecha: string;            // AAAA-MM-DD, la del día que se mandó
   lineas: LineaPedido[];
   nroProveedor?: string;    // N° de nota de pedido del proveedor, si lo trae
+  /**
+   * La tarjeta de Trello de la nota salió de las listas de pedidos pendientes (11-nov-2026):
+   * desde esta fecha la nota no se elige sola para una factura (sí si se tilda a mano).
+   * NUNCA_PENDIENTE = nunca estuvo en esas listas. Sin el campo, la nota está pendiente.
+   */
+  cerradaDesde?: string;
 }
+/** cerradaDesde de una nota cuya tarjeta nunca estuvo en las listas de pedidos pendientes. */
+export const NUNCA_PENDIENTE = '0000-00-00';
+/** La nota se puede elegir sola para una factura de esta fecha. */
+export const notaDisponible = (p: Pedido, fechaFactura: string) =>
+  !p.cerradaDesde || (p.cerradaDesde !== NUNCA_PENDIENTE && (!fechaFactura || fechaFactura <= p.cerradaDesde));
 
 export interface TalleCantidad { talle: string; cantidad: number }
 export interface RenglonRemito {
@@ -282,6 +295,74 @@ function porCodigo(pedidos: Pedido[]): Map<string, LineaCodigo[]> {
   return mapa;
 }
 
+/**
+ * Notas de pedido de una factura, en el orden en que se descuenta de ellas.
+ * 11-nov-2026, gax («trajo todas, tiene que matchear exactas las que sí son»): antes se
+ * descontaba de la nota más vieja con saldo, y las tarjetas viejas de Trello que nunca se
+ * marcaron como recibidas se quedaban con la factura (0011-00139953 quedó repartida en 11 notas).
+ * Ahora, como en el método de gax («¿existe el código en el pedido? NO → buscarlo en los otros»):
+ * primero las notas que eligió la usuaria; después, de a una, la que mejor explica lo que falta:
+ *   1. notas de hasta la fecha de la factura antes que las posteriores (una nota de después
+ *      solo si ninguna anterior tiene saldo: así una nota nueva no se queda con una factura vieja);
+ *   2. la que cubre COMPLETOS más artículos de lo que falta (un resto de 1 unidad no cuenta como el artículo);
+ *   3. la que cubre más unidades; 4. la que cubre más artículos aunque sea en parte;
+ *   5. la que tiene más artículos de la factura con saldo; 6. la que tiene más artículos al mismo precio de la factura;
+ *   7. la más vieja (el proveedor entrega primero lo más viejo).
+ * Se sigue hasta cubrir todo o hasta que ninguna nota tenga saldo de lo que falta. Las demás notas no se tocan.
+ */
+function elegirNotas(f: Factura, mapa: Map<string, LineaCodigo[]>, manual: string[], fechaPedido: Map<string, string>): string[] {
+  const falta = new Map<string, number>();
+  const precio = new Map<string, RenglonFactura>();
+  for (const r of f.renglones) {
+    const k = normCodigo(r.codigo);
+    falta.set(k, (falta.get(k) ?? 0) + Math.max(0, r.cantidad));
+    if (!precio.has(k)) precio.set(k, r);
+  }
+  const saldo = new Map<string, Map<string, number>>(); // nota → código de la factura → unidades libres
+  const mismoPrecio = new Map<string, number>(); // nota → artículos con la lista y bonificación de la factura
+  for (const cod of falta.keys()) {
+    for (const g of mapa.get(cod) ?? []) {
+      const libre = g.cantidad - g.facturado;
+      if (libre <= 0 || !(manual.includes(g.pedido.id) || notaDisponible(g.pedido, f.fecha))) continue;
+      if (!saldo.has(g.pedido.id)) saldo.set(g.pedido.id, new Map());
+      const m = saldo.get(g.pedido.id)!;
+      m.set(cod, (m.get(cod) ?? 0) + libre);
+      const r = precio.get(cod)!;
+      if (Math.abs(c(r.precioUnitario) - c(g.precioLista)) <= TOL_PRECIO && Math.abs((r.bonificacion || 0) - (g.descuento || 0)) <= 0.001) {
+        mismoPrecio.set(g.pedido.id, (mismoPrecio.get(g.pedido.id) ?? 0) + 1);
+      }
+    }
+  }
+  const orden: string[] = [];
+  const tomar = (id: string) => {
+    orden.push(id);
+    for (const [cod, libre] of saldo.get(id) ?? []) falta.set(cod, Math.max(0, (falta.get(cod) ?? 0) - libre));
+  };
+  for (const id of manual) if (!orden.includes(id)) tomar(id);
+  type Candidata = { id: string; antes: boolean; completos: number; unidades: number; codigos: number; afinidad: number; precio: number; fecha: string };
+  const mejorQue = (x: Candidata, y: Candidata) => (Number(x.antes) - Number(y.antes) || x.completos - y.completos || x.unidades - y.unidades
+    || x.codigos - y.codigos || x.afinidad - y.afinidad || x.precio - y.precio || y.fecha.localeCompare(x.fecha) || y.id.localeCompare(x.id)) > 0;
+  for (;;) {
+    let mejor: Candidata | null = null;
+    for (const [id, m] of saldo) {
+      if (orden.includes(id)) continue;
+      let codigos = 0, completos = 0, unidades = 0;
+      for (const [cod, libre] of m) {
+        const necesita = falta.get(cod) ?? 0;
+        const u = Math.min(libre, necesita);
+        if (u > 0) { codigos++; unidades += u; if (u === necesita) completos++; }
+      }
+      if (!codigos) continue;
+      const fecha = fechaPedido.get(id) ?? '';
+      const x: Candidata = { id, antes: !f.fecha || fecha <= f.fecha, completos, unidades, codigos, afinidad: m.size, precio: mismoPrecio.get(id) ?? 0, fecha };
+      if (!mejor || mejorQue(x, mejor)) mejor = x;
+    }
+    if (!mejor) break;
+    tomar(mejor.id);
+  }
+  return orden;
+}
+
 export function controlAritmetico(f: Factura): ControlAritmetico {
   const errores: string[] = [];
   const sub = f.renglones.reduce((s, r) => s + c(r.total), 0);
@@ -371,19 +452,11 @@ export function analizarFacturas(
   const resultados: ResultadoFactura[] = [];
 
   for (const f of ordenarPorFecha(facturas)) {
-    // 1. Pedido principal: el que más cubre de la factura (empate: el más viejo),
-    //    o el que eligió la usuaria.
+    // 1. Notas de esta factura: las que eligió la usuaria y, después, las que mejor la explican
+    //    (elegirNotas). El pedido principal es la primera.
     const manual = asignacionManual[f.id] ?? [];
-    const candidatos = new Map<string, number>();
-    for (const r of f.renglones) {
-      for (const g of mapa.get(normCodigo(r.codigo)) ?? []) {
-        const libre = g.cantidad - g.facturado;
-        if (libre > 0) candidatos.set(g.pedido.id, (candidatos.get(g.pedido.id) ?? 0) + Math.min(libre, r.cantidad));
-      }
-    }
-    const principal = manual[0]
-      ?? [...candidatos.entries()].sort((a, b) => b[1] - a[1] || (fechaPedido.get(a[0]) ?? '').localeCompare(fechaPedido.get(b[0]) ?? ''))[0]?.[0]
-      ?? null;
+    const orden = elegirNotas(f, mapa, manual, fechaPedido);
+    const principal = manual[0] ?? orden[0] ?? null;
     const fechaPrincipal = principal ? fechaPedido.get(principal) ?? '' : '';
     const factor = factorImpuestos(f);
     const tocados = new Set<LineaCodigo>(); // grupos de los que tomó esta factura (sin adelantos)
@@ -391,11 +464,11 @@ export function analizarFacturas(
 
     const renglones: ControlRenglon[] = f.renglones.map((r) => {
       const cod = normCodigo(r.codigo);
-      const grupos = [...(mapa.get(cod) ?? [])].sort((a, b) => {
-        const pa = manual.includes(a.pedido.id) ? 0 : 1;
-        const pb = manual.includes(b.pedido.id) ? 0 : 1;
-        return pa - pb || a.pedido.fecha.localeCompare(b.pedido.fecha);
-      });
+      // Primero las notas elegidas, en su orden; las demás (sin saldo que haga falta) al final.
+      // Las notas cuya tarjeta salió de las listas de pendientes no cuentan (salvo tildadas a mano).
+      const pos = (id: string) => { const i = orden.indexOf(id); return i < 0 ? orden.length : i; };
+      const grupos = (mapa.get(cod) ?? []).filter((g) => manual.includes(g.pedido.id) || notaDisponible(g.pedido, f.fecha)).sort((a, b) =>
+        pos(a.pedido.id) - pos(b.pedido.id) || a.pedido.fecha.localeCompare(b.pedido.fecha));
       const antes = new Map(grupos.map((g) => [g, g.facturado]));
       let resto = r.cantidad;
       const asignaciones: Asignacion[] = [];
@@ -514,12 +587,12 @@ export function analizarFacturas(
     const motivos: string[] = [];
     let criticas = 0, medias = 0;
     if (faltaRemito) motivos.push('INCOMPLETA: falta subir la foto del remito.');
-    if (faltaNota) motivos.push('INCOMPLETA: falta la nota de pedido. Ningún artículo de la factura está en los pedidos cargados ni en Trello: subila.');
+    if (faltaNota) motivos.push('INCOMPLETA: falta la nota de pedido. Ningún artículo de la factura está en las notas pendientes (las de las listas de pendientes de Trello o subidas a mano): subila o tildala a mano.');
     const sinPedir = renglones.filter((r) => r.sinPedir > 0);
     if (sinPedir.length && !faltaNota) {
       criticas++;
       motivos.push(`FACTURADO SIN PEDIR: ${sinPedir.map((r) => `${r.codigo} (${r.sinPedir})`).join(', ')}: ${fmt(totalSinPedirNeto)} neto, ${fmt(totalSinPedirConImpuestos)} con impuestos.`);
-      if (codigosSinNota.length) motivos.push(`${codigosSinNota.join(', ')} no figura en ningún pedido cargado: ¿falta cargar un pedido?`);
+      if (codigosSinNota.length) motivos.push(`${codigosSinNota.join(', ')} no figura en ninguna nota de pedido pendiente: ¿falta cargar un pedido?`);
     }
     const dobles = renglones.filter((r) => r.posibleDobleCobro);
     if (dobles.length) {

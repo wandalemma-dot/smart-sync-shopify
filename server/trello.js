@@ -99,18 +99,24 @@ export async function listarTarjetas(fetchImpl = fetch) {
   const b = tablero();
   const [info, listas, tarjetas] = await Promise.all([
     get(`/boards/${encodeURIComponent(b)}?fields=name`, fetchImpl),
-    get(`/boards/${encodeURIComponent(b)}/lists?fields=id,name&filter=all`, fetchImpl),
+    get(`/boards/${encodeURIComponent(b)}/lists?fields=id,name,closed&filter=all`, fetchImpl),
     get(`/boards/${encodeURIComponent(b)}/cards?fields=id,name,desc,idList,dateLastActivity,due,start,labels,closed,shortUrl&attachments=true&attachment_fields=id,name,bytes,isUpload,date`, fetchImpl),
   ]);
-  const nombreLista = new Map((Array.isArray(listas) ? listas : []).map((l) => [l.id, l.name]));
+  const todasListas = (Array.isArray(listas) ? listas : []).filter((l) => l && typeof l === 'object');
+  const nombreLista = new Map(todasListas.map((l) => [l.id, l.name]));
+  const listaCerrada = new Set(todasListas.filter((l) => l.closed).map((l) => l.id));
   return {
     tablero: String(info?.name || ''),
+    // Listas abiertas del tablero, en su orden: para elegir de cuáles se toman las notas pendientes.
+    listas: todasListas.filter((l) => !l.closed && RE_ID.test(String(l.id || ''))).map((l) => ({ id: l.id, nombre: String(l.name || '').slice(0, 100) })),
     tarjetas: (Array.isArray(tarjetas) ? tarjetas : []).filter((t) => !t.closed && RE_ID.test(t.id)).map((t) => ({
       id: t.id,
       nombre: String(t.name || '').slice(0, 200),
       enlace: /^https:\/\/trello\.com\/c\/[A-Za-z0-9]+$/.test(String(t.shortUrl || '')) ? t.shortUrl : '',
       descripcion: String(t.desc || '').slice(0, 500),
       lista: String(nombreLista.get(t.idList) || ''),
+      // Una tarjeta de una lista archivada no cuenta como de esa lista.
+      idLista: RE_ID.test(String(t.idList || '')) && !listaCerrada.has(t.idList) ? t.idList : '',
       creada: fechaCreacion(t.id),
       inicio: t.start ? String(t.start).slice(0, 10) : '',
       vence: t.due ? String(t.due).slice(0, 10) : '',
