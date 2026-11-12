@@ -117,8 +117,11 @@ function Ajuste({ a, precio, onPrecio }: { a: AjustePrecio; precio?: number; onP
       {a.costos.length > 0 && <div style={{ opacity: 0.85, marginTop: 2 }}>
         Costo nuevo {fmt(a.costoNuevo)} en {a.costos.map((c) => `${c.talle}${c.actual !== null ? ` (antes ${fmt(c.actual)})` : ''}`).join(', ')}.
       </div>}
-      {a.conservan.length > 0 && <div style={{ opacity: 0.75, marginTop: 2 }}>
-        Conservan su costo porque tienen stock en Martínez: {a.conservan.map((c) => `${c.talle} (${c.stock} u.${c.costo !== null ? `, ${fmt(c.costo)}` : ''})`).join(', ')}.
+      {a.ponderados.length > 0 && <div style={{ opacity: 0.85, marginTop: 2 }}>
+        Costo promedio (ya tenían stock en Martínez): {a.ponderados.map((c) => `${c.talle} ${c.stock} a ${fmt(c.actual)} + ${c.suma} a ${fmt(a.costoNuevo)} → ${fmt(c.costo)}`).join(' · ')}.
+      </div>}
+      {a.conservan.some((c) => !c.motivo) && <div style={{ opacity: 0.75, marginTop: 2 }}>
+        Conservan su costo (tienen stock en Martínez y no llegan ahora): {a.conservan.filter((c) => !c.motivo).map((c) => `${c.talle} (${c.stock} u.${c.costo !== null ? `, ${fmt(c.costo)}` : ''})`).join(', ')}.
       </div>}
     </div>
   );

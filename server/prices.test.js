@@ -16,7 +16,7 @@ function response() {
     status(s) { this.statusCode = s; return this; },
     json(b) { this.body = b; return this; } };
 }
-let upstream, quantity, owner, locations, level, returned;
+let upstream, quantity, owner, locations, level, returned, unitCost;
 const auth = () => ({ origin, cookie: `${COOKIE}=${makeSession()}` });
 async function run(body = selected(), headers = auth(), method = 'POST') {
   const res = response();
@@ -29,7 +29,7 @@ beforeEach(() => {
   vi.stubEnv('APP_ORIGIN', origin);
   vi.stubEnv('SHOPIFY_CLIENT_ID', ''); vi.stubEnv('SHOPIFY_CLIENT_SECRET', '');
   vi.stubEnv('SHOPIFY_ADMIN_TOKEN', 'test-only-token');
-  quantity = 0; owner = productId; level = true; returned = undefined;
+  quantity = 0; owner = productId; level = true; returned = undefined; unitCost = '20000';
   locations = { nodes: [{ id: locationId, name: '📦 Depósito Martínez' }], pageInfo: { hasNextPage: false } };
   upstream = vi.fn(async (_url, options) => {
     const { query, variables } = JSON.parse(options.body);
@@ -37,7 +37,7 @@ beforeEach(() => {
     let data;
     if (query.startsWith('query Sucursal')) data = { locations };
     else if (query.startsWith('query Variantes')) data = { nodes: variables.ids.map(id => ({ id, product: { id: owner },
-      inventoryItem: { inventoryLevel: level ? { quantities: [{ name: 'available', quantity }] } : null } })) };
+      inventoryItem: { unitCost: unitCost == null ? null : { amount: unitCost }, inventoryLevel: level ? { quantities: [{ name: 'available', quantity }] } : null } })) };
     else if (query.startsWith('mutation PreciosManuales')) data = returned ?? {
       productVariantsBulkUpdate: { userErrors: [], productVariants: variables.variants.map(v => ({ id: v.id,
         price: v.price ?? '82990', inventoryItem: { unitCost: { amount: v.inventoryItem?.cost ?? '35270.75' } } })) } };
@@ -103,6 +103,31 @@ describe('precios exclusivos de la usuaria', () => {
     expect(mutations()).toHaveLength(0);
     expect((await run({ productId, variants: [{ id, price: '84900' }] })).statusCode).toBe(200);
     expect(mutations()[0].variables.variants).toEqual([{ id, price: '84900' }]);
+  });
+  it('con stock en Martínez acepta SOLO el promedio ponderado con el stock y el costo que siguen en Shopify (12-nov-2026)', async () => {
+    quantity = 2;
+    const ponderado = { stock: 2, costoAnterior: '20000', unidades: 2, costoNuevo: '22500' };
+    const pedido = (cost, p = ponderado) => ({ productId, variants: [{ id, inventoryItem: { cost }, ponderado: p }] });
+    expect((await run(pedido('21250.00'))).statusCode).toBe(200);
+    // Lo que va a Shopify es solo el costo: el dato del promedio no se reenvía.
+    expect(mutations()[0].variables.variants).toEqual([{ id, inventoryItem: { cost: '21250.00' } }]);
+    for (const [cost, p, q, c] of [
+      ['22500', ponderado, 2, '20000'], // no es el promedio
+      ['21250', ponderado, 3, '20000'], // el stock cambió (una venta, otra carga)
+      ['21250', ponderado, 2, '19000'], // el costo cambió
+      ['21250', ponderado, 2, null],
+    ]) {
+      quantity = q; unitCost = c;
+      const r = await run(pedido(cost, p));
+      expect(r.statusCode).toBe(409);
+      expect(r.body.error).toMatch(/cambió|protegido/);
+    }
+    quantity = 2; unitCost = '20000';
+    for (const p of [{ ...ponderado, stock: 0 }, { ...ponderado, unidades: 1.5 }, { ...ponderado, costoNuevo: '0' }, { ...ponderado, otro: 1 }]) {
+      expect((await run(pedido('21250', p))).statusCode).toBe(400);
+    }
+    expect((await run({ productId, variants: [{ id, price: '84900', ponderado }] })).statusCode).toBe(400);
+    expect(mutations()).toHaveLength(1);
   });
   it('permite costo solo y ausencia de nivel en Martínez sin tocar el precio', async () => {
     level = false;

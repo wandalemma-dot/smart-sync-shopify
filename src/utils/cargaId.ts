@@ -12,8 +12,10 @@
 //     Le Coq calzado uno más que en Shopify (talleShopifyLeCoq). Letras van tal cual.
 //   · Precio y costo con la factura (gax): margen con el costo nuevo; 50% o más = verde;
 //     menos = hay que poner un precio nuevo para TODA la curva (básicos: se avisa, no obliga).
-//     El costo nuevo va a los talles que llegan y a los que están en 0 en Martínez; los que
-//     tienen stock en Martínez conservan el suyo. Se escribe por /api/prices ANTES del stock.
+//     El costo nuevo va a los talles que llegan y a los que están en 0 en Martínez. Un talle que
+//     llega y ya tenía stock en Martínez lleva el promedio ponderado (lo que había a su costo +
+//     lo que llega al costo nuevo); los que tienen stock y no llegan conservan el suyo. Se
+//     escribe por /api/prices ANTES del stock (el servidor relee stock y costo del promedio).
 // La ejecución, la marca «una sola vez» y la vista previa son las mismas de Family.
 // ============================================================================
 import { claveCodigo, fmt, type FilaChecklist, type RenglonFactura, type ResultadoFactura } from './controlFacturas';
@@ -174,7 +176,8 @@ export function firmaCargaId(fecha: string, remito: string, fila: Pick<FilaCheck
  * Precio y costo con la factura (12-nov-2026, gax): margen con el precio actual y el costo nuevo;
  * 50% o más = verde; menos, hay que poner un precio nuevo a TODA la curva (los precios son iguales
  * en todos los talles). El costo nuevo va a los talles que llegan y a los que están en 0 en Martínez;
- * los que tienen stock en Martínez y no llegan conservan el suyo.
+ * los que llegan con stock en Martínez llevan el promedio ponderado (costo actual desconocido: no se
+ * inventa, conserva el suyo); los que tienen stock en Martínez y no llegan conservan el suyo.
  */
 export function ajusteDe(p: ProductoId, ren: RenglonFactura, lineas: LineaReposicion[]): AjustePrecio | null {
   const lista = Number(ren.precioUnitario) || 0;
@@ -183,19 +186,33 @@ export function ajusteDe(p: ProductoId, ren: RenglonFactura, lineas: LineaReposi
   const precios = [...new Set(p.variantes.map((v) => v.precio).filter((x): x is number => x !== null))];
   const precioActual = precios.length === 1 && !p.variantes.some((v) => v.precio === null) ? precios[0] : null;
   const margen = precioActual !== null ? margenPct(precioActual, costoNuevo) : null;
-  const llegan = new Set(lineas.map((l) => l.inventoryItemId));
+  const llegan = new Map(lineas.map((l) => [l.inventoryItemId, l.suma]));
   const costos: AjustePrecio['costos'] = [];
   const conservan: AjustePrecio['conservan'] = [];
+  const ponderados: AjustePrecio['ponderados'] = [];
   for (const v of p.variantes) {
     const stock = v.disponible ?? 0;
-    if (stock > 0) { if (!llegan.has(v.inventoryItemId)) conservan.push({ talle: v.talle, stock, costo: v.costo }); continue; }
+    if (stock > 0) {
+      const suma = llegan.get(v.inventoryItemId);
+      if (!suma) conservan.push({ talle: v.talle, stock, costo: v.costo });
+      else if (v.costo === null) conservan.push({ talle: v.talle, stock, costo: null, motivo: 'su costo actual es cero o desconocido: no se puede promediar' });
+      else {
+        const costo = costoPromedio(stock, v.costo, suma, costoNuevo);
+        if (Math.round(costo * 100) !== Math.round(v.costo * 100)) ponderados.push({ id: v.id, talle: v.talle, stock, suma, actual: v.costo, costo });
+      }
+      continue;
+    }
     if (v.costo === null || Math.round(v.costo * 100) !== Math.round(costoNuevo * 100)) costos.push({ id: v.id, talle: v.talle, actual: v.costo });
   }
   return {
     costoNuevo, precioActual, precios, margen, ok: precioActual !== null && llegaAl50(precioActual, costoNuevo),
     basico: esPrecioSugerido(ren.codigo), sugerido: precioId(ren.codigo, lista),
-    variantes: p.variantes.map((v) => ({ id: v.id, talle: v.talle })), costos, conservan,
+    variantes: p.variantes.map((v) => ({ id: v.id, talle: v.talle })), costos, ponderados, conservan,
   };
+}
+/** Promedio ponderado en centavos (igual que lo verifica /api/prices): lo que hay a su costo + lo que llega. */
+export function costoPromedio(stock: number, costo: number, suma: number, costoNuevo: number): number {
+  return Math.round((stock * Math.round(costo * 100) + suma * Math.round(costoNuevo * 100)) / (stock + suma)) / 100;
 }
 
 function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefined, ren?: RenglonFactura): OpcionCarga {
@@ -225,8 +242,7 @@ function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefi
   const ajuste = ren ? ajusteDe(p, ren, lineas) : null;
   if (!ajuste) avisos.push('La factura no trae el precio de lista de este artículo: no reviso el margen ni el costo.');
   else {
-    const conStock = lineas.filter((l) => (l.actual ?? 0) > 0).map((l) => l.talle);
-    if (conStock.length) avisos.push(`Talle ${conStock.join(', ')}: ya tenía stock en Martínez, conserva su costo por ahora.`);
+    for (const c of ajuste.conservan) if (c.motivo) avisos.push(`Talle ${c.talle}: ya tenía ${c.stock} en Martínez y ${c.motivo}. Conserva su costo: revisalo a mano.`);
   }
   return { ...base, accion: { tipo: 'reposicion', productoId: p.id, titulo: p.titulo, lineas, etiquetar: false, ...(ajuste ? { ajuste } : {}) } };
 }
@@ -279,23 +295,35 @@ export function estadoCargaFactura(r: ResultadoFactura, cargas: Record<string, C
 // ---------------------------------------------------------------------------
 // PRECIO Y COSTO ANTES DEL STOCK
 // ---------------------------------------------------------------------------
-type Precios = (variables: { productId: string; variants: { id: string; price?: string; inventoryItem?: { cost: string } }[] }) => Promise<unknown>;
+type VariantePrecio = {
+  id: string; price?: string; inventoryItem?: { cost: string };
+  /** Promedio ponderado: /api/prices relee el stock y el costo de Martínez y solo acepta este promedio. */
+  ponderado?: { stock: number; costoAnterior: string; unidades: number; costoNuevo: string };
+};
+type Precios = (variables: { productId: string; variants: VariantePrecio[] }) => Promise<unknown>;
 
 /**
  * Escribe el precio (toda la curva) y el costo (talles en 0 en Martínez) por /api/prices ANTES de sumar
  * el stock: con stock en Martínez el costo queda protegido y ya no se podría poner.
  */
+/** Pesos con hasta 2 decimales, como los acepta /api/prices («36082.5», «20000»). */
+const dinero = (n: number) => String(Math.round(n * 100) / 100);
 export function precioYCostoAntes(precios: Precios) {
   return async (_codigo: string, accion: ReposicionFamily): Promise<{ estado: 'ok'; mensaje: string } | { estado: 'error' | 'dudosa'; mensaje: string }> => {
     const a = accion.ajuste;
     if (!a) return { estado: 'ok', mensaje: '' };
-    const porId = new Map<string, { id: string; price?: string; inventoryItem?: { cost: string } }>();
+    const porId = new Map<string, VariantePrecio>();
     if (a.precio !== undefined) for (const v of a.variantes) porId.set(v.id, { id: v.id, price: String(a.precio) });
     for (const c of a.costos) porId.set(c.id, { ...(porId.get(c.id) ?? { id: c.id }), inventoryItem: { cost: a.costoNuevo.toFixed(2) } });
+    for (const c of a.ponderados) porId.set(c.id, {
+      ...(porId.get(c.id) ?? { id: c.id }), inventoryItem: { cost: c.costo.toFixed(2) },
+      ponderado: { stock: c.stock, costoAnterior: dinero(c.actual), unidades: c.suma, costoNuevo: dinero(a.costoNuevo) },
+    });
     if (!porId.size) return { estado: 'ok', mensaje: '' };
     const partes = [
       a.precio !== undefined ? `precio de toda la curva ${fmt(a.precioActual ?? 0)} → ${fmt(a.precio)}` : '',
       a.costos.length ? `costo ${fmt(a.costoNuevo)} en ${a.costos.map((c) => c.talle).join(', ')}` : '',
+      a.ponderados.length ? `costo promedio en ${a.ponderados.map((c) => `${c.talle} ${fmt(c.costo)}`).join(', ')}` : '',
     ].filter(Boolean).join(' y ');
     let data: { productVariantsBulkUpdate?: { userErrors?: { message?: string }[] } } | null;
     try { data = (await precios({ productId: accion.productoId, variants: [...porId.values()] })) as typeof data; }
