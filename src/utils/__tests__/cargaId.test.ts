@@ -312,7 +312,7 @@ describe('iD: lo que llegó y ya está vendido en iD se separa (gax, 12-nov-2026
     const plan = planCargaId(r, e, {});
     expect(resumenCarga(plan, {}).lineas[0]).toMatch(/sumar 3 u\..*separar para órdenes de iD S ×1 \(#210776\)/);
 
-    const igual = planCargaId(r, e, {}, new Set(['CTO0325003'])).items[0].opciones[0];
+    const igual = planCargaId(r, e, {}, new Map([['CTO0325003', 'igual' as const]])).items[0].opciones[0];
     if (igual.accion?.tipo !== 'reposicion') throw new Error('esperaba reposición');
     expect(igual.accion.lineas.map((l) => [l.talle, l.suma])).toEqual([['S', 2], ['XL', 2]]);
     expect(igual.separarAplicado).toBe(false);
@@ -343,7 +343,7 @@ describe('iD: lo que llegó y ya está vendido en iD se separa (gax, 12-nov-2026
     expect(res.mensaje).toMatch(/Cambiado precio de toda la curva.*No se sumó stock: todo lo que llegó está vendido en iD/);
     expect(precios).toHaveBeenCalledOnce();
     expect(gql).not.toHaveBeenCalled();
-    expect(planCargaId(r, e, {}, new Set(['CTO0325003'])).items[0].opciones[0].accion).toMatchObject({ lineas: [{ talle: 'S', suma: 1 }] });
+    expect(planCargaId(r, e, {}, new Map([['CTO0325003', 'igual' as const]])).items[0].opciones[0].accion).toMatchObject({ lineas: [{ talle: 'S', suma: 1 }] });
   });
 
   it('si todo está vendido y no hay precio ni costo para cambiar, queda bloqueado con la opción de cargarlo igual', () => {
@@ -354,7 +354,7 @@ describe('iD: lo que llegó y ya está vendido en iD se separa (gax, 12-nov-2026
     expect(it.motivo).toMatch(/ya está vendido en iD/);
     expect(it.opciones[0].separar).toHaveLength(1);
     expect(accionesElegidas(planCargaId(r, e, {}), {})).toEqual([]);
-    expect(planCargaId(r, e, {}, new Set(['CTO0325003'])).items[0].estado).toBe('listo');
+    expect(planCargaId(r, e, {}, new Map([['CTO0325003', 'igual' as const]])).items[0].estado).toBe('listo');
   });
 
   it('si no se pudieron leer las ventas de iD, se avisa y no se separa nada', () => {
@@ -388,5 +388,80 @@ describe('iD: lo que llegó y ya está vendido en iD se separa (gax, 12-nov-2026
     expect(out[VXL]).toEqual([{ nombre: '#1', fecha: '2026-11-02T00:00:00Z', cantidad: 2, cuenta: true }]);
     expect(gql.mock.calls[0][1]).toMatchObject({ q: 'assigned_location_id:92732457203' });
     expect(gql.mock.calls.every(([q]) => !/^\s*mutation/.test(q))).toBe(true);
+  });
+});
+
+describe('iD: cargar y pasar la venta de iD a Martínez (gax, 12-nov-2026)', () => {
+  const VS = 'gid://shopify/ProductVariant/S', VM = 'gid://shopify/ProductVariant/M';
+  const fo = (id: string, abierta = true) => ({ id, lineaId: `${id}-linea`, abierta });
+  const orden = (nombre: string, cantidad: number, extra: Partial<OrdenPendienteId> = {}): OrdenPendienteId => ({ nombre, fecha: '2026-11-01', cantidad, cuenta: true, ...extra });
+  const pasar = new Map([['CTO0325003', 'pasar' as const]]);
+  const deps = (gql: DepsCarga['gql']): DepsCarga => ({
+    gql, reservar: vi.fn(async () => ({ ok: true })), terminar: vi.fn(async () => undefined), liberar: vi.fn(async () => undefined), clave: () => 'k',
+  });
+  const SUMA_OK = () => ({ inventorySetQuantities: { inventoryAdjustmentGroup: { createdAt: 'x' }, userErrors: [] } });
+
+  it('lee la preparación de cada venta: abierta se puede mover; en preparación, no', async () => {
+    const gql = shopify({
+      'fulfillmentOrders(': () => ({ fulfillmentOrders: { pageInfo: sinPagina, nodes: [
+        { id: 'F1', status: 'OPEN', order: { name: '#210855', createdAt: '2026-11-10', cancelledAt: null, displayFinancialStatus: 'PAID', tags: [] }, lineItems: { pageInfo: sinPagina, nodes: [{ id: 'L1', remainingQuantity: 1, variant: { id: VS } }] } },
+        { id: 'F2', status: 'IN_PROGRESS', order: { name: '#210900', createdAt: '2026-11-11', cancelledAt: null, displayFinancialStatus: 'PAID', tags: [] }, lineItems: { pageInfo: sinPagina, nodes: [{ id: 'L2', remainingQuantity: 1, variant: { id: VS } }] } },
+      ] } }),
+    });
+    const out = await leerPendientesId('gid://shopify/Location/1', new Set([VS]), gql);
+    expect(out[VS].map((o) => o.fo)).toEqual([{ id: 'F1', lineaId: 'L1', abierta: true }, { id: 'F2', lineaId: 'L2', abierta: false }]);
+  });
+
+  it('suma todo a Martínez y anota qué venta pasa; la que está en preparación en iD se separa igual', () => {
+    const r = resultado([fila([{ talle: 'S', cantidad: 2 }, { talle: 'M', cantidad: 1 }])]);
+    const e: EstadoCargaId = { ...estado(), pendientesId: { [VS]: [orden('#210855', 1, { fo: fo('F1') })], [VM]: [orden('#210900', 1, { fo: fo('F2', false) })] } };
+    const separado = planCargaId(r, e, {}).items[0].opciones[0];
+    expect(separado.movibles).toBe(1);
+    expect(separado.modoVenta).toBe('separar');
+    const op = planCargaId(r, e, {}, pasar).items[0].opciones[0];
+    if (op.accion?.tipo !== 'reposicion') throw new Error('esperaba reposición');
+    expect(op.accion.lineas.map((l) => [l.talle, l.suma])).toEqual([['S', 2]]);
+    expect(op.accion.mover).toEqual([{ talle: 'S', orden: '#210855', cantidad: 1, foId: 'F1', lineaId: 'F1-linea' }]);
+    expect(op.accion.separar).toEqual([{ talle: 'M', cantidad: 1, ordenes: [{ nombre: '#210900', cantidad: 1, fo: fo('F2', false) }] }]);
+    expect(op.modoVenta).toBe('pasar');
+    expect(op.avisos.join(' ')).toMatch(/No puedo pasar a Martínez la venta de M #210900/);
+    expect(op.avisos.join(' ')).toMatch(/la venta de S #210855 pasa de iD a Martínez/);
+    const linea = resumenCarga(planCargaId(r, e, {}, pasar), { CTO0325003: { clave: op.clave, precio: 59900 } }).lineas[0];
+    expect(linea).toMatch(/sumar 2 u\..*separar para órdenes de iD M ×1 \(#210900\).*después pasar la venta de iD a .*S ×1 \(#210855\)/);
+  });
+
+  it('después de sumar el stock mueve la venta (una llamada por preparación, con todos sus artículos)', async () => {
+    const r = resultado([fila([{ talle: 'S', cantidad: 1 }, { talle: 'M', cantidad: 1 }])], [renglon(20000)]);
+    const e: EstadoCargaId = { ...estado(), pendientesId: { [VS]: [orden('#210855', 1, { fo: fo('F1') })], [VM]: [{ ...orden('#210855', 1), fo: { id: 'F1', lineaId: 'L-M', abierta: true } }] } };
+    const plan = planCargaId(r, e, {}, pasar);
+    const orden_: string[] = [];
+    const gql = shopify({
+      'inventorySetQuantities(': () => { orden_.push('stock'); return SUMA_OK(); },
+      'fulfillmentOrderMove(': () => { orden_.push('mover'); return { fulfillmentOrderMove: { movedFulfillmentOrder: { id: 'F9', status: 'OPEN' }, userErrors: [] } }; },
+    });
+    const [res] = await ejecutarCargaFamily(plan, {}, deps(gql));
+    expect(res.estado).toBe('cargada');
+    expect(orden_).toEqual(['stock', 'mover']);
+    const llamada = gql.mock.calls.find(([q]) => q.includes('fulfillmentOrderMove('))!;
+    expect(llamada[1]).toEqual({ id: 'F1', loc: LOC, items: [{ id: 'F1-linea', quantity: 1 }, { id: 'L-M', quantity: 1 }] });
+    expect(res.mensaje).toMatch(/Venta pasada de iD a .*S #210855, M #210855/);
+  });
+
+  it('sin el permiso de Shopify avisa qué falta; si el stock no se sumó, no mueve nada', async () => {
+    const r = resultado([fila([{ talle: 'S', cantidad: 1 }])], [renglon(20000)]);
+    const e: EstadoCargaId = { ...estado(), pendientesId: { [VS]: [orden('#210855', 1, { fo: fo('F1') })] } };
+    const plan = planCargaId(r, e, {}, pasar);
+    const sinPermiso = shopify({
+      'inventorySetQuantities(': SUMA_OK,
+      'fulfillmentOrderMove(': () => { throw new Error('Shopify error: Access denied for fulfillmentOrderMove field. Required access: `write_merchant_managed_fulfillment_orders` (ACCESS_DENIED)'); },
+    });
+    const [a] = await ejecutarCargaFamily(plan, {}, deps(sinPermiso));
+    expect(a.estado).toBe('cargada');
+    expect(a.mensaje).toMatch(/le falta el permiso write_merchant_managed_fulfillment_orders.*El stock ya quedó sumado: pasala a mano/);
+
+    const falla = shopify({ 'inventorySetQuantities(': () => ({ inventorySetQuantities: { userErrors: [{ code: 'X', message: 'no' }] } }) });
+    const [b] = await ejecutarCargaFamily(plan, {}, deps(falla));
+    expect(b.estado).toBe('error');
+    expect(falla.mock.calls.some(([q]) => q.includes('fulfillmentOrderMove('))).toBe(false);
   });
 });

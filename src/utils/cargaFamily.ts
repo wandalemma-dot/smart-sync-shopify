@@ -262,11 +262,23 @@ export interface LineaReposicion { talle: string; inventoryItemId: string; actua
  * iD (12-nov-2026, gax): lo que llegó y ya está vendido en iD (ventas sin preparar asignadas a la
  * sucursal de iD) se SEPARA para esas órdenes y no se suma a Martínez.
  */
-export interface SepararId { talle: string; cantidad: number; ordenes: { nombre: string; cantidad: number }[] }
+export interface SepararId { talle: string; cantidad: number; ordenes: { nombre: string; cantidad: number; fo?: LineaFOId }[] }
+/** La línea de la preparación de iD (para pasar la venta a Martínez). abierta: OPEN (en preparación no se puede mover). */
+export interface LineaFOId { id: string; lineaId: string; abierta: boolean }
+/**
+ * Qué hacer con lo que llegó y ya está vendido en iD: separarlo (por defecto), cargarlo igual
+ * (ya se separó antes) o cargarlo y pasar la venta a Martínez (12-nov-2026, gax: la orden espera
+ * otro artículo que todavía no llegó, así que no se prepara desde iD).
+ */
+export type ModoVenta = 'separar' | 'igual' | 'pasar';
+/** Una venta de iD que pasa a prepararse desde Martínez después de sumar el stock. */
+export interface MoverVenta { talle: string; orden: string; cantidad: number; foId: string; lineaId: string }
 export interface ReposicionFamily {
   tipo: 'reposicion'; productoId: string; titulo: string; lineas: LineaReposicion[]; etiquetar: boolean; ajuste?: AjustePrecio;
   /** iD: vendido en iD que llegó en esta entrega. Con `separarAplicado` ya está descontado de `lineas`. */
   separar?: SepararId[]; separarAplicado?: boolean;
+  /** iD, modo «pasar»: ventas que se mueven de iD a Martínez después de sumar el stock. */
+  mover?: MoverVenta[];
 }
 /**
  * iD (12-nov-2026): antes de sumar el stock en Martínez, el costo nuevo de la factura y, si el
@@ -321,7 +333,12 @@ export function leerPrecio(s: string): number | undefined {
   return Number.isFinite(n) ? n : NaN;
 }
 
-export interface OpcionCarga { clave: string; etiqueta: string; accion: AltaFamily | ReposicionFamily | null; bloqueo?: string; avisos: string[]; separar?: SepararId[]; separarAplicado?: boolean }
+export interface OpcionCarga {
+  clave: string; etiqueta: string; accion: AltaFamily | ReposicionFamily | null; bloqueo?: string; avisos: string[];
+  separar?: SepararId[]; separarAplicado?: boolean; modoVenta?: ModoVenta;
+  /** Unidades vendidas en iD que se pueden pasar a Martínez (preparación abierta, no en curso). */
+  movibles?: number;
+}
 export interface ItemCarga {
   codigo: string;
   descripcion: string;
@@ -498,6 +515,11 @@ const SUMAR = `mutation SumarFamily($input: InventorySetQuantitiesInput!, $key: 
 const ACTIVAR = `mutation ActivarFamily($inventoryItemId: ID!, $locationId: ID!, $available: Int, $key: String!) {
   inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId, available: $available) @idempotent(key: $key) { inventoryLevel { id } userErrors { field message } }
 }`;
+// iD (12-nov-2026, gax): pasa a Martínez la venta que estaba asignada a iD (la orden espera otro artículo).
+// Necesita el permiso write_merchant_managed_fulfillment_orders en la app de Shopify.
+const PASAR_VENTA = `mutation PasarVentaId($id: ID!, $loc: ID!, $items: [FulfillmentOrderLineItemInput!]) {
+  fulfillmentOrderMove(id: $id, newLocationId: $loc, fulfillmentOrderLineItems: $items) { movedFulfillmentOrder { id status } userErrors { field message } }
+}`;
 const ETIQUETAR = `mutation EtiquetarFamily($id: ID!, $tags: [String!]!) {
   tagsAdd(id: $id, tags: $tags) { node { id } userErrors { message } }
 }`;
@@ -645,6 +667,7 @@ async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga
 export async function ejecutarCargaFamily(plan: PlanCarga, elecciones: EleccionesCarga, deps: DepsCarga): Promise<ResultadoCarga[]> {
   const acciones = accionesElegidas(plan, elecciones);
   const out: ResultadoCarga[] = [];
+  const mover: { codigo: string; ventas: MoverVenta[] }[] = [];
   for (let i = 0; i < acciones.length; i++) {
     const { codigo, firma, accion } = acciones[i];
     const detalle = { accion: accion.tipo, titulo: accion.titulo, ...(accion.tipo === 'reposicion' ? { productoId: accion.productoId } : {}) };
@@ -678,7 +701,60 @@ export async function ejecutarCargaFamily(plan: PlanCarga, elecciones: Eleccione
       catch { mensaje += ' (No pude anotar el resultado en la base: NO lo vuelvas a cargar.)'; }
     }
     out.push({ codigo, estado: paso.estado, mensaje, ...(paso.productoId ? { productoId: paso.productoId } : {}) });
+    if (accion.tipo === 'reposicion' && accion.mover?.length) {
+      if (paso.estado === 'cargada') mover.push({ codigo, ventas: accion.mover });
+      else if (paso.estado !== 'error') out[out.length - 1].mensaje += ` No pasé a Martínez la venta de ${accion.mover.map((m) => m.orden).join(', ')} porque la carga no terminó bien: revisala y pasala a mano en la orden.`;
+    }
     deps.onProgreso?.(i + 1, acciones.length);
+  }
+  // Al final, con todo el stock ya sumado: una preparación de iD puede tener artículos de varios códigos.
+  if (mover.length) {
+    const textos = await pasarVentas(mover, plan, deps);
+    for (const r of out) if (textos[r.codigo]) r.mensaje = `${r.mensaje} ${textos[r.codigo]}`.trim();
+  }
+  return out;
+}
+
+const DUDA = ' (no sé si se pasó: la respuesta de Shopify no llegó completa; mirá la orden antes de hacerlo a mano)';
+const ACCESO = /ACCESS_DENIED|access denied|write_merchant_managed_fulfillment_orders|Error de conexión con Shopify \(403\)/i;
+/**
+ * Pasa a Martínez las ventas de iD elegidas (fulfillmentOrderMove), una llamada por preparación con todas
+ * sus líneas: después de mover, Shopify puede cerrar esa preparación y crear otra. No se reintenta sola.
+ * Devuelve el texto para cada código.
+ */
+export async function pasarVentas(xs: { codigo: string; ventas: MoverVenta[] }[], plan: PlanCarga, deps: Pick<DepsCarga, 'gql'>): Promise<Record<string, string>> {
+  const porFO = new Map<string, { codigo: string; v: MoverVenta }[]>();
+  for (const x of xs) for (const v of x.ventas) {
+    const g = porFO.get(v.foId) ?? [];
+    g.push({ codigo: x.codigo, v });
+    porFO.set(v.foId, g);
+  }
+  const bien: Record<string, string[]> = {}, mal: Record<string, string[]> = {};
+  const anotar = (destino: Record<string, string[]>, g: { codigo: string; v: MoverVenta }[], extra = '') => {
+    for (const { codigo, v } of g) (destino[codigo] ??= []).push(`${v.talle} ${v.orden}${extra}`);
+  };
+  for (const [foId, g] of porFO) {
+    const items = [...new Map(g.map(({ v }) => [v.lineaId, 0])).keys()].map((id) => ({ id, quantity: g.filter(({ v }) => v.lineaId === id).reduce((t, { v }) => t + v.cantidad, 0) }));
+    try {
+      const d = (await deps.gql(PASAR_VENTA, { id: foId, loc: plan.locationId, items })) as
+        { fulfillmentOrderMove?: { movedFulfillmentOrder?: { id?: string } | null; userErrors?: { message?: string }[] } } | null;
+      const ue = d?.fulfillmentOrderMove?.userErrors;
+      if (!Array.isArray(ue)) anotar(mal, g, DUDA);
+      else if (ue.length) anotar(mal, g, ` (${errores(ue)})`);
+      else if (!d?.fulfillmentOrderMove?.movedFulfillmentOrder?.id) anotar(mal, g, DUDA);
+      else anotar(bien, g);
+    } catch (e) {
+      anotar(mal, g, ACCESO.test(motivo(e))
+        ? ' (a la app le falta el permiso write_merchant_managed_fulfillment_orders en Shopify)'
+        : noSeEjecuto(e) ? ` (${motivo(e)})` : DUDA);
+    }
+  }
+  const out: Record<string, string> = {};
+  for (const codigo of new Set(xs.map((x) => x.codigo))) {
+    const t: string[] = [];
+    if (bien[codigo]) t.push(`🔀 Venta pasada de iD a ${plan.sucursal ?? 'Martínez'}: ${bien[codigo].join(', ')}.`);
+    if (mal[codigo]) t.push(`⚠️ No pude pasar la venta a ${plan.sucursal ?? 'Martínez'}: ${mal[codigo].join(', ')}. El stock ya quedó sumado: pasala a mano en la orden («⋯» → «Cambiar ubicación»).`);
+    out[codigo] = t.join(' ');
   }
   return out;
 }
@@ -705,6 +781,7 @@ export function resumenCarga(plan: PlanCarga, elecciones: EleccionesCarga): { al
         a.ponderados.length ? `costo promedio en ${a.ponderados.map((c) => `${c.talle} ${fmt(c.costo)}`).join(', ')}` : '',
       ].filter(Boolean) : [];
       if (accion.separar?.length && accion.separarAplicado) extra.push(`separar para órdenes de iD ${textoSeparar(accion.separar)} (no se suman)`);
+      if (accion.mover?.length) extra.push(`después pasar la venta de iD a ${plan.sucursal ?? 'Martínez'}: ${accion.mover.map((m) => `${m.talle} ×${m.cantidad} (${m.orden})`).join(', ')}`);
       lineas.push(`• ${codigo}: ${u ? `sumar ${u} u. en` : 'no se suma stock (vendido en iD), solo precio y costo de'} «${accion.titulo}»${extra.length ? ` · ${extra.join(' · ')}` : ''}`);
     }
   }

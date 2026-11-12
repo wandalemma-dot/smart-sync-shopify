@@ -43,6 +43,8 @@ const manualWrites = new Set([
   'inventorySetQuantities', 'inventoryActivate', 'productSet',
   'productVariantsBulkUpdate', 'productVariantsBulkCreate', 'productOptionsReorder',
   'tagsAdd', 'metafieldsSet', 'publishablePublish',
+  // Carga de iD (12-nov-2026, gax): pasar a Martínez una venta asignada a iD, con confirmación.
+  'fulfillmentOrderMove',
 ]);
 export function inspectUserQuery(query) {
   const { operation, roots } = inspectOperation(query);

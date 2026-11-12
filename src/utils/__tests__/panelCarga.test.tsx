@@ -33,3 +33,22 @@ describe('vista previa de la carga: casillas', () => {
     expect(html).toMatch(/1 reposición\(es\): 3 unidades/);
   });
 });
+
+describe('vista previa de la carga: vendido en iD', () => {
+  const conVenta = (movibles: number) => ({
+    ...plan, items: [{ ...plan.items[0], opciones: [{ ...plan.items[0].opciones[0], modoVenta: 'separar', separarAplicado: true, movibles,
+      separar: [{ talle: 'XXL', cantidad: 1, ordenes: [{ nombre: '#210855', cantidad: 1 }] }] }] }],
+  }) as unknown as PlanCarga;
+  const html = (p: PlanCarga) => renderToStaticMarkup(
+    <PanelCarga plan={p} ocupado={false} onConfirmar={() => undefined} onCancelar={() => undefined} sucursal="DEPOSITO MARTINEZ" explicacion="" sinTildar onModoVenta={() => undefined} />);
+  it('ofrece separar, cargarlo igual o pasar la venta a Martínez (aun sin tildar)', () => {
+    const h = html(conVenta(1));
+    expect(h).toMatch(/Vendido en iD: separá 1 u\. antes de cargar/);
+    expect(h).toMatch(/Ya lo separé antes: cargarlo igual/);
+    expect(h).toMatch(/Cargar y pasar la venta a Martínez/);
+    expect(/<button[^>]*>Cargar y pasar la venta a Martínez/.exec(h)![0]).not.toMatch(/disabled/);
+  });
+  it('si la preparación está en curso en iD, el botón de pasar la venta queda deshabilitado', () => {
+    expect(html(conVenta(0))).toMatch(/disabled=""[^>]*>Cargar y pasar la venta a Martínez/);
+  });
+});
