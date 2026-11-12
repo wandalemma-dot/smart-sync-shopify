@@ -37,6 +37,12 @@ export function listasDePendientes(listas: ListaTrello[], elegidas: string[] = [
   return listas.filter((l) => norm(l.nombre).includes('PENDIEN'));
 }
 
+/** La lista de entregas parciales («PENDIENDE DE INDUMENTARIA/CALZADO»), '' si no hay. */
+export function listaDeParciales(listas: ListaTrello[]): string {
+  const l = listas.find((x) => { const n = norm(x.nombre); return n.includes('PENDIEN') && (n.includes('INDUMENTARIA') || n.includes('CALZADO')); });
+  return l?.nombre || '';
+}
+
 /** Tarjeta de Trello de una nota importada desde ahí ('' si se subió a mano). */
 export const tarjetaDeNota = (p?: { origen?: string }) => /^trello:([a-f0-9]{24})$/.exec(p?.origen || '')?.[1] || '';
 

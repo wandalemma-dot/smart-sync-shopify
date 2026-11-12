@@ -6,7 +6,8 @@ import { unzipSync } from 'fflate';
 import { celdasVerdes, esVerde, hojaVisible, marcarPlanilla } from '../planillaVerde';
 import { leerPedidoAuto, type HojaMarcada } from '../lectoresFacturas';
 import { analizarFacturas, type Factura, type Pedido, type Remito } from '../controlFacturas';
-import { fusionarPlanilla, marcasDeNota } from '../marcasPlanilla';
+import { consejoNota, fusionarPlanilla, marcasDeNota, tipoArticulo } from '../marcasPlanilla';
+import { listaDeParciales } from '../listasTrello';
 import { FOTO, NOTA_1522, VERDES_1522, planillaFalsa } from './planillaFalsa';
 
 /** Lee la planilla como la app: filas de la hoja visible y lo pintado en verde. */
@@ -231,6 +232,72 @@ describe('qué se pinta en la planilla de la nota', () => {
     const otra = analizarFacturas([fusion], [f], {}, rem).facturas[0];
     expect(otra.renglones[0]).toMatchObject({ sinPedir: 0, faltante: 0 });
     expect(otra.pedidosCompletos).toBe(false); // faltan las BREAKPOINT
+  });
+});
+
+describe('¿se cerró el pedido? qué hacer con la tarjeta', () => {
+  const nota: Pedido = { id: 'N1522', nombre: '1522', fecha: '2026-10-19', lineas: [
+    linea('LAO0126018', 'L', 1, { descripcion: 'CARC CHALECO PUFFER 2026', entregado: 1, entregadoDesde: '2026-10-23' }),
+    linea('LFN9924069', '043', 2, { descripcion: 'BREAKPOINT CLASSIC' }), linea('LFN9924069', '044', 2, { descripcion: 'BREAKPOINT CLASSIC' }),
+    linea('LFO0125210', '037', 1, { descripcion: 'R1100' }), linea('LFO0125210', '038', 1, { descripcion: 'R1100' }), linea('LFO0125210', '040', 2, { descripcion: 'R1100' }),
+  ] };
+  const listas = { listaActual: 'PEDIDOS PENDIENTES', listaParcial: 'PENDIENDE DE INDUMENTARIA/CALZADO' };
+
+  it('calzado o indumentaria por talle y nombre', () => {
+    expect(tipoArticulo('R1100', ['037', '038'])).toBe('calzado');
+    expect(tipoArticulo('CHUCK 70 HI', ['095'])).toBe('calzado');
+    expect(tipoArticulo('CARC SLIDES 2026', ['040'])).toBe('calzado');
+    expect(tipoArticulo('PUMAS CAMISETA ENTR FAN', ['XL'])).toBe('indumentaria');
+    expect(tipoArticulo('PUMAS HOME SOCKS X 6', ['1', '2'])).toBe('indumentaria');
+    expect(tipoArticulo('ESSENTIALS PANT', ['38'])).toBe('indumentaria');
+    expect(tipoArticulo('GORRA', ['TU'])).toBe('indumentaria');
+  });
+
+  it('solo entró la ropa (en verde): pasar la tarjeta a pendientes de indumentaria/calzado', () => {
+    const c = consejoNota(marcasDeNota(analizarFacturas([nota], []), null, [nota], 'N1522'), listas);
+    expect(c.tipo).toBe('parcial');
+    expect(c.texto).toBe('Solo entró la indumentaria; falta todo el calzado (8 u.).');
+    expect(c.corto).toBe('🟡 solo entró la indumentaria');
+    expect(c.tarjeta).toBe('Pasá la tarjeta a «PENDIENDE DE INDUMENTARIA/CALZADO».');
+    expect(c.falta.map((x) => [x.codigo, x.unidades])).toEqual([['LFN9924069', 4], ['LFO0125210', 4]]);
+    // Si ya está en esa lista, se deja ahí.
+    expect(consejoNota(marcasDeNota(analizarFacturas([nota], []), null, [nota], 'N1522'), { ...listas, listaActual: listas.listaParcial }).tarjeta).toMatch(/ya está en «PENDIENDE/);
+  });
+
+  it('solo entró el calzado (factura sin talles en el remito, ropa sin verde)', () => {
+    const sinVerde = { ...nota, lineas: nota.lineas.map((l) => ({ ...l, entregado: undefined, entregadoDesde: undefined })) };
+    const res = analizarFacturas([sinVerde], [factura('F1', '2026-11-06', [['LFN9924069', 4], ['LFO0125210', 4]])]);
+    const c = consejoNota(marcasDeNota(res, null, [sinVerde], 'N1522'), listas);
+    expect(c.texto).toBe('Solo entró el calzado; falta toda la indumentaria (1 u.).');
+  });
+
+  it('entró parte del calzado: dice cuánto falta', () => {
+    const res = analizarFacturas([nota], [factura('F1', '2026-11-06', [['LFN9924069', 3], ['LFO0125210', 4]])], {},
+      { F1: remito([['LFN9924069', [['43', 2], ['44', 1]]], ['LFO0125210', [['37', 1], ['38', 1], ['40', 2]]]]) });
+    const c = consejoNota(marcasDeNota(res, null, [nota], 'N1522'), listas);
+    expect(c.texto).toBe('Entró toda la indumentaria y parte del calzado; falta 1 u. del calzado.');
+    expect(c.falta).toEqual([{ codigo: 'LFN9924069', descripcion: 'BREAKPOINT CLASSIC', unidades: 1 }]);
+  });
+
+  it('llegó todo (facturas + verde): pedido completo, darlo por finalizado', () => {
+    const res = analizarFacturas([nota], [factura('F1', '2026-11-06', [['LFN9924069', 2]]), factura('F2', '2026-11-10', [['LFN9924069', 2], ['LFO0125210', 4]])]);
+    const c = consejoNota(marcasDeNota(res, null, [nota], 'N1522'), listas);
+    expect(c.tipo).toBe('finalizar');
+    expect(c.texto).toBe('✅ Pedido completo: llegó todo (9 u.).');
+    expect(c.tarjeta).toBe('Podés darlo por finalizado y sacar la tarjeta de «PEDIDOS PENDIENTES».');
+    // Con solo la primera factura, todavía no.
+    expect(consejoNota(marcasDeNota(res, 'F1', [nota], 'N1522')).tipo).toBe('parcial');
+  });
+
+  it('nada llegó todavía: no se aconseja mover la tarjeta', () => {
+    const sinVerde = { ...nota, lineas: nota.lineas.map((l) => ({ ...l, entregado: undefined })) };
+    const c = consejoNota(marcasDeNota(analizarFacturas([sinVerde], []), null, [sinVerde], 'N1522'), listas);
+    expect(c).toMatchObject({ tipo: 'nada', tarjeta: '' });
+  });
+
+  it('la lista de parciales del tablero', () => {
+    expect(listaDeParciales([{ id: '1', nombre: 'PEDIDOS PENDIENTES' }, { id: '2', nombre: 'PENDIENDE DE INDUMENTARIA/CALZADO' }, { id: '3', nombre: 'RECIBIDOS' }])).toBe('PENDIENDE DE INDUMENTARIA/CALZADO');
+    expect(listaDeParciales([{ id: '1', nombre: 'PEDIDOS PENDIENTES' }])).toBe('');
   });
 });
 

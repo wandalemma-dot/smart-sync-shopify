@@ -19,8 +19,8 @@ import {
 } from './utils/controlFacturas';
 import { leerFacturaDistrinando, leerFacturaId, leerPedidoAuto, leerTextoRemito, textoRemito, type HojaMarcada, type ItemPdf } from './utils/lectoresFacturas';
 import { celdasVerdes, hojaVisible, marcarPlanilla } from './utils/planillaVerde';
-import { fusionarPlanilla, marcasDeNota, type MarcasNota } from './utils/marcasPlanilla';
-import { conEstadoTrello, estadosTarjetas, listasDePendientes, tarjetaDeNota, type EstadoTarjeta, type ListaTrello } from './utils/listasTrello';
+import { consejoNota, fusionarPlanilla, marcasDeNota, type ConsejoNota, type MarcasNota } from './utils/marcasPlanilla';
+import { conEstadoTrello, estadosTarjetas, listaDeParciales, listasDePendientes, tarjetaDeNota, type EstadoTarjeta, type ListaTrello } from './utils/listasTrello';
 import ControlFamily from './ControlFamily';
 import RegistroCargas from './RegistroCargas';
 import EnlacesRapidos from './EnlacesRapidos';
@@ -252,6 +252,16 @@ export default function ControlFacturas() {
   const pedidosControl = useMemo(() => conEstadoTrello(datos.pedidos, datos.tarjetasTrello, hoyAr()), [datos.pedidos, datos.tarjetasTrello]);
   const res = useMemo(() => analizarFacturas(pedidosControl, datos.facturas, datos.asignaciones, datos.remitos), [pedidosControl, datos.facturas, datos.asignaciones, datos.remitos]);
   const resumen = useMemo(() => resumenPedidos(pedidosControl, res), [pedidosControl, res]);
+  // Qué hacer con la tarjeta de cada nota hoy: finalizar, pasar a la lista de parciales o nada (la app no la mueve).
+  const listaParcial = useMemo(() => listaDeParciales(listasTablero ?? []), [listasTablero]);
+  const listaDe = useCallback((p: { origen?: string }) => datos.tarjetasTrello[tarjetaDeNota(p)]?.lista || '', [datos.tarjetasTrello]);
+  const consejos = useMemo(() => {
+    const out = new Map<string, ConsejoNota>();
+    for (const p of pedidosControl) {
+      try { out.set(p.id, consejoNota(marcasDeNota(res, null, pedidosControl, p.id), { listaActual: listaDe(p), listaParcial })); } catch { /* sin datos */ }
+    }
+    return out;
+  }, [res, pedidosControl, listaDe, listaParcial]);
   const cerradas = useMemo(() => new Set(pedidosControl.filter((p) => p.cerradaDesde).map((p) => p.id)), [pedidosControl]);
   const nombrePedido = (id: string) => { const p = datos.pedidos.find((x) => x.id === id); return p ? (p.nroProveedor ? `N° ${p.nroProveedor}` : p.nombre) : id; };
 
@@ -672,11 +682,13 @@ export default function ControlFacturas() {
         <td style={td}><input type="date" value={p.fecha} style={inputSt}
           onChange={(e) => e.target.value && guardar({ accion: 'guardarPedido', pedido: { ...p, fecha: e.target.value } })} /></td>
         <td style={td}>{r.pedido}</td><td style={td}>{r.facturado}</td><td style={td}>{r.pendiente}</td>
-        <td style={{ ...td, color: r.estado === 'completo' ? '#34d399' : r.estado === 'parcial' ? '#fbbf24' : undefined }}>{r.estado}</td>
+        <td style={{ ...td, color: consejos.get(p.id)?.tipo === 'finalizar' ? '#34d399' : consejos.get(p.id)?.tipo === 'parcial' ? '#fbbf24' : undefined }}
+          title={consejos.get(p.id) ? `${consejos.get(p.id)!.texto} ${consejos.get(p.id)!.tarjeta}` : undefined}>{consejos.get(p.id)?.corto ?? r.estado}</td>
         <td style={td}><button onClick={() => confirm(`¿Borrar la nota ${p.nombre}?${enlaceTrello(p) ? ' No se vuelve a traer de Trello.' : ''}`) && guardar({ accion: 'borrarPedido', id: p.id, nro: p.nroProveedor, huella: huellaPedido(p.lineas) })}
           style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer' }}>✕</button></td>
       </tr>
       {abierta === p.id && <tr><td colSpan={7} style={{ ...td, background: 'rgba(255,255,255,0.03)' }}>
+        {consejos.get(p.id) && <div style={{ marginBottom: 6 }}>{consejos.get(p.id)!.texto} <strong>{consejos.get(p.id)!.tarjeta}</strong></div>}
         <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem' }}>
           <thead><tr><th style={th}>Código</th><th style={th}>Descripción</th><th style={th}>Talle</th><th style={th}>Pedido</th><th style={th}>Facturado</th><th style={th}>Pendiente</th></tr></thead>
           <tbody>{det.map((d, i) => <tr key={i}><td style={td}>{d.codigo}</td><td style={td}>{d.descripcion}</td><td style={td}>{d.talle}</td><td style={td}>{d.pedido}</td>
@@ -759,7 +771,7 @@ export default function ControlFacturas() {
             onGuardarRemito={(remito) => guardar({ accion: 'guardarRemito', facturaId: r.factura.id, remito })}
             onBorrarRemito={() => confirm('¿Borrar el remito de esta entrega?') && guardar({ accion: 'borrarRemito', facturaId: r.factura.id })}
             onNota={(f) => subirPedidos(f, r.factura.fecha, r.factura.id)}
-            onTrello={() => buscarEnTrelloParaFactura(r.factura)} res={res} todas={pedidosControl}
+            onTrello={() => buscarEnTrelloParaFactura(r.factura)} res={res} todas={pedidosControl} consejos={consejos}
             informe={informe?.prov === prov && informe.facturaId === r.factura.id ? informe : null} onRecargarBorrada={recargarBorrada} />)}
 
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 16, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
@@ -851,9 +863,9 @@ function estadoRenglon(x: ControlRenglon, nombrePedido: (id: string) => string):
 }
 
 
-function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, informe, onRecargarBorrada, res, todas }: {
+function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, informe, onRecargarBorrada, res, todas, consejos }: {
   r: ResultadoFactura; abierta: boolean; onAbrir: () => void; pedidos: PedidoGuardado[]; cerradas: Set<string>; nombrePedido: (id: string) => string;
-  res: ResultadoGeneral; todas: PedidoGuardado[];
+  res: ResultadoGeneral; todas: PedidoGuardado[]; consejos: Map<string, ConsejoNota>;
   manual: string[]; condiciones: string; ocupado: boolean; onAsignar: (ids: string[]) => void; onBorrar: () => void; onDeposito: () => void;
   onFotos: (f: File[]) => void; onGuardarRemito: (r: Remito) => Promise<boolean>; onBorrarRemito: () => void; onNota: (f: File[]) => void; onTrello: () => void;
   informe: InformeTrello | null; onRecargarBorrada: (f: FilaTrello) => void;
@@ -905,7 +917,7 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
         </Parte>
       </div>
       <TarjetasTrello ids={r.pedidosCubiertos} pedidos={pedidos} />
-      {r.semaforo !== 'incompleta' && r.pedidosCubiertos.length > 0 && <PlanillasMarcadas r={r} res={res} pedidos={todas} nombrePedido={nombrePedido} ocupado={ocupado} />}
+      {r.semaforo !== 'incompleta' && r.pedidosCubiertos.length > 0 && <PlanillasMarcadas r={r} res={res} pedidos={todas} nombrePedido={nombrePedido} ocupado={ocupado} consejos={consejos} />}
       {informe && <InformeTrelloCaja informe={informe} ocupado={ocupado} onRecargar={onRecargarBorrada} />}
 
       {editando && (
@@ -996,8 +1008,8 @@ function planillaBase(p: PedidoGuardado): { tarjeta: string; adjunto: string } |
  * app devuelva las planillas de Excel marcadas; mi empleado las sube a Trello»). La app no escribe en
  * Trello: baja la última planilla de la tarjeta, la pinta y la descarga.
  */
-function PlanillasMarcadas({ r, res, pedidos, nombrePedido, ocupado }: {
-  r: ResultadoFactura; res: ResultadoGeneral; pedidos: PedidoGuardado[]; nombrePedido: (id: string) => string; ocupado: boolean;
+function PlanillasMarcadas({ r, res, pedidos, nombrePedido, ocupado, consejos }: {
+  r: ResultadoFactura; res: ResultadoGeneral; pedidos: PedidoGuardado[]; nombrePedido: (id: string) => string; ocupado: boolean; consejos: Map<string, ConsejoNota>;
 }) {
   const [mensajes, setMensajes] = useState<Record<string, string>>({});
   const [trabajando, setTrabajando] = useState('');
@@ -1051,17 +1063,20 @@ function PlanillasMarcadas({ r, res, pedidos, nombrePedido, ocupado }: {
       <strong>📥 Planilla para Trello con lo que llegó en verde</strong>
       {notas.map(({ id, p, m }) => {
         if (!p || !m) return null;
-        const verdes = m.celdas.filter((c) => c.color === 'verde' && c.talle !== 'Total').length;
-        const amarillas = m.celdas.filter((c) => c.color === 'amarillo').length;
-        const pend = m.pendiente.reduce((s, x) => s + x.unidades, 0);
+        const pedido = m.codigos.reduce((s, c) => s + c.pedido, 0);
+        const llegaron = m.codigos.reduce((s, c) => s + c.llegaron, 0);
+        const c = consejos.get(id);
         return (
           <div key={id} style={{ marginTop: 6 }}>
             <div>
-              {nombrePedido(id)}: {m.estaEntrega.length ? `llegó ${m.estaEntrega.map((x) => `${x.codigo} ${x.talle}×${x.cantidad}`).join(', ')}` : 'sin talles identificados en esta entrega'}
-              {' · '}{verdes} talle(s) en verde{amarillas ? `, ${amarillas} en amarillo (llegó una parte)` : ''}
-              {' · '}{m.completa ? 'ya llegó todo' : `queda pendiente ${pend} u.`}
-              {m.facturas.length > 1 ? ` · incluye ${m.facturas.length - 1} entrega(s) anterior(es)` : ''}
+              {nombrePedido(id)}: {m.estaEntrega.length ? `en esta entrega llegó ${m.estaEntrega.map((x) => `${x.codigo} ${x.talle}×${x.cantidad}`).join(', ')}` : 'en esta entrega no se sabe de qué talles'}
+              {' · '}hasta acá llegaron {llegaron} de {pedido} u.
+              {m.facturas.length > 1 ? ` (con ${m.facturas.length - 1} entrega(s) anterior(es))` : ''}
             </div>
+            {c && c.tipo !== 'nada' && <div style={{ marginTop: 3, padding: '4px 8px', borderRadius: 6, background: c.tipo === 'finalizar' ? 'rgba(52,211,153,0.15)' : 'rgba(251,191,36,0.13)' }}>
+              <strong>Hoy:</strong> {c.texto} <strong>{c.tarjeta}</strong>
+              {c.tipo === 'parcial' && c.falta.length > 0 && <div style={{ opacity: 0.85 }}>Falta: {c.falta.slice(0, 8).map((x) => `${x.codigo} ${x.descripcion} (${x.unidades} u.)`).join(' · ')}{c.falta.length > 8 ? ` y ${c.falta.length - 8} más` : ''}</div>}
+            </div>}
             {m.sinTalle.length > 0 && <div style={{ color: '#fbbf24' }}>Sin talle identificado: {m.sinTalle.map((x) => `${x.codigo} (${x.unidades})`).join(', ')}. Cargá los talles en el remito o pintalos a mano.</div>}
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 4 }}>
               <button style={botonChico} disabled={ocupado || !!trabajando} onClick={() => descargar(p)}>{trabajando === id ? 'Preparando…' : '📥 Descargar planilla marcada'}</button>
