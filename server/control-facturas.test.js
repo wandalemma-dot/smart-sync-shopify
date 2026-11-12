@@ -17,7 +17,7 @@ function memoria() {
     const h = db.get(key) ?? new Map();
     db.set(key, h);
     if (op === 'HMGET') return [campo, valor, ...mas].filter((x) => x !== undefined).map((c) => h.get(c) ?? null);
-    if (op === 'HSET') { h.set(campo, valor); return 1; }
+    if (op === 'HSET') { const par = [campo, valor, ...mas]; for (let i = 0; i + 1 < par.length; i += 2) h.set(par[i], par[i + 1]); return par.length / 2; }
     if (op === 'HSETNX') { if (h.has(campo)) return 0; h.set(campo, valor); return 1; }
     if (op === 'HDEL') return h.delete(campo) ? 1 : 0;
     if (op === 'HGET') return h.get(campo) ?? null;
@@ -380,5 +380,40 @@ describe('endpoint', () => {
       expect(r.body.error).toMatch(/Error de la base de datos/);
       expect(JSON.stringify(r.body)).not.toContain(TOKEN);
     });
+  });
+});
+
+describe('listas de pedidos pendientes en Trello (11-nov-2026)', () => {
+  const A = 'a'.repeat(24), B = 'b'.repeat(24);
+  it('guarda en qué lista está cada tarjeta, por proveedor, y las listas elegidas para todo el tablero', async () => {
+    const { fn } = memoria();
+    let t = await leerTodo(fn, 'id');
+    expect(t.tarjetasTrello).toEqual({});
+    expect(t.listasTrello).toEqual([]);
+    await aplicar(fn, { proveedor: 'id', accion: 'guardarTarjetas', tarjetas: {
+      [A]: { pendiente: true, visto: false, fuera: '2026-11-11', lista: 'PEDIDOS PENDIENTES' },
+      [B]: { pendiente: false, visto: false, fuera: '2026-11-12', lista: 'RECIBIDOS' },
+    } });
+    t = await leerTodo(fn, 'id');
+    // Adentro: visto y sin fecha de salida.
+    expect(t.tarjetasTrello[A]).toEqual({ pendiente: true, visto: true, fuera: '', lista: 'PEDIDOS PENDIENTES' });
+    expect(t.tarjetasTrello[B]).toEqual({ pendiente: false, visto: false, fuera: '2026-11-12', lista: 'RECIBIDOS' });
+    expect((await leerTodo(fn, 'distrinando')).tarjetasTrello).toEqual({});
+    await aplicar(fn, { accion: 'guardarListasTrello', listas: [A, A, B] });
+    expect((await leerTodo(fn, 'distrinando')).listasTrello).toEqual([A, B]);
+    await aplicar(fn, { accion: 'guardarListasTrello', listas: [] });
+    expect((await leerTodo(fn, 'id')).listasTrello).toEqual([]);
+    // Family sigue leyendo sus cargas en su lugar.
+    await aplicar(fn, { proveedor: 'family', accion: 'reservarCarga', entregaId: 'E-1', codigo: 'X1', firma: 'f' });
+    expect(Object.keys((await leerTodo(fn, 'family')).cargas)).toEqual(['E-1|X1']);
+  });
+
+  it('rechaza tarjetas o listas inválidas', async () => {
+    const { fn } = memoria();
+    await expect(aplicar(fn, { proveedor: 'id', accion: 'guardarTarjetas', tarjetas: { x: { pendiente: true } } })).rejects.toThrow(/inválida/);
+    await expect(aplicar(fn, { proveedor: 'id', accion: 'guardarTarjetas', tarjetas: {} })).rejects.toThrow(/inválida/);
+    await expect(aplicar(fn, { proveedor: 'id', accion: 'guardarTarjetas', tarjetas: [] })).rejects.toThrow(/inválidas/);
+    await expect(aplicar(fn, { proveedor: 'id', accion: 'guardarTarjetas', tarjetas: { [A]: { pendiente: false, fuera: 'ayer' } } })).rejects.toThrow(/Fecha/);
+    await expect(aplicar(fn, { accion: 'guardarListasTrello', listas: ['PEDIDOS'] })).rejects.toThrow(/inválida/);
   });
 });

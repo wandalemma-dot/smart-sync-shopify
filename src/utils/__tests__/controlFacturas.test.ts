@@ -224,7 +224,8 @@ describe('método de gax: otra nota, faltantes, precio y tolerancias', () => {
 
   it('renglón de una nota anterior = OTRA NOTA; menos que lo pedido = FALTANTE (observaciones, no reclamo)', () => {
     const p471: Pedido = { id: '471', nroProveedor: '471', nombre: 'n', fecha: '2026-10-09', lineas: [linea('LFO0225061', '040', 2)] };
-    const p497: Pedido = { id: '497', nroProveedor: '497', nombre: 'n', fecha: '2026-10-30', lineas: [linea('LFO0125084', '040', 9), linea('LFO0225061', '041', 2)] };
+    // CASO 4 de gax: LFO0225061 no está en el 497 → se busca en las otras notas y está en el 471.
+    const p497: Pedido = { id: '497', nroProveedor: '497', nombre: 'n', fecha: '2026-10-30', lineas: [linea('LFO0125084', '040', 9)] };
     const f = factura('1', '2026-11-05', [ren('LFO0225061', 2), ren('LFO0125084', 6)]);
     const r = analizarFacturas([p471, p497], [f], {}, { 1: remitoDe(f) }).facturas[0];
     expect(r.pedidoPrincipal).toBe('497');
@@ -234,7 +235,7 @@ describe('método de gax: otra nota, faltantes, precio y tolerancias', () => {
     expect(r.motivos.join(' ')).toMatch(/OTRA NOTA: LFO0225061 \(2\) corresponde al pedido N° 471 del 09\/10\/2026, no al N° 497/);
     expect(r.motivos.join(' ')).toMatch(/FALTANTE: LFO0125084 \(pedido 9, facturado 6, faltan 3\)/);
     expect(r.semaforo).toBe('observaciones');
-    expect(r.pendientePedidos.map((x) => `${x.pedidoId} ${x.codigo} ${x.pendiente}`).sort()).toEqual(['497 LFO0125084 3', '497 LFO0225061 2']);
+    expect(r.pendientePedidos.map((x) => `${x.pedidoId} ${x.codigo} ${x.pendiente}`).sort()).toEqual(['497 LFO0125084 3']);
   });
 
   it('precio mayor: reclamo con IVA 21% y percepciones 11% (×1,32), nota de crédito por el neto', () => {
@@ -264,6 +265,97 @@ describe('método de gax: otra nota, faltantes, precio y tolerancias', () => {
     expect(analizarFacturas([pA], [f]).facturas[0].aritmetica.errores).toEqual([]);
     f.total += 0.5;
     expect(analizarFacturas([pA], [f]).facturas[0].aritmetica.errores.join(' ')).toMatch(/Total/);
+  });
+});
+
+describe('notas exactas de cada factura (11-nov-2026: «matchear exactas las que sí son»)', () => {
+  const nota = (id: string, fecha: string, lineas: ReturnType<typeof linea>[]): Pedido => ({ id, nroProveedor: id, nombre: id, fecha, lineas });
+  const cubiertas = (r: { pedidosCubiertos: string[] }) => [...r.pedidosCubiertos].sort();
+
+  it('factura 0011-00139953: con muchas notas viejas en Trello usa solo la nota que la explica y la que tiene lo que falta', () => {
+    // La nota del 1/11 tiene 7 de los 8 artículos; la del 9/9 («entra la indu») tiene 3, incluido el 8.º;
+    // las tarjetas viejas que nunca se archivaron tienen sueltos los mismos artículos, con saldo.
+    const real = nota('N1101', '2026-11-01', ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7'].map((cod) => linea(cod, 'M', 4)));
+    const indu = nota('N0909', '2026-09-09', [linea('C6', 'M', 2), linea('C7', 'M', 2), linea('C8', 'L', 9)]);
+    const n1005 = nota('N1005', '2026-10-05', [linea('C8', 'L', 9), linea('C1', 'S', 3)]);
+    const viejas = [
+      nota('N0716', '2026-07-16', [linea('C1', 'S', 5), linea('C2', 'S', 5)]),
+      nota('N0812', '2026-08-12', [linea('C3', 'S', 5)]),
+      nota('N0904', '2026-09-04', [linea('C4', 'S', 5), linea('C5', 'S', 5)]),
+      nota('N0907', '2026-09-07', [linea('C8', 'S', 9)]),
+    ];
+    const f = factura('1', '2026-11-06', [...['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7'].map((cod) => ren(cod, 4)), ren('C8', 9)]);
+    const r = analizarFacturas([...viejas, indu, n1005, real], [f]).facturas[0];
+    expect(r.pedidoPrincipal).toBe('N1101');
+    expect(cubiertas(r)).toEqual(['N0909', 'N1101']);
+    expect(r.renglones.every((x) => x.sinPedir === 0)).toBe(true);
+    expect(r.renglones[7].otraNota).toEqual(['N0909']);
+    expect(r.renglones.slice(0, 7).every((x) => x.asignaciones.length === 1 && x.asignaciones[0].pedidoId === 'N1101')).toBe(true);
+    // Elegida a mano: se usa primero; lo demás sigue por la nota que más artículos tiene.
+    const m = analizarFacturas([...viejas, indu, n1005, real], [f], { 1: ['N0907'] }).facturas[0];
+    expect(m.pedidoPrincipal).toBe('N0907');
+    expect(cubiertas(m)).toEqual(['N0907', 'N1101']);
+  });
+
+  it('el código que está en la nota principal se descuenta de ella, aunque una nota más vieja también lo tenga', () => {
+    const p471 = nota('471', '2026-10-09', [linea('LFO0225061', '040', 2)]);
+    const p497 = nota('497', '2026-10-30', [linea('LFO0125084', '040', 9), linea('LFO0225061', '041', 2)]);
+    const res = analizarFacturas([p471, p497], [factura('1', '2026-11-05', [ren('LFO0225061', 2), ren('LFO0125084', 6)])]);
+    const r = res.facturas[0];
+    expect(r.pedidoPrincipal).toBe('497');
+    expect(cubiertas(r)).toEqual(['497']);
+    expect(r.renglones[0].otraNota).toEqual([]);
+    expect(res.pendientes.find((x) => x.pedidoId === '471')!.pendiente).toBe(2);
+  });
+
+  it('lo que la nota principal no alcanza sale de otra nota anterior a la factura (la más vieja), nunca de una posterior', () => {
+    const real = nota('REAL', '2026-11-01', [linea('X', '40', 2), linea('Y', '40', 1)]);
+    const vieja = nota('VIEJA', '2026-07-16', [linea('X', '41', 1)]);
+    const cercana = nota('CERCANA', '2026-10-20', [linea('X', '42', 1)]);
+    const posterior = nota('POSTERIOR', '2026-11-20', [linea('X', '43', 5), linea('Y', '43', 5)]);
+    const r = analizarFacturas([posterior, cercana, real, vieja], [factura('1', '2026-11-06', [ren('X', 3), ren('Y', 1)])]).facturas[0];
+    expect(r.pedidoPrincipal).toBe('REAL');
+    expect(r.renglones[0].asignaciones).toEqual([{ pedidoId: 'REAL', cantidad: 2, adelanto: false }, { pedidoId: 'VIEJA', cantidad: 1, adelanto: false }]);
+    expect(r.renglones[0].otraNota).toEqual(['VIEJA']);
+    // Una nota posterior a la factura se usa solo si ninguna anterior tiene saldo.
+    const sola = analizarFacturas([vieja, posterior], [factura('1', '2026-11-06', [ren('X', 2)])]).facturas[0];
+    expect(sola.renglones[0].asignaciones.map((a) => a.pedidoId)).toEqual(['VIEJA', 'POSTERIOR']);
+  });
+
+  it('una nota nueva (posterior a la factura) no se queda con una factura ya controlada', () => {
+    const r = nota('R', '2026-11-01', [linea('A', 'M', 4), linea('B', 'M', 4)]);
+    const o = nota('O', '2026-10-01', [linea('C', 'M', 1)]);
+    const n = nota('N', '2026-11-20', [linea('A', 'M', 6), linea('B', 'M', 6), linea('C', 'M', 6)]);
+    const f1 = factura('1', '2026-11-06', [ren('A', 4), ren('B', 4), ren('C', 1)]);
+    const res = analizarFacturas([r, o, n], [f1, factura('2', '2026-11-25', [ren('A', 6), ren('B', 6), ren('C', 6)])]);
+    expect(res.facturas[0].pedidoPrincipal).toBe('R');
+    expect(cubiertas(res.facturas[0])).toEqual(['O', 'R']);
+    expect(cubiertas(res.facturas[1])).toEqual(['N']);
+    expect(res.facturas[1].motivos.join(' ')).not.toMatch(/OTRA NOTA/);
+  });
+
+  it('un resto de 1 unidad por artículo en una nota vieja no le gana a la nota que trae los artículos completos', () => {
+    const cods = ['C1', 'C2', 'C3', 'C4', 'C5', 'C6', 'C7'];
+    const resto = nota('RESTO', '2026-07-16', [...cods, 'C8'].map((cod) => linea(cod, 'S', 1)));
+    const indu = nota('INDU', '2026-09-09', [linea('C8', 'L', 9)]);
+    const real = nota('REAL', '2026-11-01', cods.map((cod) => linea(cod, 'M', 4)));
+    const r = analizarFacturas([resto, indu, real], [factura('1', '2026-11-06', [...cods.map((cod) => ren(cod, 4)), ren('C8', 9)])]).facturas[0];
+    expect(r.pedidoPrincipal).toBe('REAL');
+    expect(cubiertas(r)).toEqual(['INDU', 'REAL']);
+    expect(r.renglones.some((x) => x.asignaciones.some((a) => a.adelanto))).toBe(false);
+  });
+
+  it('dos notas iguales seguidas: va a la del mismo precio que la factura (y si no, a la más vieja)', () => {
+    const n1 = nota('N1', '2026-10-01', [linea('A', 'M', 2, 100000), linea('B', 'M', 2, 100000)]);
+    const n2 = nota('N2', '2026-10-05', [linea('A', 'M', 2, 110000), linea('B', 'M', 2, 110000)]);
+    const res = analizarFacturas([n1, n2], [
+      factura('1', '2026-10-07', [ren('A', 2, 110000), ren('B', 2, 110000)]),
+      factura('2', '2026-10-09', [ren('A', 2, 100000), ren('B', 2, 100000)]),
+    ]);
+    expect(res.facturas.map((f) => f.pedidosCubiertos)).toEqual([['N2'], ['N1']]);
+    expect(res.facturas.every((f) => f.renglones.every((x) => x.difPrecio.length === 0))).toBe(true);
+    const igual = analizarFacturas([n2, n1], [factura('1', '2026-10-07', [ren('A', 2, 90000), ren('B', 2, 90000)])]).facturas[0];
+    expect(igual.pedidoPrincipal).toBe('N1');
   });
 });
 

@@ -241,14 +241,58 @@ const parsear = (hash) => {
 
 export async function leerTodo(kv, prov) {
   const extra = prov === 'family' ? [['HGETALL', clave(prov, 'cargas')]] : [];
-  const res = await kv([...TIPOS.map((t) => ['HGETALL', clave(prov, t)]), ['HGET', 'cf:config', prov], ['HGETALL', clave(prov, 'trello')], ...extra]);
+  const res = await kv([
+    ...TIPOS.map((t) => ['HGETALL', clave(prov, t)]), ['HGET', 'cf:config', prov], ['HGETALL', clave(prov, 'trello')],
+    ['HGETALL', clave(prov, 'tarjetas')], ['HGET', 'cf:config', 'listasTrello'], ...extra,
+  ]);
   const [pedidos, facturas, asignaciones, recepciones, remitos, entregas] = res.slice(0, TIPOS.length).map(parsear);
   const crudo = res[TIPOS.length];
   let config = {};
   try { config = crudo ? JSON.parse(crudo) : {}; } catch { config = {}; }
-  const out = { pedidos: Object.values(pedidos), facturas: Object.values(facturas), asignaciones, recepciones, remitos, entregas: Object.values(entregas), config, trelloVistos: parsear(res[TIPOS.length + 1]) };
-  if (prov === 'family') out.cargas = parsear(res[TIPOS.length + 2]);
+  const listas = json(res[TIPOS.length + 3]);
+  const out = {
+    pedidos: Object.values(pedidos), facturas: Object.values(facturas), asignaciones, recepciones, remitos, entregas: Object.values(entregas), config,
+    trelloVistos: parsear(res[TIPOS.length + 1]),
+    // En qué lista de Trello está cada tarjeta con notas (ver guardarTarjetas) y qué listas son de pedidos pendientes.
+    tarjetasTrello: parsear(res[TIPOS.length + 2]),
+    listasTrello: Array.isArray(listas) ? listas.filter((x) => RE_TRELLO.test(String(x))) : [],
+  };
+  if (prov === 'family') out.cargas = parsear(res[TIPOS.length + 4]);
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// LISTAS DE PEDIDOS PENDIENTES EN TRELLO (11-nov-2026, gax: «solo tené en cuenta esto»,
+// con las listas «PEDIDOS PENDIENTES» y «PENDIENDE DE INDUMENTARIA/CALZADO»).
+// Solo las tarjetas de esas listas traen notas; una nota cuya tarjeta salió de ellas no se
+// elige sola para las facturas posteriores (cf:{proveedor}:tarjetas guarda desde cuándo).
+const RE_TRELLO = /^[a-f0-9]{24}$/;
+const MAX_TARJETAS = 1000;
+
+/** Listas elegidas a mano (vacío = las que dicen «pendiente» en el nombre). Son del tablero, no de un proveedor. */
+async function guardarListasTrello(kv, body) {
+  const ids = lista(body?.listas ?? [], 30).map((x) => {
+    if (!RE_TRELLO.test(String(x))) throw new Error('Lista de Trello inválida.');
+    return String(x);
+  });
+  await kv([ids.length ? ['HSET', 'cf:config', 'listasTrello', JSON.stringify([...new Set(ids)])] : ['HDEL', 'cf:config', 'listasTrello']]);
+  return { ok: true };
+}
+
+/** Estado de cada tarjeta con notas: si está en una lista de pendientes, si alguna vez lo estuvo y desde cuándo salió. */
+export function limpiarTarjetas(v) {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) throw new Error('Tarjetas inválidas.');
+  const entradas = Object.entries(v);
+  if (!entradas.length || entradas.length > MAX_TARJETAS) throw new Error('Lista inválida o demasiado larga.');
+  return entradas.map(([k, e]) => {
+    if (!RE_TRELLO.test(k)) throw new Error('Tarjeta de Trello inválida.');
+    return [k, {
+      pendiente: e?.pendiente === true,
+      visto: e?.visto === true || e?.pendiente === true,
+      fuera: e?.pendiente === true ? '' : fecha(e?.fuera),
+      lista: txt(e?.lista, 100),
+    }];
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -295,6 +339,7 @@ async function guardarEnlaces(kv, body) {
 export async function aplicar(kv, body) {
   // Los enlaces rápidos son de toda la pantalla, no de un proveedor.
   if (body?.accion === 'guardarEnlaces') return guardarEnlaces(kv, body);
+  if (body?.accion === 'guardarListasTrello') return guardarListasTrello(kv, body);
   const prov = String(body?.proveedor || '');
   if (!PROVEEDORES.includes(prov)) throw new Error('Proveedor inválido.');
   switch (body?.accion) {
@@ -425,6 +470,11 @@ export async function aplicar(kv, body) {
       if (!/^[a-f0-9]{24}$/.test(adj)) throw new Error('Identificador inválido.');
       const version = Number.isInteger(body.version) && body.version > 0 && body.version < 1000 ? body.version : 1;
       await kv([['HSET', clave(prov, 'trello'), adj, JSON.stringify({ motivo: txt(body.motivo, 200), fecha: new Date().toISOString().slice(0, 10), version, ...firmaNota(body) })]]);
+      return { ok: true };
+    }
+    case 'guardarTarjetas': {
+      const tarjetas = limpiarTarjetas(body.tarjetas);
+      await kv([['HSET', clave(prov, 'tarjetas'), ...tarjetas.flatMap(([k, e]) => [k, JSON.stringify(e)])]]);
       return { ok: true };
     }
     case 'guardarConfig': {
