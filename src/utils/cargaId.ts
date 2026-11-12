@@ -25,7 +25,7 @@
 // ============================================================================
 import { claveCodigo, fmt, type FilaChecklist, type RenglonFactura, type ResultadoFactura } from './controlFacturas';
 import {
-  llegaAl50, textoCarga, type AjustePrecio, type SepararId, type CargaFamily, type ItemCarga, type LineaReposicion, type OpcionCarga, type PlanCarga, type ReposicionFamily,
+  llegaAl50, textoCarga, type AjustePrecio, type LineaFOId, type ModoVenta, type MoverVenta, type SepararId, type CargaFamily, type ItemCarga, type LineaReposicion, type OpcionCarga, type PlanCarga, type ReposicionFamily,
 } from './cargaFamily';
 import { esPrecioSugerido } from './conversePreciosFijos';
 import { margenPct } from './margen';
@@ -54,6 +54,8 @@ export interface OrdenPendienteId {
   nombre: string; fecha: string; cantidad: number;
   /** false = se avisa pero no se descuenta (cancelada, sin pagar o «solucionar»). */
   cuenta: boolean; motivo?: string;
+  /** La línea de la preparación en iD (para pasar la venta a Martínez). */
+  fo?: LineaFOId;
 }
 
 const buscable = (c: string) => /^[A-Z0-9._-]+$/.test(c);
@@ -96,12 +98,12 @@ const Q_PENDIENTES_ID = `query($q: String!, $cursor: String) {
     nodes {
       id status
       order { name createdAt cancelledAt displayFinancialStatus tags }
-      lineItems(first: 40) { pageInfo { hasNextPage endCursor } nodes { remainingQuantity variant { id } } }
+      lineItems(first: 40) { pageInfo { hasNextPage endCursor } nodes { id remainingQuantity variant { id } } }
     }
   }
 }`;
 const Q_LINEAS_FO = `query($id: ID!, $cursor: String) {
-  fulfillmentOrder(id: $id) { lineItems(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { remainingQuantity variant { id } } } }
+  fulfillmentOrder(id: $id) { lineItems(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { id remainingQuantity variant { id } } } }
 }`;
 interface Pagina<T> { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: T[] }
 type NodoProducto = {
@@ -165,7 +167,7 @@ export async function leerEstadoCargaId(codigos: string[], gql: Gql): Promise<Es
   return estado;
 }
 
-type LineaFO = { remainingQuantity: number; variant: { id: string } | null };
+type LineaFO = { id?: string; remainingQuantity: number; variant: { id: string } | null };
 type NodoFO = {
   id: string; status: string;
   order: { name: string; createdAt: string; cancelledAt: string | null; displayFinancialStatus: string | null; tags?: string[] } | null;
@@ -198,7 +200,8 @@ export async function leerPendientesId(locationId: string, variantes: Set<string
       for (const l of lineas) {
         const id = l.variant?.id;
         if (!id || !variantes.has(id) || !(l.remainingQuantity > 0)) continue;
-        (out[id] ??= []).push({ nombre: o.name, fecha: o.createdAt, cantidad: l.remainingQuantity, cuenta: !motivo, ...(motivo ? { motivo } : {}) });
+        const enFO = l.id ? { fo: { id: fo.id, lineaId: l.id, abierta: fo.status === 'OPEN' } } : {};
+        (out[id] ??= []).push({ nombre: o.name, fecha: o.createdAt, cantidad: l.remainingQuantity, cuenta: !motivo, ...(motivo ? { motivo } : {}), ...enFO });
       }
     }
     if (!d.fulfillmentOrders.pageInfo.hasNextPage) break;
@@ -212,18 +215,18 @@ export async function leerPendientesId(locationId: string, variantes: Set<string
  * Cuánto de lo que llegó de una variante es para ventas de iD: hasta lo pendiente (de la más vieja a la más
  * nueva), sin pasar lo que llegó. Lo que el depósito ya marcó «-1» cuenta como separado (no se separa dos veces).
  */
-export function separarDe(ordenes: OrdenPendienteId[], cantidad: number, retirado: number): { cantidad: number; ordenes: { nombre: string; cantidad: number }[] } {
+export function separarDe(ordenes: OrdenPendienteId[], cantidad: number, retirado: number): { cantidad: number; ordenes: { nombre: string; cantidad: number; fo?: LineaFOId }[] } {
   const cuentan = ordenes.filter((o) => o.cuenta);
   const pendiente = cuentan.reduce((s, o) => s + o.cantidad, 0);
   const total = Math.min(cantidad + retirado, pendiente);
   const sep = Math.max(0, Math.min(cantidad, total - retirado));
-  const out: { nombre: string; cantidad: number }[] = [];
+  const out: { nombre: string; cantidad: number; fo?: LineaFOId }[] = [];
   let saltar = retirado, falta = sep;
   for (const o of cuentan) {
     let q = o.cantidad;
     const s = Math.min(saltar, q); saltar -= s; q -= s;
     const t = Math.min(falta, q); falta -= t;
-    if (t > 0) out.push({ nombre: o.nombre, cantidad: t });
+    if (t > 0) out.push({ nombre: o.nombre, cantidad: t, ...(o.fo ? { fo: o.fo } : {}) });
     if (!falta) break;
   }
   return { cantidad: sep, ordenes: out };
@@ -317,7 +320,7 @@ export function costoPromedio(stock: number, costo: number, suma: number, costoN
 }
 
 function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefined, ren: RenglonFactura | undefined,
-  pendientes: Record<string, OrdenPendienteId[]> | undefined, cargarIgual: boolean): OpcionCarga {
+  pendientes: Record<string, OrdenPendienteId[]> | undefined, modo: ModoVenta): OpcionCarga {
   if (!p) return { clave: 'falta', etiqueta: 'Producto que no pude leer', accion: null, bloqueo: 'No pude leer ese producto en Shopify.', avisos: [] };
   const avisos: string[] = [];
   const base = { clave: `repo:${p.id}`, etiqueta: `Sumar el stock en «${p.titulo}»`, avisos };
@@ -343,15 +346,38 @@ function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefi
   const separar: SepararId[] = [];
   const otras: string[] = [];
   const lineas: LineaReposicion[] = [];
+  const mover: MoverVenta[] = [];
+  const enCurso: string[] = [];
+  let movibles = 0;
   for (const l of llegan) {
     const ords = pendientes?.[l.v.id] ?? [];
     const s = separarDe(ords, l.cantidad, l.retirado);
     if (s.cantidad) separar.push({ talle: l.v.talle, cantidad: s.cantidad, ordenes: s.ordenes });
     for (const o of ords) if (!o.cuenta) otras.push(`${l.v.talle} ${o.nombre} (${o.motivo})`);
-    const suma = cargarIgual ? l.cantidad : l.cantidad - s.cantidad;
+    // «Pasar la venta»: solo las preparaciones abiertas; las que están en preparación en iD se separan igual.
+    let pasan = 0;
+    for (const o of s.ordenes) {
+      if (!o.fo?.abierta) continue;
+      movibles += o.cantidad;
+      if (modo !== 'pasar') continue;
+      pasan += o.cantidad;
+      mover.push({ talle: l.v.talle, orden: o.nombre, cantidad: o.cantidad, foId: o.fo.id, lineaId: o.fo.lineaId });
+    }
+    if (modo === 'pasar') for (const o of s.ordenes) if (!o.fo?.abierta) enCurso.push(`${l.v.talle} ${o.nombre}`);
+    const suma = modo === 'igual' ? l.cantidad : l.cantidad - s.cantidad + pasan;
     if (suma > 0) lineas.push({ talle: l.v.talle, inventoryItemId: l.v.inventoryItemId, actual: l.v.disponible, suma });
   }
-  const sep = separar.length ? { separar, separarAplicado: !cargarIgual } : {};
+  const sep = separar.length ? { separar, separarAplicado: modo === 'separar', modoVenta: modo, movibles } : {};
+  // En la acción (resumen y registro) van solo las que se separan de verdad: en «pasar», las que están en preparación.
+  const separadas = modo === 'pasar'
+    ? separar.map((x) => {
+      const ordenes = x.ordenes.filter((o) => !o.fo?.abierta);
+      return { ...x, ordenes, cantidad: ordenes.reduce((t, o) => t + o.cantidad, 0) };
+    }).filter((x) => x.cantidad > 0)
+    : separar;
+  const sepAccion = separadas.length ? { separar: separadas, separarAplicado: modo !== 'igual' } : {};
+  if (enCurso.length) avisos.push(`No puedo pasar a Martínez la venta de ${enCurso.join(', ')}: en Shopify figura en preparación en iD. Esas unidades se separan; pasala a mano si hace falta.`);
+  if (mover.length) avisos.push(`Después de sumar el stock, la venta de ${mover.map((m) => `${m.talle} ${m.orden}`).join(', ')} pasa de iD a Martínez (en Shopify la orden queda en dos envíos si tiene otros artículos en iD, y esa unidad queda libre en el stock de iD hasta la próxima sincronización).`);
   if (otras.length) avisos.push(`También hay ventas pendientes en iD que no descuento: ${otras.join(', ')}. Revisalas a mano.`);
   // Todo vendido en iD: no se suma stock, pero el precio y el costo de la factura se actualizan igual
   // (12-nov-2026, gax: «no saques lo del precio, es importante actualizarlo igual»).
@@ -367,7 +393,7 @@ function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefi
   else {
     for (const c of ajuste.conservan) if (c.motivo) avisos.push(`Talle ${c.talle}: ya tenía ${c.stock} en Martínez y ${c.motivo}. Conserva su costo: revisalo a mano.`);
   }
-  return { ...base, ...sep, accion: { tipo: 'reposicion', productoId: p.id, titulo: p.titulo, lineas, etiquetar: false, ...(ajuste ? { ajuste } : {}), ...sep } };
+  return { ...base, ...sep, accion: { tipo: 'reposicion', productoId: p.id, titulo: p.titulo, lineas, etiquetar: false, ...(ajuste ? { ajuste } : {}), ...sepAccion, ...(mover.length ? { mover } : {}) } };
 }
 
 const NO_CARGAR: OpcionCarga = { clave: 'no', etiqueta: 'No cargar este artículo', accion: null, avisos: [] };
@@ -376,7 +402,7 @@ const NO_CARGAR: OpcionCarga = { clave: 'no', etiqueta: 'No cargar este artícul
  * Vista previa de la carga de una entrega de iD. No escribe nada.
  * `cargas`: las marcas guardadas de todas las entregas de iD, leídas recién de la base.
  */
-export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: Record<string, CargaFamily>, cargarIgual: ReadonlySet<string> = new Set()): PlanCarga {
+export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: Record<string, CargaFamily>, modos: ReadonlyMap<string, ModoVenta> = new Map()): PlanCarga {
   const f = r.factura;
   const avisos: string[] = [];
   const remito = r.remito?.numero || f.remito || '';
@@ -401,7 +427,7 @@ export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: 
     if (!buscable(c.codigo.toUpperCase())) return bloqueado('El código tiene caracteres que no puedo buscar en Shopify: cargalo a mano.');
     const ids = estado.porCodigo[c.codigo.toUpperCase()] ?? [];
     if (!ids.length) return bloqueado('No está en Shopify: crealo desde Sincronización (con el archivo de iD) y armá la carga de nuevo.');
-    const opciones = ids.map((id) => opcion(c, descripcion, estado.productos[id], ren, estado.pendientesId, cargarIgual.has(c.codigo)));
+    const opciones = ids.map((id) => opcion(c, descripcion, estado.productos[id], ren, estado.pendientesId, modos.get(c.codigo) ?? 'separar'));
     if (c.retirado) for (const o of opciones) o.avisos.push(`Salieron ${c.retirado} para órdenes (marca a mano en el remito): no se suman.`);
     // Todo vendido en iD: queda bloqueado pero con la opción, para mostrar qué separar y «cargarlo igual».
     if (ids.length === 1) return opciones[0].bloqueo ? { ...bloqueado(opciones[0].bloqueo), opciones: opciones[0].separar ? opciones : [] } : { ...base, estado: 'listo', motivo: '', opciones };

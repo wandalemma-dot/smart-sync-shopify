@@ -8,7 +8,7 @@
 // ============================================================================
 import { useState } from 'react';
 import { fmt } from './utils/controlFacturas';
-import { leerPrecio, precioAEscribir, resumenCarga, textoSeparar, type AjustePrecio, type EleccionesCarga, type ItemCarga, type OpcionCarga, type PlanCarga } from './utils/cargaFamily';
+import { leerPrecio, precioAEscribir, resumenCarga, textoSeparar, type AjustePrecio, type EleccionesCarga, type ItemCarga, type ModoVenta, type OpcionCarga, type PlanCarga } from './utils/cargaFamily';
 import { margenPct } from './utils/margen';
 import { botonChico, botonPrincipal, inputSt } from './utils/entregasUi';
 
@@ -17,11 +17,11 @@ const COLOR_ITEM = { listo: 'inherit', elegir: '#fbbf24', bloqueado: '#f87171', 
 const VERDE = '#34d399', AMARILLO = '#fbbf24', ROJO = '#f87171', VIOLETA = '#a78bfa';
 type Eleccion = EleccionesCarga[string];
 
-export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, explicacion, onCargarIgual, sinTildar }: {
+export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, explicacion, onModoVenta, sinTildar }: {
   plan: PlanCarga; ocupado: boolean; onConfirmar: (e: EleccionesCarga) => void; onCancelar: () => void;
   sucursal: string; explicacion: string;
-  /** iD: lo vendido en iD se separa; «cargarlo igual» lo suma (si ya se separó antes). */
-  onCargarIgual?: (codigo: string, si: boolean) => void;
+  /** iD: lo vendido en iD se separa; «cargarlo igual» lo suma (si ya se separó antes); «pasar» lo suma y mueve la venta a Martínez. */
+  onModoVenta?: (codigo: string, modo: ModoVenta) => void;
   /** iD (12-nov-2026, gax: «yo los voy seleccionando, así los voy controlando»): empiezan destildados. */
   sinTildar?: boolean;
 }) {
@@ -45,7 +45,7 @@ export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, e
           ¿Algo no llegó todavía? Destildalo: queda pendiente y lo cargás otro día con el mismo botón.
         </div>)}
       {plan.items.map((it) => <FilaCarga key={it.codigo} it={it} eleccion={elecciones[it.codigo]} onElegir={(c) => elegir(it.codigo, c)} sinTildar={sinTildar}
-        onCargarIgual={onCargarIgual && ((si) => onCargarIgual(it.codigo, si))} ocupado={ocupado} />)}
+        onModoVenta={onModoVenta && ((m) => onModoVenta(it.codigo, m))} ocupado={ocupado} />)}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
         <button style={{ ...botonPrincipal, opacity: res.lineas.length && !ocupado ? 1 : 0.5, cursor: res.lineas.length && !ocupado ? 'pointer' : 'not-allowed' }}
           disabled={!res.lineas.length || ocupado} onClick={() => onConfirmar(elecciones)}>✅ Confirmar y cargar</button>
@@ -61,13 +61,15 @@ export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, e
 /** Con una sola cosa para hacer, una casilla deja dejarlo para otro día (lo que no llegó todavía). */
 const esCasilla = (it: ItemCarga) => it.estado === 'listo' && it.opciones.length === 1;
 
-function FilaCarga({ it, eleccion, onElegir, onCargarIgual, ocupado, sinTildar }: {
-  it: ItemCarga; eleccion?: Eleccion; onElegir: (c: Partial<Eleccion>) => void; onCargarIgual?: (si: boolean) => void; ocupado: boolean; sinTildar?: boolean;
+function FilaCarga({ it, eleccion, onElegir, onModoVenta, ocupado, sinTildar }: {
+  it: ItemCarga; eleccion?: Eleccion; onElegir: (c: Partial<Eleccion>) => void; onModoVenta?: (m: ModoVenta) => void; ocupado: boolean; sinTildar?: boolean;
 }) {
   const op = it.opciones.find((o) => o.clave === (eleccion?.clave ?? it.opciones[0]?.clave));
   const a = op?.accion;
   const casilla = esCasilla(it);
   const fuera = casilla && !a;
+  // El cartel «vendido en iD» se ve aunque el artículo todavía no esté tildado.
+  const sep = op ?? (casilla ? it.opciones[0] : undefined);
   return (
     <div style={{ borderTop: '2px solid rgba(255,255,255,0.2)', padding: '14px 0 12px', fontSize: '0.84rem', lineHeight: 1.55 }}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -83,7 +85,7 @@ function FilaCarga({ it, eleccion, onElegir, onCargarIgual, ocupado, sinTildar }
           {it.opciones.map((o) => <option key={o.clave} value={o.clave} disabled={!!o.bloqueo}>{o.etiqueta}{o.bloqueo ? ' (no se puede)' : ''}</option>)}
         </select>}
       </div>
-      {op?.separar?.length ? <Separar op={op} onCargarIgual={onCargarIgual} ocupado={ocupado} /> : null}
+      {sep?.separar?.length ? <Separar op={sep} onModoVenta={onModoVenta} ocupado={ocupado} /> : null}
       {it.motivo && <div style={{ color: COLOR_ITEM[it.estado], marginTop: 2 }}>{it.estado === 'bloqueado' ? '⛔ ' : ''}{it.motivo}</div>}
       {it.opciones.filter((o) => o.bloqueo && it.opciones.length > 1).map((o) => <div key={o.clave} style={{ opacity: 0.75 }}>· {o.etiqueta}: {o.bloqueo}</div>)}
       {a?.tipo === 'alta' && <div style={{ marginTop: 4 }}>
@@ -101,19 +103,29 @@ function FilaCarga({ it, eleccion, onElegir, onCargarIgual, ocupado, sinTildar }
   );
 }
 
-/** Cartel «vendido en iD: separar» (12-nov-2026, gax): no se suma a Martínez, salvo «cargarlo igual». */
-function Separar({ op, onCargarIgual, ocupado }: { op: OpcionCarga; onCargarIgual?: (si: boolean) => void; ocupado: boolean }) {
+/**
+ * Cartel «vendido en iD» (12-nov-2026, gax): por defecto se separa y no se suma a Martínez. «Cargarlo igual»
+ * suma todo (ya se separó antes). «Cargar y pasar la venta a Martínez» suma todo y, después, la orden pasa a
+ * prepararse desde Martínez (cuando espera otro artículo que todavía no llegó).
+ */
+function Separar({ op, onModoVenta, ocupado }: { op: OpcionCarga; onModoVenta?: (m: ModoVenta) => void; ocupado: boolean }) {
   const xs = op.separar ?? [];
   const u = xs.reduce((s, x) => s + x.cantidad, 0);
+  const modo = op.modoVenta ?? (op.separarAplicado ? 'separar' : 'igual');
+  const boton = (m: ModoVenta, texto: string, titulo: string, habilitado = true) => (
+    <button key={m} style={{ ...botonChico, padding: '2px 8px', opacity: habilitado ? 1 : 0.5 }} disabled={ocupado || !habilitado} title={titulo} onClick={() => onModoVenta?.(m)}>{texto}</button>
+  );
+  const sinMover = !op.movibles;
   return (
     <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 6, borderLeft: `4px solid ${VIOLETA}`, background: 'rgba(167,139,250,0.12)' }}>
-      {op.separarAplicado
-        ? <><strong>🏷️ Vendido en iD: separá {u} u. antes de cargar</strong> — {textoSeparar(xs)}. No se suman a Martínez.</>
-        : <><strong>🏷️ Vendido en iD ({u} u.)</strong> — {textoSeparar(xs)}. Elegiste cargarlo igual: se suma todo a Martínez.</>}
-      {onCargarIgual && <div style={{ marginTop: 4 }}>
-        <button style={{ ...botonChico, padding: '2px 8px' }} disabled={ocupado} onClick={() => onCargarIgual(!!op.separarAplicado)}>
-          {op.separarAplicado ? 'Ya lo separé antes: cargarlo igual' : 'Volver a separarlo'}
-        </button>
+      {modo === 'separar' && <><strong>🏷️ Vendido en iD: separá {u} u. antes de cargar</strong> — {textoSeparar(xs)}. No se suman a Martínez.</>}
+      {modo === 'igual' && <><strong>🏷️ Vendido en iD ({u} u.)</strong> — {textoSeparar(xs)}. Elegiste cargarlo igual: se suma todo a Martínez.</>}
+      {modo === 'pasar' && <><strong>🔀 Vendido en iD ({u} u.)</strong> — {textoSeparar(xs)}. Elegiste cargarlo y pasar la venta a Martínez: se suma a Martínez y, después de cargar, esa orden se prepara desde Martínez.</>}
+      {onModoVenta && <div style={{ marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {modo !== 'separar' && boton('separar', 'Volver a separarlo', 'No se suma a Martínez: queda para esas órdenes de iD')}
+        {modo !== 'igual' && boton('igual', 'Ya lo separé antes: cargarlo igual', 'Se suma todo a Martínez; la orden sigue asignada a iD')}
+        {modo !== 'pasar' && boton('pasar', 'Cargar y pasar la venta a Martínez',
+          sinMover ? 'En Shopify esa preparación figura en curso en iD: no se puede mover desde la app' : 'Para órdenes que esperan otro artículo: se suma a Martínez y la venta pasa a prepararse desde Martínez', !sinMover)}
       </div>}
     </div>
   );
