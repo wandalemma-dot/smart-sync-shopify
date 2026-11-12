@@ -40,6 +40,24 @@ export const hoy = () => new Date().toISOString().slice(0, 10);
 export const slug = (s: string) => s.replace(/[^A-Za-z0-9_.-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 70) || 'x';
 export const fechaAr = (iso?: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); return m ? `${m[3]}/${m[2]}/${m[1]}` : ''; };
 
+/**
+ * Nombre del Excel marcado para Trello: N° de nota, nombre de la tarjeta y fecha de la nota, para
+ * reconocerla entre varias (12-nov-2026, gax). Ej.: «Nota 00002595 - Reposicion Converse - 05-11-2026 - entregado 12-11.xlsx».
+ */
+export function nombreArchivoPlanilla(p: { nroProveedor?: string; nombre: string; fecha?: string }, hoy: string): string {
+  const limpio = (t: string) => t.replace(/[\\/:*?"<>|\p{Cc}]+/gu, ' ').replace(/\s+/g, ' ').trim();
+  const nro = limpio(p.nroProveedor || '');
+  const nombre = limpio(p.nombre || '').replace(/\.xlsx?$/i, '').slice(0, 60);
+  const partes = [
+    nro ? `Nota ${nro}` : '',
+    // Si la tarjeta se llama igual que la nota, no se repite.
+    nombre && !(nro && !nombre.split(nro).join(' ').replace(/\b(pedido|nota|nro)\b|n[°º]/gi, '').replace(/[^A-Za-z0-9]/g, '')) ? nombre : '',
+    fechaAr(p.fecha).replace(/\//g, '-'),
+    `entregado ${fechaAr(hoy).slice(0, 5).replace('/', '-')}`,
+  ];
+  return `${partes.filter(Boolean).join(' - ')}.xlsx`;
+}
+
 export const mensaje = (e: unknown) => (e instanceof Error ? e.message : 'Error inesperado.');
 
 /** Lee fotos con IA (api/leer-remito.js): el remito, o la planilla de entrega de Family. */
