@@ -25,10 +25,10 @@ import ControlFamily from './ControlFamily';
 import RegistroCargas from './RegistroCargas';
 import EnlacesRapidos from './EnlacesRapidos';
 import { Archivo, Copiar, Parte } from './EntregasPartes';
-import { PanelCarga } from './PanelCarga';
+import { OrdenesQueSalen, PanelCarga } from './PanelCarga';
 import { accionesElegidas, ejecutarCargaFamily, resumenCarga, textoCarga, type CargaFamily, type EleccionesCarga, type ModoVenta, type PlanCarga } from './utils/cargaFamily';
 import { cambiosDePrecio, enlacesMail, textoAvisoPrecio, type CambioPrecio, type MailsAviso } from './utils/avisoPrecio';
-import { estadoCargaFactura, leerEstadoCargaId, planCargaId, precioYCostoAntes, SUCURSAL_CARGA_ID, type EstadoCargaId } from './utils/cargaId';
+import { estadoCargaFactura, leerEstadoCargaId, ordenesQueSalen, planCargaId, type OrdenQueSale, precioYCostoAntes, SUCURSAL_CARGA_ID, type EstadoCargaId } from './utils/cargaId';
 import { actualizarPreciosManualmente, shopifyGraphQL } from './utils/shopify';
 import {
   apiControl, boton, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, nombreArchivoPlanilla, slug, td, th,
@@ -181,6 +181,8 @@ export default function ControlFacturas() {
   const [avisos, setAvisos] = useState<string[]>([]);
   /** Precios de venta que cambió la última carga: se ofrece mandar el aviso por mail. */
   const [avisoPrecio, setAvisoPrecio] = useState<{ cambios: CambioPrecio[]; asunto: string; cuerpo: string } | null>(null);
+  /** Órdenes de iD que se llevaron algo de la última carga: cuáles ya pueden salir (12-nov-2026, gax). */
+  const [ordenesCarga, setOrdenesCarga] = useState<OrdenQueSale[]>([]);
   const [fechaPedido, setFechaPedido] = useState(hoy());
   const [abierta, setAbierta] = useState<string | null>(null);
   const [facturaDeposito, setFacturaDeposito] = useState('');
@@ -678,7 +680,8 @@ export default function ControlFacturas() {
     if (!confirm(texto)) return;
     const p = prov, eid = plan.entregaId, factura = r.factura.numero;
     const elegidas = accionesElegidas(plan, elecciones);
-    setAvisoPrecio(null);
+    const salen = ordenesQueSalen(plan, elecciones);
+    setAvisoPrecio(null); setOrdenesCarga([]);
     setOcupado('Cargando en Shopify… no cierres esta página.');
     try {
       const resultados = await ejecutarCargaFamily(plan, elecciones, {
@@ -693,6 +696,7 @@ export default function ControlFacturas() {
       const icono = { cargada: '✅', parcial: '⚠️', dudosa: '❓', error: '❌', saltado: '↷' } as const;
       if (sigue(p)) {
         setAvisos(resultados.map((x) => `${icono[x.estado]} ${x.codigo}: ${x.mensaje}`));
+        setOrdenesCarga(salen);
         const cambios = cambiosDePrecio(elegidas, resultados);
         if (cambios.length) {
           const fecha = hoyAr().split('-').reverse().join('/');
@@ -788,7 +792,7 @@ export default function ControlFacturas() {
   // Las notas subidas a mano y borradas también se anotan ahí (con «P:»), pero no son Excel de Trello.
   const excelTrello = Object.entries(datos.trelloVistos).filter(([k]) => /^[a-f0-9]{24}$/.test(k)).map(([, v]) => v);
   const facturasRes = [...res.facturas].reverse();
-  const cambiarProv = (p: Prov) => { setPlanCarga(null); setAvisoPrecio(null); setVerRegistro(false); provRef.current = p; setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
+  const cambiarProv = (p: Prov) => { setPlanCarga(null); setAvisoPrecio(null); setOrdenesCarga([]); setVerRegistro(false); provRef.current = p; setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
 
   const cabecera = (<>
     <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
@@ -828,6 +832,10 @@ export default function ControlFacturas() {
       {ocupado && <p style={{ fontSize: '0.88rem', color: '#93c5fd' }}>⏳ {ocupado}</p>}
       {avisos.length > 0 && <div style={{ fontSize: '0.84rem', margin: '6px 0 12px', padding: '8px 10px', background: 'rgba(255,255,255,0.04)', borderRadius: 8 }}>
         {avisos.map((a, i) => <div key={i}>• {a}</div>)}
+      </div>}
+      {ordenesCarga.length > 0 && <div style={{ position: 'relative' }}>
+        <OrdenesQueSalen ordenes={ordenesCarga} titulo="📦 Órdenes de iD de esta carga: qué separar" />
+        <button style={{ ...botonChico, position: 'absolute', top: 6, right: 6, padding: '1px 8px' }} onClick={() => setOrdenesCarga([])}>cerrar</button>
       </div>}
       {avisoPrecio && <AvisoPrecio aviso={avisoPrecio} mails={datos.mailsAviso ?? { para: [], copia: [] }} ocupado={!!ocupado}
         onGuardarMails={async (m) => { await api({ accion: 'guardarMailsAviso', ...m }); await recargar(); }} onCerrar={() => setAvisoPrecio(null)} />}

@@ -10,6 +10,7 @@ import { useState } from 'react';
 import { fmt } from './utils/controlFacturas';
 import { leerPrecio, precioAEscribir, resumenCarga, textoSeparar, type AjustePrecio, type EleccionesCarga, type ItemCarga, type ModoVenta, type OpcionCarga, type PlanCarga } from './utils/cargaFamily';
 import { margenPct } from './utils/margen';
+import { ordenesQueSalen, type OrdenQueSale } from './utils/cargaId';
 import { botonChico, botonPrincipal, inputSt } from './utils/entregasUi';
 
 // Lo listo va en el color normal: solo resalta lo que necesita atención (12-nov-2026, gax: «hay mucho color»).
@@ -46,6 +47,7 @@ export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, e
         </div>)}
       {plan.items.map((it) => <FilaCarga key={it.codigo} it={it} eleccion={elecciones[it.codigo]} onElegir={(c) => elegir(it.codigo, c)} sinTildar={sinTildar}
         onModoVenta={onModoVenta && ((m) => onModoVenta(it.codigo, m))} ocupado={ocupado} />)}
+      <OrdenesQueSalen ordenes={ordenesQueSalen(plan, elecciones)} />
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
         <button style={{ ...botonPrincipal, opacity: res.lineas.length && !ocupado ? 1 : 0.5, cursor: res.lineas.length && !ocupado ? 'pointer' : 'not-allowed' }}
           disabled={!res.lineas.length || ocupado} onClick={() => onConfirmar(elecciones)}>✅ Confirmar y cargar</button>
@@ -54,6 +56,35 @@ export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, e
           {res.lineas.length ? `${res.altas ? `${res.altas} nuevo(s) y ` : ''}${res.reposiciones} reposición(es): ${res.unidades} unidades.` : 'No hay nada elegido para cargar.'}
         </span>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Órdenes de iD que se llevan algo de esta entrega (12-nov-2026, gax): cuáles ya pueden salir (separalas y
+ * dejalas apartadas) y cuáles todavía esperan otros artículos de iD.
+ */
+export function OrdenesQueSalen({ ordenes, titulo }: { ordenes: OrdenQueSale[]; titulo?: string }) {
+  if (!ordenes.length) return null;
+  const salen = ordenes.filter((o) => o.puede), esperan = ordenes.filter((o) => !o.puede);
+  const fila = (o: OrdenQueSale) => (
+    <li key={o.orden} style={{ marginTop: 2 }}>
+      <strong>{o.orden}</strong>{o.pasa ? ' (se prepara desde Martínez)' : ''}: {o.llega.join(', ')}
+      {o.faltan.length ? <span style={{ color: AMARILLO }}> — falta de iD: {o.faltan.join(', ')}</span> : null}
+    </li>
+  );
+  return (
+    <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 6, borderLeft: `4px solid ${VIOLETA}`, background: 'rgba(167,139,250,0.08)', fontSize: '0.84rem', lineHeight: 1.5 }}>
+      <strong>{titulo ?? '📦 Órdenes de iD con lo que llegó'}</strong>
+      {salen.length > 0 && <div style={{ marginTop: 4 }}>
+        <span style={{ color: VERDE }}>✅ Ya pueden salir ({salen.length}):</span> separá esos artículos y dejalos apartados con la orden.
+        <ul style={{ margin: '2px 0 0', paddingLeft: 20 }}>{salen.map(fila)}</ul>
+      </div>}
+      {esperan.length > 0 && <div style={{ marginTop: 6 }}>
+        <span style={{ color: AMARILLO }}>⏳ Todavía no pueden salir ({esperan.length}):</span> esperan otros artículos de iD. Separá lo que llegó y guardalo hasta que llegue lo demás.
+        <ul style={{ margin: '2px 0 0', paddingLeft: 20 }}>{esperan.map(fila)}</ul>
+      </div>}
+      <div style={{ opacity: 0.65, marginTop: 4, fontSize: '0.78rem' }}>Lo que esas órdenes tengan en Martínez lo doy por disponible.</div>
     </div>
   );
 }

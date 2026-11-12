@@ -2,7 +2,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { accionesElegidas, ejecutarCargaFamily, leerPrecio, llegaAl50, precioAEscribir, resumenCarga, type CargaFamily, type DepsCarga } from '../cargaFamily';
 import {
-  ajusteDe, costoPromedio, estadoCargaFactura, firmaCargaId, formasCodigo, leerEstadoCargaId, leerPendientesId, planCargaId, precioYCostoAntes, separarDe, talleEnShopify,
+  ajusteDe, costoPromedio, estadoCargaFactura, firmaCargaId, formasCodigo, leerEstadoCargaId, leerPendientesId, leerVentasId, ordenesQueSalen, planCargaId, precioYCostoAntes, separarDe, talleEnShopify,
   type EstadoCargaId, type OrdenPendienteId, type ProductoId, type VarianteId,
 } from '../cargaId';
 import type { FilaChecklist, RenglonFactura, ResultadoFactura } from '../controlFacturas';
@@ -290,12 +290,12 @@ describe('iD: lo que llegó y ya está vendido en iD se separa (gax, 12-nov-2026
 
   it('separa de la venta más vieja a la más nueva, sin pasar lo que llegó; lo marcado «-1» ya cuenta como separado', () => {
     const ords = [orden('#2', 2, '2026-11-02'), orden('#1', 1, '2026-11-01')].sort((a, b) => a.fecha.localeCompare(b.fecha));
-    expect(separarDe(ords, 2, 0)).toEqual({ cantidad: 2, ordenes: [{ nombre: '#1', cantidad: 1 }, { nombre: '#2', cantidad: 1 }] });
-    expect(separarDe(ords, 5, 0)).toEqual({ cantidad: 3, ordenes: [{ nombre: '#1', cantidad: 1 }, { nombre: '#2', cantidad: 2 }] });
+    expect(separarDe(ords, 2, 0)).toEqual({ cantidad: 2, ordenes: [{ nombre: '#1', cantidad: 1 }, { nombre: '#2', cantidad: 1 }], retirados: [] });
+    expect(separarDe(ords, 5, 0)).toEqual({ cantidad: 3, ordenes: [{ nombre: '#1', cantidad: 1 }, { nombre: '#2', cantidad: 2 }], retirados: [] });
     // El depósito ya sacó 1 («-1») para la #1: de lo que queda se separan las 2 de la #2.
-    expect(separarDe(ords, 2, 1)).toEqual({ cantidad: 2, ordenes: [{ nombre: '#2', cantidad: 2 }] });
-    expect(separarDe(ords, 1, 2)).toEqual({ cantidad: 1, ordenes: [{ nombre: '#2', cantidad: 1 }] });
-    expect(separarDe([orden('#1', 1, '2026-11-01')], 2, 1)).toEqual({ cantidad: 0, ordenes: [] });
+    expect(separarDe(ords, 2, 1)).toEqual({ cantidad: 2, ordenes: [{ nombre: '#2', cantidad: 2 }], retirados: [{ nombre: '#1', cantidad: 1 }] });
+    expect(separarDe(ords, 1, 2)).toEqual({ cantidad: 1, ordenes: [{ nombre: '#2', cantidad: 1 }], retirados: [{ nombre: '#1', cantidad: 1 }, { nombre: '#2', cantidad: 1 }] });
+    expect(separarDe([orden('#1', 1, '2026-11-01')], 2, 1)).toEqual({ cantidad: 0, ordenes: [], retirados: [{ nombre: '#1', cantidad: 1 }] });
     // «solucionar» o sin pagar: no se descuentan.
     expect(separarDe([orden('#9', 1, '2026-11-01', { cuenta: false, motivo: 'etiqueta solucionar' })], 2, 0).cantidad).toBe(0);
   });
@@ -463,5 +463,63 @@ describe('iD: cargar y pasar la venta de iD a Martínez (gax, 12-nov-2026)', () 
     const [b] = await ejecutarCargaFamily(plan, {}, deps(falla));
     expect(b.estado).toBe('error');
     expect(falla.mock.calls.some(([q]) => q.includes('fulfillmentOrderMove('))).toBe(false);
+  });
+});
+
+describe('iD: qué órdenes ya pueden salir con lo que llegó (gax, 12-nov-2026)', () => {
+  const VS = 'gid://shopify/ProductVariant/S', VM = 'gid://shopify/ProductVariant/M';
+  const ord = (nombre: string, lineaId: string, extra: Partial<OrdenPendienteId> = {}): OrdenPendienteId =>
+    ({ nombre, fecha: '2026-11-01', cantidad: 1, cuenta: true, fo: { id: `F-${nombre}`, lineaId, abierta: true }, ...extra });
+
+  it('una orden que solo esperaba esto puede salir; otra que espera más artículos de iD, todavía no', () => {
+    const r = resultado([fila([{ talle: 'S', cantidad: 1 }, { talle: 'M', cantidad: 1 }])]);
+    const e: EstadoCargaId = {
+      ...estado(),
+      pendientesId: { [VS]: [ord('#210952', 'L1')], [VM]: [ord('#210837', 'L2')] },
+      ordenesId: {
+        '#210952': [{ lineaId: 'L1', titulo: 'Remera Mujer Converse Retro', talle: 'S', cantidad: 1 }],
+        '#210837': [
+          { lineaId: 'L2', titulo: 'Remera Converse Patch', talle: 'M', cantidad: 1 },
+          { lineaId: 'L3', titulo: 'Remera Le Coq Monochrome Negro', talle: 'S', cantidad: 1 },
+          { lineaId: 'L4', titulo: 'Remera Converse Nova', talle: 'S', cantidad: 2 },
+        ],
+      },
+    };
+    const separado = planCargaId(r, e, {});
+    expect(ordenesQueSalen(separado, {})).toEqual([
+      { orden: '#210952', puede: true, pasa: false, llega: ['Remera Mujer Converse Retro S'], faltan: [] },
+      { orden: '#210837', puede: false, pasa: false, llega: ['Remera Converse Patch M'], faltan: ['Remera Le Coq Monochrome Negro S', 'Remera Converse Nova S ×2'] },
+    ]);
+    // Pasando la venta a Martínez se avisa; destildado no cuenta (queda para otro día).
+    const pasa = planCargaId(r, e, {}, new Map([['CTO0325003', 'pasar' as const]]));
+    expect(ordenesQueSalen(pasa, {})[0]).toMatchObject({ orden: '#210952', puede: true, pasa: true, llega: ['Remera Mujer Converse Retro S (pasa a Martínez)'] });
+    expect(ordenesQueSalen(pasa, { CTO0325003: { clave: 'no' } })).toEqual([]);
+    // «Cargarlo igual»: ya se separó antes, no se dice nada de esas órdenes.
+    expect(ordenesQueSalen(planCargaId(r, e, {}, new Map([['CTO0325003', 'igual' as const]])), {})).toEqual([]);
+  });
+
+  it('lo marcado «-1» en el remito también cuenta para la orden', () => {
+    const r = resultado([fila([{ talle: 'S', cantidad: 1, retirado: 1 }])]);
+    const e: EstadoCargaId = { ...estado(), pendientesId: { [VS]: [ord('#1', 'L1')] }, ordenesId: { '#1': [{ lineaId: 'L1', titulo: 'Remera', talle: 'S', cantidad: 1 }] } };
+    expect(ordenesQueSalen(planCargaId(r, e, {}), {})).toEqual([{ orden: '#1', puede: true, pasa: false, llega: ['Remera S (ya salió con la marca «-1»)'], faltan: [] }]);
+  });
+
+  it('lee todo lo que esas órdenes esperan de iD, no solo lo que llega', async () => {
+    const gql = shopify({
+      'fulfillmentOrders(': () => ({ fulfillmentOrders: { pageInfo: sinPagina, nodes: [
+        { id: 'F1', status: 'OPEN', order: { name: '#210837', createdAt: '2026-10-30', cancelledAt: null, displayFinancialStatus: 'PAID', tags: [] }, lineItems: { pageInfo: sinPagina, nodes: [
+          { id: 'L1', remainingQuantity: 1, productTitle: 'Remera Converse Patch', variantTitle: 'S', variant: { id: VS } },
+          { id: 'L2', remainingQuantity: 1, productTitle: 'Remera Le Coq Monochrome', variantTitle: 'S', variant: { id: 'gid://otra' } },
+        ] } },
+        { id: 'F2', status: 'OPEN', order: { name: '#999', createdAt: '2026-10-30', cancelledAt: null, displayFinancialStatus: 'PAID', tags: [] }, lineItems: { pageInfo: sinPagina, nodes: [
+          { id: 'L9', remainingQuantity: 1, productTitle: 'Otra', variantTitle: 'M', variant: { id: 'gid://otra' } },
+        ] } },
+      ] } }),
+    });
+    const { porOrden } = await leerVentasId('gid://shopify/Location/1', new Set([VS]), gql);
+    expect(porOrden).toEqual({ '#210837': [
+      { lineaId: 'L1', titulo: 'Remera Converse Patch', talle: 'S', cantidad: 1 },
+      { lineaId: 'L2', titulo: 'Remera Le Coq Monochrome', talle: 'S', cantidad: 1 },
+    ] });
   });
 });
