@@ -23,7 +23,7 @@
 // 11-nov-2026, método de gax («cómo se controla una factura contra la nota de
 // pedido») y carga obligatoria de las TRES partes: factura, remito y nota de
 // pedido. Sin remito, o sin ninguna nota que cubra la factura, queda
-// «incompleta» (no se paga todavía). Renglones de otra nota y faltantes son
+// «incompleta». Renglones de otra nota y faltantes son
 // observaciones; facturado sin pedir y precio mayor al del pedido, reclamo.
 // El remito se compara con la factura (cantidades por código) y sus talles con
 // los del pedido.
@@ -200,7 +200,7 @@ export interface ResultadoFactura {
   totalSinPedirConImpuestos: number;
   totalDifPrecio: number;
   estado: 'ok' | 'revisar';
-  /** ✅ ok para pagar · ⚠️ con observaciones · ❌ reclamar. */
+  /** ✅ todo coincide · ⚠️ con observaciones · ❌ no coincide (reclamar). */
   semaforo: Semaforo;
   motivos: string[];
   checklist: FilaChecklist[];
@@ -462,7 +462,8 @@ export function conImpuestos(neto: number, f: Pick<Factura, 'percepcionCaba' | '
   return { neto: p(n), iva: p(iva), percepciones: p(perc), total: p(n + iva + perc) };
 }
 
-const normTalle = (s: string) => String(s ?? '').trim().toUpperCase().replace(',', '.').replace(/\s+/g, '');
+// «AR 43» de la nota de Distrinando es el 43 del remito.
+const normTalle = (s: string) => String(s ?? '').trim().toUpperCase().replace(',', '.').replace(/\s+/g, '').replace(/^AR(?=\d)/, '');
 function valoresTalle(s: string): number[] {
   if (!/^\d+(\.\d+)?$/.test(s)) return [];
   const n = Number(s);
@@ -475,6 +476,79 @@ export function mismoTalle(a: string, b: string): boolean {
   if (A === B) return true;
   const vb = valoresTalle(B);
   return valoresTalle(A).some((x) => vb.includes(x));
+}
+
+// ---------------------------------------------------------------------------
+// REMITO ESCRITO COMO LO IMPRIME EL PROVEEDOR (12-nov-2026, Distrinando 0085-00206200).
+// La hoja 2 del remito de Distrinando trae el código partido en dos columnas
+// (RBKLIP15 | RBKGY2120) y la factura lo une (RBKLIP15-RBKGY2120); los packs vienen
+// en packs (2) y la factura en pares (24); los talles de Reebok vienen en US (8, 8.5…)
+// y la nota en AR (AR 40, 41…), con el US al final del SKU (RBKLIP15-RBKGY2120-8.5).
+// Se llevan a lo de la factura y la nota sin adivinar:
+// - código: el mismo sin separadores, sin lo que va después de «---», o la parte del
+//   modelo o del color de UN solo código de la factura;
+// - packs: solo si el remito por el tamaño del pack da justo lo facturado;
+// - talles: si el talle del remito no está en la nota, el de la única línea de la nota
+//   cuyo SKU termina en ese talle (no se usan tablas: el SKU es del proveedor).
+// ---------------------------------------------------------------------------
+const plano = (s: string) => claveCodigo(s).replace(/[^A-Z0-9]/g, '');
+const sinCurva = (s: string) => claveCodigo(s).split('---')[0].replace(/-+$/, '');
+
+/** Código de la factura que corresponde a un código del remito ('' si no se sabe). */
+export function codigoEnFactura(cod: string, deFactura: string[]): string {
+  const k = claveCodigo(cod);
+  const unico = (xs: string[]) => (new Set(xs).size === 1 ? xs[0] : '');
+  const exacto = deFactura.find((c) => claveCodigo(c) === k);
+  if (exacto) return exacto;
+  const base = sinCurva(cod);
+  const r = unico(deFactura.filter((c) => sinCurva(c) === base || plano(sinCurva(c)) === plano(base)));
+  if (r) return r;
+  if (base.length < 5) return '';
+  // Solo el modelo o solo el color (de un código «MODELO-COLOR»).
+  return unico(deFactura.filter((c) => sinCurva(c).split('-').some((parte) => parte === base)));
+}
+
+/** El talle que trae el SKU del proveedor al final (RBKLIP15-RBKGY2120-8.5 → 8.5), '' si no trae. */
+function talleDelSku(l: LineaPedido): string {
+  const sku = normCodigo(l.sku), cod = normCodigo(l.codigo);
+  return sku.startsWith(`${cod}-`) ? sku.slice(cod.length + 1) : '';
+}
+
+/** El remito con los códigos de la factura, los packs en pares y los talles de la nota. */
+export function ajustarRemito(rem: Remito, f: Factura, pedidos: Pedido[]): Remito {
+  const deFactura = [...new Set(f.renglones.map((r) => r.codigo))];
+  const lineas = new Map<string, LineaPedido[]>();
+  for (const p of pedidos) for (const l of p.lineas) {
+    if (!(l.cantidad > 0)) continue;
+    const k = claveCodigo(l.codigo);
+    lineas.set(k, [...(lineas.get(k) ?? []), l]);
+  }
+  const renglones = rem.renglones.map((x) => {
+    const cod = codigoEnFactura(x.codigo, deFactura) || x.codigo;
+    let talles = x.talles;
+    // Talle del remito que no está en la nota: el de la línea cuyo SKU termina en ese talle (US en Reebok).
+    const deNota = (lineas.get(claveCodigo(cod)) ?? []).filter((l) => l.unidadesPorUdm <= 1);
+    talles = talles.map((t) => {
+      if (deNota.some((l) => mismoTalle(t.talle, l.talle))) return t;
+      const porSku = [...new Set(deNota.filter((l) => { const ts = talleDelSku(l); return !!ts && mismoTalle(t.talle, ts); }).map((l) => l.talle))];
+      return porSku.length === 1 ? { ...t, talle: porSku[0] } : t;
+    });
+    return { ...x, codigo: cod, talles };
+  });
+  // Packs: el remito cuenta packs y la factura pares.
+  for (const cod of new Set(renglones.map((x) => x.codigo))) {
+    const rs = renglones.filter((x) => x.codigo === cod);
+    if (rs.some((x) => x.talles.some((t) => t.cantidad > 0))) continue;
+    const facturado = f.renglones.filter((r) => r.codigo === cod).reduce((t, r) => t + r.cantidad, 0);
+    const llegaron = rs.reduce((t, x) => t + (Number(x.cantidad) || 0), 0);
+    const desc = f.renglones.find((r) => r.codigo === cod)?.descripcion ?? '';
+    const dePedido = Math.max(0, ...(lineas.get(claveCodigo(cod)) ?? []).map((l) => l.unidadesPorUdm || 0));
+    const pack = dePedido > 1 ? dePedido : Number(/\bpack\s*x\s*(\d{1,3})\b/i.exec(desc)?.[1] || /\bM(\d{1,2})U?\s+\d/.exec(desc)?.[1] || 0);
+    if (pack > 1 && llegaron > 0 && llegaron !== facturado && llegaron * pack === facturado) {
+      for (const x of rs) x.cantidad = (Number(x.cantidad) || 0) * pack;
+    }
+  }
+  return { ...rem, renglones };
 }
 
 /** El remito impreso y el de la factura son el mismo aunque uno lleve punto de venta y ceros. */
@@ -613,7 +687,7 @@ export function analizarFacturas(
     }
 
     // 3. Remito: cantidades por código contra la factura, y talles contra lo pedido.
-    const rem = remitos ? remitos[f.id] ?? null : null;
+    const rem = remitos && remitos[f.id] ? ajustarRemito(remitos[f.id]!, f, pedidos) : null;
     const difRemito: ResultadoFactura['difRemito'] = [];
     const tallesNoPedidos: ResultadoFactura['tallesNoPedidos'] = [];
     if (rem) {
@@ -659,6 +733,22 @@ export function analizarFacturas(
     let criticas = 0, medias = 0;
     if (faltaRemito) motivos.push('INCOMPLETA: falta subir la foto del remito.');
     if (faltaNota) motivos.push('INCOMPLETA: falta la nota de pedido. Ningún artículo de la factura está en las notas pendientes (las de las listas de pendientes de Trello o subidas a mano): subila o tildala a mano.');
+    // 1. Primer control (gax, 12-nov-2026): el remito tiene que traer lo mismo que la factura.
+    const faltanRemito = difRemito.filter((d) => d.remito < d.factura);
+    if (faltanRemito.length) {
+      criticas++;
+      motivos.push(`REMITO: facturaron más de lo que dice el remito: ${faltanRemito.map((d) => `${d.codigo} (factura ${d.factura}, remito ${d.remito})`).join(', ')}.`);
+    }
+    const sobranRemito = difRemito.filter((d) => d.remito > d.factura);
+    if (sobranRemito.length) {
+      medias++;
+      motivos.push(`REMITO: llegó más de lo facturado: ${sobranRemito.map((d) => `${d.codigo} (remito ${d.remito}, factura ${d.factura})`).join(', ')}.`);
+    }
+    if (rem && f.remito && rem.numero && !mismoNumero(rem.numero, f.remito)) {
+      medias++;
+      motivos.push(`REMITO: el remito cargado es el ${rem.numero} y la factura dice ${f.remito}: ¿es el remito correcto?`);
+    }
+    // 2. Después, la nota de pedido contra lo facturado y lo que llegó.
     const sinPedir = renglones.filter((r) => r.sinPedir > 0);
     if (sinPedir.length && !faltaNota) {
       criticas++;
@@ -687,20 +777,6 @@ export function analizarFacturas(
     if (difs.some((d) => d.diferencia === 0)) {
       medias++;
       motivos.push('PRECIO: hay artículos con otra lista y otra bonificación que dan el mismo neto: revisar.');
-    }
-    const faltanRemito = difRemito.filter((d) => d.remito < d.factura);
-    if (faltanRemito.length) {
-      criticas++;
-      motivos.push(`REMITO: facturaron más de lo que dice el remito: ${faltanRemito.map((d) => `${d.codigo} (factura ${d.factura}, remito ${d.remito})`).join(', ')}.`);
-    }
-    const sobranRemito = difRemito.filter((d) => d.remito > d.factura);
-    if (sobranRemito.length) {
-      medias++;
-      motivos.push(`REMITO: llegó más de lo facturado: ${sobranRemito.map((d) => `${d.codigo} (remito ${d.remito}, factura ${d.factura})`).join(', ')}.`);
-    }
-    if (rem && f.remito && rem.numero && !mismoNumero(rem.numero, f.remito)) {
-      medias++;
-      motivos.push(`REMITO: el remito cargado es el ${rem.numero} y la factura dice ${f.remito}: ¿es el remito correcto?`);
     }
     if (tallesNoPedidos.length) {
       medias++;
@@ -837,7 +913,7 @@ export function fmt(n: number): string {
 export function mensajePagos(r: ResultadoFactura, condicionesPago = '', nombrePedido: (id: string) => string = (id) => id): string {
   const f = r.factura;
   const ped = r.pedidosCubiertos.length ? `pedido ${r.pedidosCubiertos.map(nombrePedido).join(' + ')}` : 'sin pedido asociado';
-  const icono = { ok: '✅ OK', observaciones: '⚠️ CON OBSERVACIONES', reclamar: '❌ RECLAMAR, NO PAGAR', incompleta: '⏳ INCOMPLETA, NO PAGAR TODAVÍA' }[r.semaforo];
+  const icono = { ok: '✅ OK', observaciones: '⚠️ CON OBSERVACIONES', reclamar: '❌ NO COINCIDE, RECLAMAR', incompleta: '⏳ INCOMPLETA (FALTA EL REMITO O LA NOTA)' }[r.semaforo];
   const vence = f.vencimiento ? `vence ${fechaAr(f.vencimiento).slice(0, 5)}` : f.condicionVenta ? f.condicionVenta : 'sin vencimiento';
   const partes = [ped, `${r.unidades} pares`, `total ${fmt(f.total)}`, vence, r.pedidosCompletos ? 'completa' : 'parcial'];
   const lineas = [`Factura ${f.numero} ${icono}: ${partes.join(', ')}.`];
