@@ -17,14 +17,18 @@ const COLOR_ITEM = { listo: 'inherit', elegir: '#fbbf24', bloqueado: '#f87171', 
 const VERDE = '#34d399', AMARILLO = '#fbbf24', ROJO = '#f87171', VIOLETA = '#a78bfa';
 type Eleccion = EleccionesCarga[string];
 
-export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, explicacion, onCargarIgual }: {
+export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, explicacion, onCargarIgual, sinTildar }: {
   plan: PlanCarga; ocupado: boolean; onConfirmar: (e: EleccionesCarga) => void; onCancelar: () => void;
   sucursal: string; explicacion: string;
   /** iD: lo vendido en iD se separa; «cargarlo igual» lo suma (si ya se separó antes). */
   onCargarIgual?: (codigo: string, si: boolean) => void;
+  /** iD (12-nov-2026, gax: «yo los voy seleccionando, así los voy controlando»): empiezan destildados. */
+  sinTildar?: boolean;
 }) {
   const [elecciones, setElecciones] = useState<EleccionesCarga>(() =>
-    Object.fromEntries(plan.items.filter((it) => it.opciones.length).map((it) => [it.codigo, { clave: it.opciones[0].clave }])));
+    Object.fromEntries(plan.items.filter((it) => it.opciones.length).map((it) => [it.codigo, { clave: sinTildar && esCasilla(it) ? 'no' : it.opciones[0].clave }])));
+  const casillas = plan.items.filter(esCasilla);
+  const tildadas = casillas.filter((it) => (elecciones[it.codigo]?.clave ?? it.opciones[0].clave) !== 'no').length;
   const elegir = (codigo: string, cambio: Partial<Eleccion>) =>
     setElecciones((x) => ({ ...x, [codigo]: { ...(x[codigo] ?? { clave: 'no' }), ...cambio } }));
   const res = resumenCarga(plan, elecciones);
@@ -33,10 +37,14 @@ export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, e
       <strong>⬆️ Carga en Shopify ({sucursal}): revisá antes de confirmar</strong>
       <div style={{ fontSize: '0.8rem', opacity: 0.8, margin: '4px 0 8px' }}>{explicacion}</div>
       {plan.avisos.map((a, i) => <div key={i} style={{ color: AMARILLO, fontSize: '0.84rem' }}>⚠️ {a}</div>)}
-      {plan.items.some((it) => it.estado === 'listo') && <div style={{ fontSize: '0.8rem', opacity: 0.8, marginBottom: 4 }}>
-        ¿Algo no llegó todavía? Destildalo: queda pendiente y lo cargás otro día con el mismo botón.
-      </div>}
-      {plan.items.map((it) => <FilaCarga key={it.codigo} it={it} eleccion={elecciones[it.codigo]} onElegir={(c) => elegir(it.codigo, c)}
+      {casillas.length > 0 && (sinTildar
+        ? <div style={{ fontSize: '0.84rem', marginBottom: 4 }}>
+          ☑️ <strong>Tildá cada artículo a medida que lo controlás:</strong> solo se carga lo tildado ({tildadas} de {casillas.length}). Lo que no tildes queda pendiente y lo cargás otro día con el mismo botón.
+        </div>
+        : <div style={{ fontSize: '0.8rem', opacity: 0.8, marginBottom: 4 }}>
+          ¿Algo no llegó todavía? Destildalo: queda pendiente y lo cargás otro día con el mismo botón.
+        </div>)}
+      {plan.items.map((it) => <FilaCarga key={it.codigo} it={it} eleccion={elecciones[it.codigo]} onElegir={(c) => elegir(it.codigo, c)} sinTildar={sinTildar}
         onCargarIgual={onCargarIgual && ((si) => onCargarIgual(it.codigo, si))} ocupado={ocupado} />)}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
         <button style={{ ...botonPrincipal, opacity: res.lineas.length && !ocupado ? 1 : 0.5, cursor: res.lineas.length && !ocupado ? 'pointer' : 'not-allowed' }}
@@ -50,23 +58,27 @@ export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, e
   );
 }
 
-function FilaCarga({ it, eleccion, onElegir, onCargarIgual, ocupado }: {
-  it: ItemCarga; eleccion?: Eleccion; onElegir: (c: Partial<Eleccion>) => void; onCargarIgual?: (si: boolean) => void; ocupado: boolean;
+/** Con una sola cosa para hacer, una casilla deja dejarlo para otro día (lo que no llegó todavía). */
+const esCasilla = (it: ItemCarga) => it.estado === 'listo' && it.opciones.length === 1;
+
+function FilaCarga({ it, eleccion, onElegir, onCargarIgual, ocupado, sinTildar }: {
+  it: ItemCarga; eleccion?: Eleccion; onElegir: (c: Partial<Eleccion>) => void; onCargarIgual?: (si: boolean) => void; ocupado: boolean; sinTildar?: boolean;
 }) {
   const op = it.opciones.find((o) => o.clave === (eleccion?.clave ?? it.opciones[0]?.clave));
   const a = op?.accion;
-  // Con una sola cosa para hacer, una casilla deja dejarlo para otro día (lo que no llegó todavía).
-  const casilla = it.estado === 'listo' && it.opciones.length === 1;
+  const casilla = esCasilla(it);
   const fuera = casilla && !a;
   return (
     <div style={{ borderTop: '2px solid rgba(255,255,255,0.2)', padding: '14px 0 12px', fontSize: '0.84rem', lineHeight: 1.55 }}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        {casilla && <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', cursor: 'pointer' }} title="Destildalo si todavía no llegó: queda pendiente">
+        {casilla && <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', cursor: 'pointer' }} title={sinTildar ? 'Tildalo cuando lo controlaste: solo se carga lo tildado' : 'Destildalo si todavía no llegó: queda pendiente'}>
           <input type="checkbox" checked={!fuera} onChange={(ev) => onElegir({ clave: ev.target.checked ? it.opciones[0].clave : 'no' })} />
         </label>}
         <strong style={{ color: COLOR_ITEM[it.estado], opacity: fuera ? 0.55 : 1 }}>{it.codigo}</strong>
         <span style={{ opacity: fuera ? 0.5 : 0.8 }}>{it.descripcion} · {it.unidades} u.</span>
-        {fuera && <span style={{ fontSize: '0.8rem', color: AMARILLO }}>queda pendiente: no se carga ahora</span>}
+        {fuera && (sinTildar
+          ? <span style={{ fontSize: '0.8rem', opacity: 0.6 }}>sin tildar: no se carga</span>
+          : <span style={{ fontSize: '0.8rem', color: AMARILLO }}>queda pendiente: no se carga ahora</span>)}
         {it.opciones.length > 1 && <select value={eleccion?.clave ?? it.opciones[0].clave} onChange={(ev) => onElegir({ clave: ev.target.value })} style={{ ...inputSt, maxWidth: '100%' }}>
           {it.opciones.map((o) => <option key={o.clave} value={o.clave} disabled={!!o.bloqueo}>{o.etiqueta}{o.bloqueo ? ' (no se puede)' : ''}</option>)}
         </select>}
