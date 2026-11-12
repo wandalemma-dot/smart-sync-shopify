@@ -2,7 +2,9 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import * as XLSX from 'xlsx';
 import { unzipSync, zipSync } from 'fflate';
-import { bajarAdjunto, fechaCreacion, listarTarjetas, MAX_ADJUNTO } from './trello.js';
+import { bajarAdjunto, esVerde, fechaCreacion, listarTarjetas, MAX_ADJUNTO, verdesDe } from './trello.js';
+import { esVerde as esVerdeApp } from '../src/utils/planillaVerde.ts';
+import { NOTA_1522, VERDES_1522, planillaFalsa } from '../src/utils/__tests__/planillaFalsa.ts';
 import { leerPedidoAuto } from '../src/utils/lectoresFacturas.ts';
 import handler from '../api/trello.js';
 import { makeSession, COOKIE } from './access.js';
@@ -75,6 +77,30 @@ describe('Trello (solo lectura)', () => {
     expect(Buffer.from(ok.datos, 'base64').toString()).toBe('XLSX');
     await expect(bajarAdjunto(CARD, ATT, falso({ ...base, [`/cards/${CARD}?`]: { idBoard: OTRA } }))).rejects.toThrow(/no es del tablero/);
     await expect(bajarAdjunto('../x', ATT, falso(base))).rejects.toThrow(/inválido/);
+  });
+
+  it('lo pintado en verde se lee del original, también si la planilla pesa más de 3 MB (12-nov-2026)', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    for (const pesada of [false, true]) {
+      const zip = unzipSync(planillaFalsa(NOTA_1522, { verdes: VERDES_1522 }));
+      if (pesada) zip['xl/media/image2.png'] = new Uint8Array(randomBytes(MAX_ADJUNTO + 100_000));
+      const datos = Buffer.from(zipSync(zip, { level: 0 }));
+      const fetchImpl = vi.fn(async (url) => {
+        const ruta = url.replace('https://api.trello.com/1', '');
+        const json = ruta.startsWith('/boards/') ? { id: BOARD_ID }
+          : ruta.startsWith(`/cards/${CARD}/attachments/${ATT}?`) ? { id: ATT, name: 'INDU-19-10.xlsx', bytes: datos.length, isUpload: true, date: '2026-10-23T12:51:00.000Z' }
+            : { idBoard: BOARD_ID };
+        return { ok: true, status: 200, json: async () => json, arrayBuffer: async () => datos.buffer.slice(datos.byteOffset, datos.byteOffset + datos.length) };
+      });
+      const r = await bajarAdjunto(CARD, ATT, fetchImpl);
+      expect(r.verdes.sort()).toEqual([...VERDES_1522].sort());
+      expect(r.origen).toEqual({ r: 0, c: 0 });
+      expect(r.fecha).toBe('2026-10-23');
+      expect(r.completo).toBe(!pesada);
+    }
+    expect(verdesDe(Buffer.from('no es un excel'))).toEqual({ verdes: [], origen: { r: 0, c: 0 } });
+    // El mismo criterio de verde que la app.
+    for (const v of ['92D050', 'FF00B050', 'E2EFDA', 'FFFF00', 'FFFFFF', 'D3D3D3', '']) expect(esVerde(v)).toBe(esVerdeApp(v));
   });
 
   it('un Excel de iD con fotos de más de 3 MB se baja sin las fotos y se lee igual (11-nov-2026)', async () => {

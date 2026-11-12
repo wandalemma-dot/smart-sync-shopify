@@ -27,6 +27,13 @@
 // observaciones; facturado sin pedir y precio mayor al del pedido, reclamo.
 // El remito se compara con la factura (cantidades por código) y sus talles con
 // los del pedido.
+//
+// 12-nov-2026, gax: «lo que está en verde ya entró». En la planilla de la nota
+// (Trello) el depósito pinta en verde lo que llegó. Esas unidades no están
+// disponibles para una factura posterior al día en que se vio el verde: así la
+// factura nueva va a la nota que todavía tiene el artículo pendiente. El verde
+// pintado desde la fecha de la factura puede ser de esa misma factura (la
+// planilla que devuelve la app): no se descuenta dos veces (consumido()).
 // ============================================================================
 
 export const IVA = 0.21;
@@ -48,7 +55,20 @@ export interface LineaPedido {
   precioLista: number;      // Mayorista, por UDM
   descuento: number;        // %, ej. 40
   cantidad: number;         // pedida, en UDM
+  /** Celda de la cantidad en la planilla (A1), para devolverla marcada en verde. */
+  celda?: string;
+  /** Celda «Total» de la fila (iD), se pinta cuando llegó la fila entera. */
+  celdaTotal?: string;
+  /**
+   * Unidades marcadas en VERDE en la planilla de Trello: ya entraron (12-nov-2026, gax).
+   * entregadoDesde = fecha de la primera copia de la planilla donde se vio en verde.
+   */
+  entregado?: number;
+  entregadoDesde?: string;
 }
+
+/** Una copia de la planilla en Trello (la original o la que se subió marcada). */
+export interface CopiaPlanilla { tarjeta: string; adjunto: string; fecha: string; nombre?: string }
 
 export interface Pedido {
   id: string;
@@ -62,6 +82,10 @@ export interface Pedido {
    * NUNCA_PENDIENTE = nunca estuvo en esas listas. Sin el campo, la nota está pendiente.
    */
   cerradaDesde?: string;
+  /** Copias de la planilla en Trello (la original y las que se subieron marcadas), la más nueva al final. */
+  copias?: CopiaPlanilla[];
+  /** Versión del lector con que se leyó (5 = ya lee el verde). */
+  lector?: number;
 }
 /** cerradaDesde de una nota cuya tarjeta nunca estuvo en las listas de pedidos pendientes. */
 export const NUNCA_PENDIENTE = '0000-00-00';
@@ -226,6 +250,8 @@ export interface FilaChecklist {
 export interface ResultadoGeneral {
   facturas: ResultadoFactura[];
   pendientes: PendienteTalle[];
+  /** Por nota: unidades ya entregadas (facturadas o marcadas en verde en la planilla). */
+  consumidoPorPedido?: Record<string, number>;
   estado: 'ok' | 'revisar';
 }
 
@@ -261,9 +287,47 @@ interface LineaCodigo {
   cantidad: number;
   precioLista: number;
   descuento: number;
-  porTalle: { talle: string; cantidad: number }[];
+  porTalle: { talle: string; cantidad: number; entregado: number }[];
   facturado: number;
+  /** Lo marcado en verde en la planilla, por fecha de la copia donde apareció. */
+  verdes: { fecha: string; unidades: number }[];
+  /** Lo que tomaron las facturas ya controladas, por fecha de factura. */
+  facturas: { fecha: string; unidades: number }[];
 }
+
+/** Fecha «después de todo»: para el saldo final, todo lo marcado en verde ya entró. */
+const FIN = '9999-12-31';
+
+/**
+ * Unidades de la nota que ya no están disponibles para una factura de esta fecha (12-nov-2026, gax:
+ * «lo que está en verde ya entró»). Cuentan las facturas ya controladas y, además, lo marcado en
+ * verde ANTES de esa fecha que ninguna de esas facturas explica (lo que llegó antes de usar la app,
+ * o con una factura que no se cargó). Lo pintado en verde desde la fecha de la factura puede ser
+ * de esa misma factura (la planilla marcada que devuelve la app): no se descuenta dos veces.
+ */
+function consumido(g: LineaCodigo, fecha: string): number {
+  const f = fecha || FIN;
+  const previas = g.facturas.reduce((s, x) => s + x.unidades, 0);
+  const viejas = g.verdes.filter((v) => v.fecha < f).sort((a, b) => a.fecha.localeCompare(b.fecha));
+  if (!viejas.length) return Math.min(g.cantidad, previas);
+  // Cada factura puede explicar verde pintado desde su fecha en adelante.
+  const pool = [...g.facturas].sort((a, b) => a.fecha.localeCompare(b.fecha)).map((x) => ({ ...x }));
+  let sinExplicar = 0;
+  for (const v of viejas) {
+    let resta = v.unidades;
+    for (const x of pool) {
+      if (resta <= 0) break;
+      if (x.fecha > v.fecha || x.unidades <= 0) continue;
+      const t = Math.min(resta, x.unidades);
+      x.unidades -= t;
+      resta -= t;
+    }
+    sinExplicar += resta;
+  }
+  return Math.min(g.cantidad, previas + sinExplicar);
+}
+/** Unidades de la nota que todavía puede tomar una factura de esta fecha. */
+const libreDe = (g: LineaCodigo, fecha: string) => Math.max(0, g.cantidad - consumido(g, fecha));
 
 function ordenarPorFecha<T extends { fecha: string }>(xs: T[]): T[] {
   return xs.map((x, i) => ({ x, i }))
@@ -281,11 +345,17 @@ function porCodigo(pedidos: Pedido[]): Map<string, LineaCodigo[]> {
       const cod = normCodigo(l.codigo);
       let g = propio.get(cod);
       if (!g) {
-        g = { pedido, codigo: cod, descripcion: l.descripcion, cantidad: 0, precioLista: l.precioLista, descuento: l.descuento, porTalle: [], facturado: 0 };
+        g = { pedido, codigo: cod, descripcion: l.descripcion, cantidad: 0, precioLista: l.precioLista, descuento: l.descuento, porTalle: [], facturado: 0, verdes: [], facturas: [] };
         propio.set(cod, g);
       }
       g.cantidad += l.cantidad;
-      g.porTalle.push({ talle: l.talle, cantidad: l.cantidad });
+      const entregado = Math.min(l.cantidad, Math.max(0, Number(l.entregado) || 0));
+      g.porTalle.push({ talle: l.talle, cantidad: l.cantidad, entregado });
+      if (entregado > 0) {
+        const fecha = l.entregadoDesde || pedido.fecha || '';
+        const v = g.verdes.find((x) => x.fecha === fecha);
+        if (v) v.unidades += entregado; else g.verdes.push({ fecha, unidades: entregado });
+      }
     }
     for (const [cod, g] of propio) {
       if (!mapa.has(cod)) mapa.set(cod, []);
@@ -322,7 +392,7 @@ function elegirNotas(f: Factura, mapa: Map<string, LineaCodigo[]>, manual: strin
   const mismoPrecio = new Map<string, number>(); // nota → artículos con la lista y bonificación de la factura
   for (const cod of falta.keys()) {
     for (const g of mapa.get(cod) ?? []) {
-      const libre = g.cantidad - g.facturado;
+      const libre = libreDe(g, f.fecha);
       if (libre <= 0 || !(manual.includes(g.pedido.id) || notaDisponible(g.pedido, f.fecha))) continue;
       if (!saldo.has(g.pedido.id)) saldo.set(g.pedido.id, new Map());
       const m = saldo.get(g.pedido.id)!;
@@ -478,10 +548,11 @@ export function analizarFacturas(
       const yaAdelantado = adelantados.has(cod);
       for (const g of grupos) {
         if (resto <= 0) break;
-        const libre = g.cantidad - g.facturado;
+        const libre = libreDe(g, f.fecha);
         if (libre <= 0) continue;
         const toma = Math.min(libre, resto);
         g.facturado += toma;
+        g.facturas.push({ fecha: f.fecha || '', unidades: toma });
         resto -= toma;
         usados.push(g);
         const elegido = manual.includes(g.pedido.id);
@@ -536,7 +607,7 @@ export function analizarFacturas(
     const faltantes: { codigo: string; pedido: number; facturado: number; faltan: number }[] = [];
     for (const [cod, gs] of tocadosCodigo) {
       const pedido = [...gs].reduce((s, g) => s + g.cantidad, 0);
-      const faltan = [...gs].reduce((s, g) => s + Math.max(0, g.cantidad - g.facturado), 0);
+      const faltan = [...gs].reduce((s, g) => s + libreDe(g, f.fecha), 0);
       for (const r of renglones) if (r.codigo === cod) r.faltante = faltan;
       if (faltan > 0) faltantes.push({ codigo: cod, pedido, facturado: pedido - faltan, faltan });
     }
@@ -658,8 +729,8 @@ export function analizarFacturas(
     const pedidosCubiertos = [...new Set(renglones.flatMap((r) => r.asignaciones.map((a) => a.pedidoId)))];
     const propios = new Set([...tocados].map((g) => g.pedido.id));
     const pendientePedidos = [...mapa.values()].flat()
-      .filter((g) => propios.has(g.pedido.id) && g.cantidad > g.facturado)
-      .map((g) => ({ pedidoId: g.pedido.id, codigo: g.codigo, descripcion: g.descripcion, pendiente: g.cantidad - g.facturado }));
+      .filter((g) => propios.has(g.pedido.id) && libreDe(g, f.fecha) > 0)
+      .map((g) => ({ pedidoId: g.pedido.id, codigo: g.codigo, descripcion: g.descripcion, pendiente: libreDe(g, f.fecha) }));
     const reclamo = conImpuestos(p(c(difMas) + c(totalSinPedirNeto)), f);
     const incompleta = faltaRemito || faltaNota;
     resultados.push({
@@ -677,7 +748,7 @@ export function analizarFacturas(
       checklist: [],
       unidades: renglones.reduce((s, r) => s + r.cantidad, 0),
       pedidosCompletos: pedidosCubiertos.length > 0 && pedidosCubiertos.every((id) =>
-        [...mapa.values()].every((gs) => gs.every((g) => g.pedido.id !== id || g.facturado >= g.cantidad))),
+        [...mapa.values()].every((gs) => gs.every((g) => g.pedido.id !== id || libreDe(g, f.fecha) <= 0))),
       faltaRemito,
       faltaNota,
       codigosSinNota,
@@ -690,12 +761,20 @@ export function analizarFacturas(
   }
 
   // Pendientes por pedido y talle, con el estado final de todas las facturas.
+  // Lo marcado en verde en la planilla cuenta como entregado (el talle se sabe por la celda).
   const pendientes: PendienteTalle[] = [];
+  const consumidoPorPedido: Record<string, number> = {};
   for (const grupos of mapa.values()) {
     for (const g of grupos) {
-      const lleno = g.facturado >= g.cantidad;
+      const usado = consumido(g, FIN);
+      consumidoPorPedido[g.pedido.id] = (consumidoPorPedido[g.pedido.id] ?? 0) + usado;
+      const lleno = usado >= g.cantidad;
+      const verde = g.porTalle.reduce((s, t) => s + t.entregado, 0);
       for (const t of g.porTalle) {
-        const facturado = g.facturado === 0 ? 0 : lleno ? t.cantidad : null;
+        const facturado = lleno ? t.cantidad
+          : t.entregado >= t.cantidad ? t.cantidad
+          : usado <= verde ? t.entregado // solo lo pintado en verde: se sabe qué talle
+          : null;
         pendientes.push({
           pedidoId: g.pedido.id, codigo: g.codigo, descripcion: g.descripcion, talle: t.talle, pedido: t.cantidad,
           facturado, pendiente: facturado === null ? null : t.cantidad - facturado,
@@ -706,7 +785,7 @@ export function analizarFacturas(
 
   // Checklist de depósito: los talles del remito; sin remito, los del pedido solo si la factura completa el código.
   const tallesDe = (pedidoId: string, codigo: string) =>
-    (mapa.get(codigo) ?? []).find((g) => g.pedido.id === pedidoId)?.porTalle ?? [];
+    ((mapa.get(codigo) ?? []).find((g) => g.pedido.id === pedidoId)?.porTalle ?? []).map((t) => ({ talle: t.talle, cantidad: t.cantidad }));
   for (const res of resultados) {
     const delRemito = new Map<string, TalleCantidad[]>();
     for (const x of res.remito?.renglones ?? []) {
@@ -720,7 +799,12 @@ export function analizarFacturas(
       }
       const partes = r.asignaciones.map((a) => {
         const g = (mapa.get(r.codigo) ?? []).find((x) => x.pedido.id === a.pedidoId);
-        return g && a.cantidad === g.cantidad ? tallesDe(a.pedidoId, r.codigo) : null;
+        if (!g) return null;
+        if (a.cantidad === g.cantidad) return tallesDe(a.pedidoId, r.codigo);
+        // Facturaron justo lo que no estaba en verde: son esos talles.
+        const sinVerde = g.porTalle.filter((t) => t.entregado < t.cantidad).map((t) => ({ talle: t.talle, cantidad: t.cantidad - t.entregado }));
+        const nVerde = g.porTalle.reduce((s, t) => s + t.entregado, 0);
+        return nVerde > 0 && g.facturado === a.cantidad && a.cantidad === sinVerde.reduce((s, t) => s + t.cantidad, 0) ? sinVerde : null;
       });
       const deducibles = r.sinPedir === 0 && partes.length > 0 && partes.every((x) => x !== null);
       return {
@@ -733,7 +817,7 @@ export function analizarFacturas(
     });
   }
 
-  return { facturas: resultados, pendientes, estado: resultados.some((r) => r.estado === 'revisar') ? 'revisar' : 'ok' };
+  return { facturas: resultados, pendientes, consumidoPorPedido, estado: resultados.some((r) => r.estado === 'revisar') ? 'revisar' : 'ok' };
 }
 
 function sumarTalles(xs: { talle: string; cantidad: number }[]) {
@@ -776,7 +860,8 @@ export function resumenPedidos(pedidos: Pedido[], res: ResultadoGeneral): Resume
   for (const f of res.facturas) for (const r of f.renglones) for (const a of r.asignaciones) fact.set(a.pedidoId, (fact.get(a.pedidoId) ?? 0) + a.cantidad);
   return pedidos.map((p) => {
     const pedido = p.lineas.reduce((s, l) => s + (l.cantidad > 0 ? l.cantidad : 0), 0);
-    const facturado = fact.get(p.id) ?? 0;
+    // Con lo marcado en verde: lo que ya entró aunque no tenga factura cargada.
+    const facturado = Math.max(fact.get(p.id) ?? 0, res.consumidoPorPedido?.[p.id] ?? 0);
     return {
       pedidoId: p.id, pedido, facturado, pendiente: Math.max(0, pedido - facturado),
       estado: facturado <= 0 ? 'sin facturar' : facturado >= pedido ? 'completo' : 'parcial',

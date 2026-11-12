@@ -417,3 +417,25 @@ describe('listas de pedidos pendientes en Trello (11-nov-2026)', () => {
     await expect(aplicar(fn, { accion: 'guardarListasTrello', listas: ['PEDIDOS'] })).rejects.toThrow(/inválida/);
   });
 });
+
+describe('nota con lo marcado en verde y sus copias en Trello (12-nov-2026)', () => {
+  it('guarda la celda, lo entregado y las copias; descarta lo inválido', async () => {
+    const { limpiarPedido } = await import('./control-facturas.js');
+    const T = 'c'.repeat(24), A = 'd'.repeat(24);
+    const p = limpiarPedido({
+      id: 'T-' + A, nombre: 'n', fecha: '2026-10-19', lector: 5,
+      copias: [{ tarjeta: T, adjunto: A, fecha: '2026-10-23', nombre: 'INDU-19-10.xlsx' }],
+      lineas: [
+        { sku: 'A-40', codigo: 'A', talle: '40', cantidad: 2, celda: 'H4', celdaTotal: 'S4', entregado: 2, entregadoDesde: '2026-10-23' },
+        { sku: 'A-41', codigo: 'A', talle: '41', cantidad: 1, celda: 'H4; DROP', entregado: 0 },
+      ],
+    });
+    expect(p.lineas[0]).toMatchObject({ celda: 'H4', celdaTotal: 'S4', entregado: 2, entregadoDesde: '2026-10-23' });
+    expect(p.lineas[1].celda).toBeUndefined();
+    expect(p.lineas[1].entregado).toBeUndefined();
+    expect(p.lector).toBe(5);
+    expect(p.copias).toEqual([{ tarjeta: T, adjunto: A, fecha: '2026-10-23', nombre: 'INDU-19-10.xlsx' }]);
+    expect(() => limpiarPedido({ id: 'x', lineas: [], copias: [{ tarjeta: '../x', adjunto: A }] })).toThrow(/Copia/);
+    expect(() => limpiarPedido({ id: 'x', lineas: [{ sku: 'a', entregado: 1, entregadoDesde: 'ayer' }] })).toThrow(/Fecha/);
+  });
+});

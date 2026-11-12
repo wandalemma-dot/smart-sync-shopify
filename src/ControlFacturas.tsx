@@ -15,9 +15,11 @@ import * as XLSX from 'xlsx';
 import Asistente from './Asistente';
 import {
   analizarFacturas, claveCodigo, notaDisponible, claveRecepcion, huellaPedido, compararRecepcion, fmt, mensajePagos, reporteReclamo, resumenPedidos,
-  type ControlRenglon, type Factura, type Pedido, type Recepcion, type Remito, type ResultadoFactura,
+  type ControlRenglon, type CopiaPlanilla, type Factura, type Pedido, type Recepcion, type Remito, type ResultadoFactura, type ResultadoGeneral,
 } from './utils/controlFacturas';
-import { leerFacturaDistrinando, leerFacturaId, leerPedidoAuto, leerTextoRemito, textoRemito, type ItemPdf } from './utils/lectoresFacturas';
+import { leerFacturaDistrinando, leerFacturaId, leerPedidoAuto, leerTextoRemito, textoRemito, type HojaMarcada, type ItemPdf } from './utils/lectoresFacturas';
+import { celdasVerdes, hojaVisible, marcarPlanilla } from './utils/planillaVerde';
+import { fusionarPlanilla, marcasDeNota, type MarcasNota } from './utils/marcasPlanilla';
 import { conEstadoTrello, estadosTarjetas, listasDePendientes, tarjetaDeNota, type EstadoTarjeta, type ListaTrello } from './utils/listasTrello';
 import ControlFamily from './ControlFamily';
 import RegistroCargas from './RegistroCargas';
@@ -45,7 +47,9 @@ interface Datos {
   listasTrello: string[];
 }
 /** Versión del lector de Excel de Trello. Subirla cuando cambie: los descartados se revisan de nuevo. */
-const LECTOR_TRELLO = 4; // 4: 12-nov-2026, una copia en una tarjeta de pendientes de una nota cargada desde otra lista
+const LECTOR_TRELLO = 5; // 4: 12-nov-2026, una copia en una tarjeta de pendientes de una nota cargada desde otra lista; 5: lee el verde
+/** Versión con que se leyó una nota: desde la 5 guarda las celdas y lo pintado en verde. */
+const LECTOR_PLANILLA = 5;
 const VACIO: Datos = { pedidos: [], facturas: [], asignaciones: {}, recepciones: {}, remitos: {}, config: {}, trelloVistos: {}, tarjetasTrello: {}, listasTrello: [] };
 const PROVS: { id: Prov; nombre: string }[] = [
   { id: 'id', nombre: 'iD (Converse, Le Coq)' },
@@ -53,7 +57,7 @@ const PROVS: { id: Prov; nombre: string }[] = [
   { id: 'family', nombre: 'Family (sin factura)' },
 ];
 type Vista = 'entregas' | 'pedidos' | 'deposito' | 'reportes';
-interface AdjuntoTrello { id: string; nombre: string }
+interface AdjuntoTrello { id: string; nombre: string; fecha?: string }
 interface TarjetaTrello { id: string; nombre: string; enlace: string; lista: string; idLista?: string; creada: string; inicio: string; adjuntos: AdjuntoTrello[]; otrosAdjuntos?: string[] }
 type EstadoTrello = 'cargada' | 'ya estaba' | 'borrada' | 'otra' | 'ilegible' | 'no es excel' | 'falla';
 /** Qué pasó con cada Excel de Trello en la última búsqueda (se muestra en la entrega). */
@@ -88,14 +92,34 @@ const enlaceTrello = (p?: PedidoGuardado) => {
   return m ? (p!.enlace || `https://trello.com/c/${m[1]}`) : '';
 };
 
-async function bajarAdjunto(tarjeta: string, adjunto: string): Promise<ArrayBuffer> {
+/** Excel bajado de Trello: los datos y lo pintado en verde (leído del archivo original en el servidor). */
+interface Bajado { buf: ArrayBuffer; nombre: string; fecha: string; completo: boolean; verdes: Set<string>; origen: { r: number; c: number } }
+
+async function bajarAdjunto(tarjeta: string, adjunto: string): Promise<Bajado> {
   const r = await fetch(`/api/trello?accion=adjunto&tarjeta=${tarjeta}&adjunto=${adjunto}`, { cache: 'no-store' });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(d.error || `Error ${r.status}`), { status: r.status });
   const bin = atob(d.datos);
   const buf = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
-  return buf.buffer;
+  return {
+    buf: buf.buffer, nombre: String(d.nombre || ''), fecha: String(d.fecha || ''), completo: d.completo !== false,
+    verdes: new Set(Array.isArray(d.verdes) ? d.verdes.map(String) : []),
+    origen: d.origen && Number.isInteger(d.origen.r) && Number.isInteger(d.origen.c) ? d.origen : { r: 0, c: 0 },
+  };
+}
+
+/** Lee la hoja visible de un Excel: filas (como las lee la app) y lo pintado en verde. */
+function leerHoja(buf: ArrayBuffer, fecha: string, deTrello?: Pick<Bajado, 'verdes' | 'origen' | 'completo'>): { filas: unknown[][]; hoja: HojaMarcada } {
+  const wb = XLSX.read(buf, { cellStyles: !deTrello || deTrello.completo });
+  const nombre = hojaVisible(wb);
+  const ws = wb.Sheets[nombre];
+  const filas = XLSX.utils.sheet_to_json<unknown[]>(ws, { header: 1, raw: true });
+  const ini = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']).s : { r: 0, c: 0 };
+  // De Trello, los verdes vienen del original (la copia liviana de un Excel grande no trae colores).
+  const verdes = deTrello && !deTrello.completo ? deTrello.verdes : celdasVerdes(ws);
+  const origen = deTrello && !deTrello.completo ? deTrello.origen : { r: ini.r, c: ini.c };
+  return { filas, hoja: { verdes, origen, fecha } };
 }
 
 const SEMAFORO = {
@@ -238,13 +262,12 @@ export default function ControlFacturas() {
   }
 
   /** Lee un Excel de pedido. Devuelve el pedido listo para guardar, o por qué no se carga. */
-  function prepararPedido(buf: ArrayBuffer, archivo: string, fecha: string, extra: { id?: string; nombre?: string; origen: string; enlace?: string },
+  function prepararPedido(buf: ArrayBuffer, archivo: string, fecha: string, extra: { id?: string; nombre?: string; origen: string; enlace?: string; copia?: CopiaPlanilla; bajado?: Bajado },
     existentes: PedidoGuardado[]): { pedido?: PedidoGuardado; mensajes: string[]; descartado?: string; repetidoId?: string; leido?: { lineas: PedidoGuardado['lineas']; nroProveedor?: string } } {
-    const wb = XLSX.read(buf);
-    const hoja = wb.SheetNames.find((_, i) => !wb.Workbook?.Sheets?.[i]?.Hidden) || wb.SheetNames[0];
-    const filas = XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[hoja], { header: 1, raw: true });
+    // Lo pintado en verde ya entró: la fecha es la de la copia (en Trello) o la de hoy (subida a mano).
+    const { filas, hoja } = leerHoja(buf, extra.copia?.fecha || hoyAr(), extra.bajado);
     const nombre = extra.nombre || archivo.replace(/\.[^.]+$/, '');
-    const r = leerPedidoAuto(filas, '', nombre, fecha);
+    const r = leerPedidoAuto(filas, '', nombre, fecha, hoja);
     if (r.proveedor !== prov) {
       const otro = r.proveedor === 'id' ? 'iD' : 'Distrinando';
       return { mensajes: [`${archivo}: parece de ${otro}; cambiá el proveedor arriba.`], descartado: `es un pedido de ${otro}` };
@@ -261,8 +284,9 @@ export default function ControlFacturas() {
       return { mensajes: [`${archivo}: esta nota ya estaba cargada como «${cual}».`], descartado: `repite el pedido ${cual}`, repetidoId: repetido.id,
         leido: { lineas: r.pedido.lineas, nroProveedor: r.nroProveedor } };
     }
-    const pedido = { ...r.pedido, id, nroProveedor: r.nroProveedor, origen: extra.origen, enlace: extra.enlace || '' };
-    return { pedido, mensajes: [`${archivo}: ${r.pedido.lineas.reduce((s, l) => s + l.cantidad, 0)} unidades guardadas con fecha ${fechaAr(fechaNota)}${r.fechaArchivo ? ' (la del archivo)' : ''}.`, ...r.avisos] };
+    const pedido = { ...r.pedido, id, nroProveedor: r.nroProveedor, origen: extra.origen, enlace: extra.enlace || '', lector: LECTOR_PLANILLA, ...(extra.copia ? { copias: [extra.copia] } : {}) };
+    const verdes = r.pedido.lineas.reduce((s, l) => s + (l.entregado ?? 0), 0);
+    return { pedido, mensajes: [`${archivo}: ${r.pedido.lineas.reduce((s, l) => s + l.cantidad, 0)} unidades guardadas con fecha ${fechaAr(fechaNota)}${r.fechaArchivo ? ' (la del archivo)' : ''}${verdes ? `; ${verdes} en verde (ya entraron)` : ''}.`, ...r.avisos] };
   }
 
   /** Sube notas de pedido. Si vienen desde una factura, quedan asignadas a esa factura. */
@@ -376,11 +400,17 @@ export default function ControlFacturas() {
       const fase0: { t: TarjetaTrello; a: AdjuntoTrello }[] = [];
       const fase1: { t: TarjetaTrello; a: AdjuntoTrello }[] = [];
       const fase2: { t: TarjetaTrello; a: AdjuntoTrello }[] = [];
+      // Notas cargadas antes de que la app leyera el verde: se leen una vez más (solo las celdas y el verde).
+      const faseVerdes: { t: TarjetaTrello; a: AdjuntoTrello; nota: PedidoGuardado }[] = [];
       for (const t of tarjetas) {
         for (const nombre of t.otrosAdjuntos || []) informe.filas.push({ tarjeta: t.nombre, enlace: t.enlace, archivo: nombre, estado: 'no es excel', detalle: 'no es un Excel subido a la tarjeta', deEstaFactura: 0 });
         for (const a of t.adjuntos) {
           const ya = existentes.find((p) => p.id === `T-${a.id}`);
-          if (ya) { fila(t, a, 'ya estaba', 'nota ya cargada', { deEstaFactura: deLaFactura(ya.lineas) }); continue; }
+          if (ya) {
+            if ((ya.lector ?? 0) < LECTOR_PLANILLA) faseVerdes.push({ t, a, nota: ya });
+            fila(t, a, 'ya estaba', 'nota ya cargada', { deEstaFactura: deLaFactura(ya.lineas) });
+            continue;
+          }
           const marca = vistos[a.id];
           if (marca?.motivo === 'borrado a mano') (marca.huella ? fase2 : fase0).push({ t, a });
           else if (!marca || (marca.version ?? 1) < LECTOR_TRELLO) (REPITE.test(marca?.motivo || '') ? fase0 : fase1).push({ t, a });
@@ -391,6 +421,20 @@ export default function ControlFacturas() {
       // Si no se pudo bajar una nota borrada (o una copia anotada), esta vez no se carga ninguna nota
       // nueva: podría ser la misma. Se reintenta la próxima búsqueda.
       let sinRevisarBorradas = '';
+      let enVerde = 0;
+      // Otra copia de una nota ya cargada (la que el depósito marcó en verde, o la que devolvió la app):
+      // se suma lo pintado en verde y las celdas. Si falla, se reintenta la próxima vez.
+      const fusionar = async (pedidoId: string, lineas: PedidoGuardado['lineas'], copia: CopiaPlanilla) => {
+        const i = existentes.findIndex((x) => x.id === pedidoId);
+        if (i < 0) return;
+        const antes = existentes[i].lineas.reduce((s, l) => s + (l.entregado ?? 0), 0);
+        const nueva = fusionarPlanilla(existentes[i], lineas, copia, LECTOR_PLANILLA);
+        if (!nueva) return;
+        await api({ proveedor: prov, accion: 'guardarPedido', pedido: nueva });
+        existentes[i] = nueva;
+        enVerde += Math.max(0, nueva.lineas.reduce((s, l) => s + (l.entregado ?? 0), 0) - antes);
+      };
+      const copiaDe = (t: TarjetaTrello, a: AdjuntoTrello, b: Bajado): CopiaPlanilla => ({ tarjeta: t.id, adjunto: a.id, fecha: b.fecha || a.fecha || hoyAr(), nombre: a.nombre });
       const procesar = async (lista: { t: TarjetaTrello; a: AdjuntoTrello }[], primero = false) => {
         const LOTE = 4;
         for (let i = 0; i < lista.length; i += LOTE) {
@@ -399,20 +443,21 @@ export default function ControlFacturas() {
           const bajados = await Promise.all(lote.map(({ t, a }) => bajarAdjunto(t.id, a.id).then((b) => b, (e) => e as Error)));
           for (let j = 0; j < lote.length; j++) {
             const { t, a } = lote[j];
-            const buf = bajados[j];
+            const bajado = bajados[j];
             const marca = vistos[a.id];
             // Falla de red: no se anota, se reintenta la próxima vez.
-            if (buf instanceof Error) {
+            if (bajado instanceof Error) {
               // Un archivo que no existe más o es demasiado grande no se va a poder leer nunca: no frena el resto.
-              const definitivo = [400, 403, 404, 413].includes((buf as Error & { status?: number }).status ?? 0);
+              const definitivo = [400, 403, 404, 413].includes((bajado as Error & { status?: number }).status ?? 0);
               if (primero && !definitivo && !sinRevisarBorradas) sinRevisarBorradas = `«${t.nombre}» ${a.nombre}`;
-              fallas.push(`«${t.nombre}» ${a.nombre}: ${buf.message}`); fila(t, a, 'falla', `no lo pude bajar: ${buf.message}`); continue;
+              fallas.push(`«${t.nombre}» ${a.nombre}: ${bajado.message}`); fila(t, a, 'falla', `no lo pude bajar: ${bajado.message}`); continue;
             }
+            const copia = copiaDe(t, a, bajado);
             let leidas = 0;
             try {
               let res: ReturnType<typeof prepararPedido>;
               try {
-                res = prepararPedido(buf, a.nombre, t.inicio || t.creada, { id: `T-${a.id}`, nombre: t.nombre, origen: `trello:${t.id}`, enlace: t.enlace }, existentes);
+                res = prepararPedido(bajado.buf, a.nombre, t.inicio || t.creada, { id: `T-${a.id}`, nombre: t.nombre, origen: `trello:${t.id}`, enlace: t.enlace, copia, bajado }, existentes);
               } catch (e) { res = { mensajes: [], descartado: `no es un pedido (${mensaje(e)})` }; }
               const leido = res.pedido || res.leido;
               leidas = leido ? deLaFactura(leido.lineas) : 0;
@@ -447,9 +492,11 @@ export default function ControlFacturas() {
                 const movida = { ...existentes[i], origen: `trello:${t.id}`, enlace: t.enlace };
                 await api({ proveedor: prov, accion: 'guardarPedido', pedido: movida });
                 existentes[i] = movida;
+                if (res.leido) await fusionar(res.repetidoId, res.leido.lineas, copia);
                 await anotar(`«${t.nombre}» ${a.nombre}: ${res.descartado}`);
                 fila(t, a, 'ya estaba', `${res.descartado}: estaba cargada desde una tarjeta de otra lista y ahora queda asociada a esta`, { deEstaFactura: leidas });
               } else {
+                if (res.repetidoId && res.leido) await fusionar(res.repetidoId, res.leido.lineas, copia);
                 if (marca?.motivo !== 'borrado a mano') await anotar(`«${t.nombre}» ${a.nombre}: ${res.descartado}`);
                 otros++;
                 const legible = /^(es un pedido de|repite )/.test(res.descartado || '');
@@ -465,6 +512,22 @@ export default function ControlFacturas() {
       };
       await procesar(fase0, true);
       await procesar(fase1);
+      for (let i = 0; i < faseVerdes.length; i += 4) {
+        setOcupado(`Leyendo lo marcado en verde en las notas: ${Math.min(i + 4, faseVerdes.length)} de ${faseVerdes.length}…`);
+        const lote = faseVerdes.slice(i, i + 4);
+        const bajados = await Promise.all(lote.map(({ t, a }) => bajarAdjunto(t.id, a.id).then((b) => b, (e) => e as Error)));
+        for (let j = 0; j < lote.length; j++) {
+          const { t, a, nota } = lote[j];
+          const b = bajados[j];
+          if (b instanceof Error) continue; // se reintenta la próxima vez
+          try {
+            const copia = copiaDe(t, a, b);
+            const { filas, hoja } = leerHoja(b.buf, copia.fecha, b);
+            const leida = leerPedidoAuto(filas, nota.id, nota.nombre, nota.fecha, hoja);
+            await fusionar(nota.id, leida.pedido.lineas, copia);
+          } catch { /* no se pudo leer otra vez: queda como estaba */ }
+        }
+      }
       const cubierta = () => existentes.some((p) => vale(p) && deLaFactura(p.lineas) > 0);
       if (factura && fase2.length && (profunda === true || (profunda === 'si-falta' && !cubierta()))) await procesar(fase2);
       else informe.sinRevisar += fase2.length;
@@ -478,6 +541,7 @@ export default function ControlFacturas() {
         : cargados.length <= 5 ? [`Trello: traje ${cargados.length} nota(s) de pedido nueva(s): ${cargados.join(', ')}.`]
         : [`Trello: traje ${cargados.length} notas de pedido nuevas (${cargados.slice(0, 3).join(', ')} y ${cargados.length - 3} más).${factura ? ' Las que tienen artículos de esta factura están en el detalle de la entrega.' : ''}`];
       if (otros) out.push(`Trello: ${otros} Excel no eran notas nuevas de este proveedor (otro proveedor, repetidas, borradas o ilegibles).`);
+      if (enVerde) out.push(`Trello: ${enVerde} unidad(es) marcadas en verde en las planillas cuentan ahora como ya entregadas.`);
       if (fallas.length) out.push(`Trello: no pude bajar o guardar ${fallas.length} Excel (${fallas.slice(0, 2).join('; ')}); se reintenta la próxima vez.`);
       if (errorListas) out.push(errorListas);
       const borradas = informe.filas.filter((f) => f.estado === 'borrada' && f.pedido && f.deEstaFactura > 0);
@@ -695,7 +759,7 @@ export default function ControlFacturas() {
             onGuardarRemito={(remito) => guardar({ accion: 'guardarRemito', facturaId: r.factura.id, remito })}
             onBorrarRemito={() => confirm('¿Borrar el remito de esta entrega?') && guardar({ accion: 'borrarRemito', facturaId: r.factura.id })}
             onNota={(f) => subirPedidos(f, r.factura.fecha, r.factura.id)}
-            onTrello={() => buscarEnTrelloParaFactura(r.factura)}
+            onTrello={() => buscarEnTrelloParaFactura(r.factura)} res={res} todas={pedidosControl}
             informe={informe?.prov === prov && informe.facturaId === r.factura.id ? informe : null} onRecargarBorrada={recargarBorrada} />)}
 
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 16, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
@@ -787,8 +851,9 @@ function estadoRenglon(x: ControlRenglon, nombrePedido: (id: string) => string):
 }
 
 
-function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, informe, onRecargarBorrada }: {
+function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, informe, onRecargarBorrada, res, todas }: {
   r: ResultadoFactura; abierta: boolean; onAbrir: () => void; pedidos: PedidoGuardado[]; cerradas: Set<string>; nombrePedido: (id: string) => string;
+  res: ResultadoGeneral; todas: PedidoGuardado[];
   manual: string[]; condiciones: string; ocupado: boolean; onAsignar: (ids: string[]) => void; onBorrar: () => void; onDeposito: () => void;
   onFotos: (f: File[]) => void; onGuardarRemito: (r: Remito) => Promise<boolean>; onBorrarRemito: () => void; onNota: (f: File[]) => void; onTrello: () => void;
   informe: InformeTrello | null; onRecargarBorrada: (f: FilaTrello) => void;
@@ -840,6 +905,7 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
         </Parte>
       </div>
       <TarjetasTrello ids={r.pedidosCubiertos} pedidos={pedidos} />
+      {r.semaforo !== 'incompleta' && r.pedidosCubiertos.length > 0 && <PlanillasMarcadas r={r} res={res} pedidos={todas} nombrePedido={nombrePedido} ocupado={ocupado} />}
       {informe && <InformeTrelloCaja informe={informe} ocupado={ocupado} onRecargar={onRecargarBorrada} />}
 
       {editando && (
@@ -912,6 +978,100 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** La copia más nueva de la planilla en Trello (la original si no hay otras). */
+function planillaBase(p: PedidoGuardado): { tarjeta: string; adjunto: string } | null {
+  const ultima = p.copias?.[p.copias.length - 1];
+  if (ultima) return ultima;
+  const adj = /^T-([a-f0-9]{24})$/.exec(p.id)?.[1];
+  const tarjeta = tarjetaDeNota(p);
+  return adj && tarjeta ? { tarjeta, adjunto: adj } : null;
+}
+
+/**
+ * Planillas de las notas de esta entrega con lo que llegó pintado en verde (12-nov-2026, gax: «que la
+ * app devuelva las planillas de Excel marcadas; mi empleado las sube a Trello»). La app no escribe en
+ * Trello: baja la última planilla de la tarjeta, la pinta y la descarga.
+ */
+function PlanillasMarcadas({ r, res, pedidos, nombrePedido, ocupado }: {
+  r: ResultadoFactura; res: ResultadoGeneral; pedidos: PedidoGuardado[]; nombrePedido: (id: string) => string; ocupado: boolean;
+}) {
+  const [mensajes, setMensajes] = useState<Record<string, string>>({});
+  const [trabajando, setTrabajando] = useState('');
+  const [pedirArchivo, setPedirArchivo] = useState<Record<string, boolean>>({});
+  const notas = useMemo(() => r.pedidosCubiertos.map((id) => {
+    const p = pedidos.find((x) => x.id === id);
+    let m: MarcasNota | null;
+    try { m = p ? marcasDeNota(res, r.factura.id, pedidos, id) : null; } catch { m = null; }
+    return { id, p, m };
+  }), [r, res, pedidos]);
+  const decir = (id: string, t: string) => setMensajes((x) => ({ ...x, [id]: t }));
+
+  async function descargar(p: PedidoGuardado, archivo?: File) {
+    setTrabajando(p.id);
+    decir(p.id, '');
+    try {
+      let buf: ArrayBuffer;
+      if (archivo) buf = await archivo.arrayBuffer();
+      else {
+        const base = planillaBase(p);
+        if (!base) { setPedirArchivo((x) => ({ ...x, [p.id]: true })); decir(p.id, 'Esta nota se subió a mano: elegí la planilla para marcarla.'); return; }
+        const b = await bajarAdjunto(base.tarjeta, base.adjunto);
+        if (!b.completo) {
+          setPedirArchivo((x) => ({ ...x, [p.id]: true }));
+          decir(p.id, 'La planilla de Trello pesa mucho para bajarla desde la app: descargala de la tarjeta y elegila acá.');
+          return;
+        }
+        buf = b.buf;
+      }
+      // Las celdas salen de la misma planilla (las notas cargadas antes del 12-nov no las tienen guardadas).
+      const { filas, hoja } = leerHoja(buf, hoyAr());
+      const leida = leerPedidoAuto(filas, p.id, p.nombre, p.fecha, hoja);
+      const conCeldas = fusionarPlanilla(p, leida.pedido.lineas) ?? p;
+      const m = marcasDeNota(res, r.factura.id, pedidos.map((x) => (x.id === p.id ? conCeldas : x)), p.id);
+      if (!m.celdas.length) throw new Error('No encontré en la planilla las celdas de lo que llegó: marcalo a mano.');
+      const out = marcarPlanilla(new Uint8Array(buf), m.celdas, { nro: p.nroProveedor, cantidades: m.cantidades });
+      const url = URL.createObjectURL(new Blob([new Uint8Array(out)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${slug(p.nroProveedor ? `Nota ${p.nroProveedor}` : p.nombre)} - entregado ${fechaAr(hoyAr()).slice(0, 5).replace('/', '-')}.xlsx`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      setPedirArchivo((x) => ({ ...x, [p.id]: false }));
+      decir(p.id, `✔ Descargada${m.sinTalle.length ? `. Ojo: ${m.sinTalle.map((x) => `${x.codigo} (${x.unidades})`).join(', ')} llegó sin saber el talle: pintalo a mano` : ''}. Subila a la tarjeta de Trello.`);
+    } catch (e) { decir(p.id, `⚠ ${mensaje(e)}`); }
+    finally { setTrabajando(''); }
+  }
+
+  return (
+    <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, background: 'rgba(52,211,153,0.07)', border: '1px solid rgba(52,211,153,0.3)', fontSize: '0.83rem' }}>
+      <strong>📥 Planilla para Trello con lo que llegó en verde</strong>
+      {notas.map(({ id, p, m }) => {
+        if (!p || !m) return null;
+        const verdes = m.celdas.filter((c) => c.color === 'verde' && c.talle !== 'Total').length;
+        const amarillas = m.celdas.filter((c) => c.color === 'amarillo').length;
+        const pend = m.pendiente.reduce((s, x) => s + x.unidades, 0);
+        return (
+          <div key={id} style={{ marginTop: 6 }}>
+            <div>
+              {nombrePedido(id)}: {m.estaEntrega.length ? `llegó ${m.estaEntrega.map((x) => `${x.codigo} ${x.talle}×${x.cantidad}`).join(', ')}` : 'sin talles identificados en esta entrega'}
+              {' · '}{verdes} talle(s) en verde{amarillas ? `, ${amarillas} en amarillo (llegó una parte)` : ''}
+              {' · '}{m.completa ? 'ya llegó todo' : `queda pendiente ${pend} u.`}
+              {m.facturas.length > 1 ? ` · incluye ${m.facturas.length - 1} entrega(s) anterior(es)` : ''}
+            </div>
+            {m.sinTalle.length > 0 && <div style={{ color: '#fbbf24' }}>Sin talle identificado: {m.sinTalle.map((x) => `${x.codigo} (${x.unidades})`).join(', ')}. Cargá los talles en el remito o pintalos a mano.</div>}
+            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 4 }}>
+              <button style={botonChico} disabled={ocupado || !!trabajando} onClick={() => descargar(p)}>{trabajando === id ? 'Preparando…' : '📥 Descargar planilla marcada'}</button>
+              {pedirArchivo[id] && <Archivo etiqueta="📎 Elegir la planilla" accept=".xlsx" disabled={!!trabajando} estilo={botonChico} onArchivos={(f) => f[0] && descargar(p, f[0])} />}
+              {mensajes[id] && <span style={{ color: mensajes[id].startsWith('⚠') ? '#f87171' : undefined }}>{mensajes[id]}</span>}
+            </div>
+          </div>
+        );
+      })}
+      <div style={{ opacity: 0.7, marginTop: 6 }}>Se baja la última planilla de la tarjeta y se pintan en verde los talles que llegaron (también los de entregas anteriores). Las fotos y el formato quedan iguales. La app no la sube: la sube tu empleado a la tarjeta.</div>
     </div>
   );
 }
