@@ -1,4 +1,7 @@
 // Escritura manual exclusiva de precio/costo. Nunca acepta el acceso del bot.
+// El costo de una variante con stock en Martínez está protegido. Única excepción (12-nov-2026,
+// gax eligió promedio ponderado al cargar una entrega de iD): `ponderado` con el stock y el costo
+// que la app leyó; el servidor los vuelve a leer en vivo y solo acepta el promedio exacto.
 import { allowedOrigin, identity, noStore } from '../server/access.js';
 import { obtenerToken } from '../server/shopify-token.js';
 
@@ -12,7 +15,7 @@ const READ = `query VariantesPrecios($ids: [ID!]!) {
 }`;
 const READ_COST = `query VariantesCostos($ids: [ID!]!, $locationId: ID!) {
   nodes(ids: $ids) { ... on ProductVariant { id product { id }
-    inventoryItem { inventoryLevel(locationId: $locationId) { quantities(names: ["available"]) { name quantity } } }
+    inventoryItem { unitCost { amount } inventoryLevel(locationId: $locationId) { quantities(names: ["available"]) { name quantity } } }
   } }
 }`;
 const UPDATE = `mutation PreciosManuales($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
@@ -40,7 +43,8 @@ function payload(body) {
   }
   const ids = new Set();
   const variants = body.variants.map(v => {
-    if (!object(v, ['id', 'price', 'inventoryItem']) || !gid(v.id, 'ProductVariant') || ids.has(v.id) ||
+    if (!object(v, ['id', 'price', 'inventoryItem', 'ponderado']) || !gid(v.id, 'ProductVariant') || ids.has(v.id) ||
+      (Object.hasOwn(v, 'ponderado') && (!v.inventoryItem || !ponderadoValido(v.ponderado))) ||
       (!Object.hasOwn(v, 'price') && !Object.hasOwn(v, 'inventoryItem')) ||
       (Object.hasOwn(v, 'price') && !money(v.price)) ||
       (Object.hasOwn(v, 'inventoryItem') && (!object(v.inventoryItem, ['cost']) || !money(v.inventoryItem.cost, true)))) {
@@ -51,7 +55,19 @@ function payload(body) {
     return { id: v.id, ...(Object.hasOwn(v, 'price') ? { price: v.price } : {}),
       ...(v.inventoryItem ? { inventoryItem: { cost: v.inventoryItem.cost } } : {}) };
   });
-  return { productId: body.productId, variants };
+  const ponderados = new Map(body.variants.filter(v => v.ponderado).map(v => [v.id, { ...v.ponderado }]));
+  return { productId: body.productId, variants, ponderados };
+}
+const entero = (n, max) => Number.isInteger(n) && n > 0 && n <= max;
+function ponderadoValido(p) {
+  return object(p, ['stock', 'costoAnterior', 'unidades', 'costoNuevo']) && entero(p.stock, 100000) && entero(p.unidades, 100000) &&
+    money(p.costoAnterior, true) && money(p.costoNuevo, true);
+}
+const centavos = value => Math.round(Number(value) * 100);
+/** El costo pedido es el promedio de lo que hay y lo que llega, redondeado a centavos. */
+function esPromedio(cost, p) {
+  const exacto = (p.stock * centavos(p.costoAnterior) + p.unidades * centavos(p.costoNuevo)) / (p.stock + p.unidades);
+  return Math.abs(centavos(cost) - exacto) <= 0.5 + 1e-9;
 }
 const normalize = value => String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 
@@ -64,8 +80,8 @@ export default async function handler(req, res) {
   if (!String(req.headers?.['content-type'] || '').toLowerCase().startsWith('application/json')) {
     return res.status(415).json({ error: 'Se requiere JSON.' });
   }
-  let input;
-  try { input = payload(req.body); }
+  let input, ponderados;
+  try { ({ ponderados, ...input } = payload(req.body)); }
   catch (e) { return res.status(400).json({ error: e.message }); }
 
   async function query(document, variables = {}) {
@@ -104,7 +120,14 @@ export default async function handler(req, res) {
           const level = current.inventoryItem?.inventoryLevel;
           const quantity = level?.quantities?.find(q => q.name === 'available')?.quantity;
           if (level !== null && !Number.isInteger(quantity)) throw new PriceError('No se pudo verificar el stock de Martínez. Volvé a analizar.');
-          if (quantity > 0) throw new PriceError('Hay stock en Martínez y su costo está protegido. Volvé a analizar para conservarlo.');
+          const p = ponderados.get(v.id);
+          if (p) {
+            // Promedio ponderado: el stock y el costo de Martínez tienen que seguir siendo los que leyó la app.
+            const actual = current.inventoryItem?.unitCost?.amount;
+            if (quantity !== p.stock || actual == null || centavos(actual) !== centavos(p.costoAnterior) || !esPromedio(v.inventoryItem.cost, p)) {
+              throw new PriceError('El stock o el costo de Martínez cambió desde que armaste la carga. No se modificaron estos precios ni costos: armala de nuevo.');
+            }
+          } else if (quantity > 0) throw new PriceError('Hay stock en Martínez y su costo está protegido. Volvé a analizar para conservarlo.');
         }
       }
     }

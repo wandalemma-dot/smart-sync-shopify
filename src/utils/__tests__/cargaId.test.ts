@@ -2,7 +2,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { accionesElegidas, ejecutarCargaFamily, leerPrecio, llegaAl50, precioAEscribir, resumenCarga, type CargaFamily, type DepsCarga } from '../cargaFamily';
 import {
-  ajusteDe, estadoCargaFactura, firmaCargaId, formasCodigo, leerEstadoCargaId, planCargaId, precioYCostoAntes, talleEnShopify,
+  ajusteDe, costoPromedio, estadoCargaFactura, firmaCargaId, formasCodigo, leerEstadoCargaId, planCargaId, precioYCostoAntes, talleEnShopify,
   type EstadoCargaId, type ProductoId, type VarianteId,
 } from '../cargaId';
 import type { FilaChecklist, RenglonFactura, ResultadoFactura } from '../controlFacturas';
@@ -145,12 +145,24 @@ describe('iD: vista previa de la carga', () => {
     expect(it.opciones[0].avisos.join(' ')).toMatch(/Salieron 1 para órdenes/);
     expect(a.ajuste?.ok).toBe(true);
   });
-  it('un talle que llega y ya tenía stock en Martínez conserva su costo (y se avisa)', () => {
+  it('un talle que llega y ya tenía stock en Martínez lleva el promedio ponderado (gax, 12-nov-2026)', () => {
+    // L: 2 en Martínez a $20.000 + llegan 2 a $22.500 → $21.250.
     const plan = planCargaId(resultado([fila([{ talle: 'L', cantidad: 2 }])]), estado(), {});
     const op = plan.items[0].opciones[0];
     if (op.accion?.tipo !== 'reposicion') throw new Error('esperaba reposición');
-    expect(op.accion.ajuste!.costos.map((c) => c.talle)).toEqual(['S', 'M', 'XL']);
-    expect(op.avisos.join(' ')).toMatch(/Talle L: ya tenía stock en Martínez, conserva su costo/);
+    const a = op.accion.ajuste!;
+    expect(a.costos.map((c) => c.talle)).toEqual(['S', 'M', 'XL']);
+    expect(a.ponderados).toEqual([{ id: 'gid://shopify/ProductVariant/L', talle: 'L', stock: 2, suma: 2, actual: 20000, costo: 21250 }]);
+    expect(a.conservan).toEqual([]);
+    expect(resumenCarga(plan, {}).lineas[0]).toMatch(/costo promedio en L \$ 21\.250,00/);
+  });
+  it('promedio con centavos; sin costo actual no se inventa: conserva el suyo y se avisa', () => {
+    expect(costoPromedio(3, 27561.63, 1, 22500)).toBe(26296.22);
+    const p = remera([variante('S', 0), variante('L', 2, { costo: null })]);
+    const op = planCargaId(resultado([fila([{ talle: 'L', cantidad: 2 }])]), estado(p), {}).items[0].opciones[0];
+    if (op.accion?.tipo !== 'reposicion') throw new Error('esperaba reposición');
+    expect(op.accion.ajuste!.ponderados).toEqual([]);
+    expect(op.avisos.join(' ')).toMatch(/Talle L: ya tenía 2 en Martínez y su costo actual es cero o desconocido/);
   });
   it('bloquea lo que no se puede cargar sin adivinar', () => {
     const casos: [FilaChecklist, EstadoCargaId, RegExp][] = [
@@ -211,11 +223,24 @@ describe('iD: carga después de confirmar (precio y costo ANTES del stock)', () 
     const enviado = precios.mock.calls[0][0] as { productId: string; variants: Variante[] };
     expect(enviado.productId).toBe('gid://shopify/Product/1');
     const porTalle: Record<string, Variante> = Object.fromEntries(enviado.variants.map((v) => [v.id.split('/').pop(), v]));
-    // Precio en los 4 talles; costo (con centavos) solo en S, M y XL: L tiene stock en Martínez.
+    // Precio en los 4 talles; costo (con centavos) solo en S, M y XL: L tiene stock en Martínez y no llega.
     expect(Object.values(porTalle).every((v) => v.price === '69900')).toBe(true);
     expect(porTalle.S.inventoryItem).toEqual({ cost: '27000.00' });
     expect(porTalle.L.inventoryItem).toBeUndefined();
     expect(res.mensaje).toMatch(/Cambiado precio de toda la curva/);
+  });
+  it('el promedio viaja con el stock y el costo que se leyeron, para que el servidor los vuelva a comprobar', async () => {
+    const gql = shopify({ inventorySetQuantities: setOk });
+    const precios = vi.fn(async () => ({ productVariantsBulkUpdate: { userErrors: [], productVariants: [] } }));
+    const p = planCargaId(resultado([fila([{ talle: 'L', cantidad: 2 }])]), estado(), {});
+    const [res] = await ejecutarCargaFamily(p, {}, deps(gql, precios));
+    expect(res.estado).toBe('cargada');
+    const enviado = (precios.mock.calls[0] as unknown[])[0] as { variants: { id: string; inventoryItem?: { cost: string }; ponderado?: unknown }[] };
+    expect(enviado.variants.find((v) => v.id.endsWith('/L'))).toEqual({
+      id: 'gid://shopify/ProductVariant/L', inventoryItem: { cost: '21250.00' },
+      ponderado: { stock: 2, costoAnterior: '20000', unidades: 2, costoNuevo: '22500' },
+    });
+    expect(res.mensaje).toMatch(/costo promedio en L/);
   });
   it('si Shopify rechaza el precio o el costo, no se suma el stock y la marca se libera', async () => {
     const gql = shopify({ inventorySetQuantities: setOk });

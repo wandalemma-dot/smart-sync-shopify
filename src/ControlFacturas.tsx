@@ -1010,7 +1010,7 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
         </div>)}
       </div>}
       {carga?.plan && <PanelCarga plan={carga.plan} ocupado={ocupado} onConfirmar={carga.onConfirmar} onCancelar={carga.onCancelar} sucursal={SUCURSAL_CARGA_ID}
-        explicacion="Lo que llegó (el remito, menos lo que salió para órdenes) se SUMA al stock de Martínez; el stock de iD lo lleva la sincronización. Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez, y si el margen no llega al 50% hay que poner un precio nuevo para toda la curva. Los productos que no están en Shopify se crean desde Sincronización." />}
+        explicacion="Lo que llegó (el remito, menos lo que salió para órdenes) se SUMA al stock de Martínez; el stock de iD lo lleva la sincronización. Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (si un talle que llega ya tenía stock, lleva el promedio ponderado), y si el margen no llega al 50% hay que poner un precio nuevo para toda la curva. Los productos que no están en Shopify se crean desde Sincronización." />}
       <TarjetasTrello ids={r.pedidosCubiertos} pedidos={pedidos} />
       {r.semaforo !== 'incompleta' && r.pedidosCubiertos.length > 0 && <PlanillasMarcadas r={r} res={res} pedidos={todas} nombrePedido={nombrePedido} ocupado={ocupado} consejos={consejos} />}
       {informe && <InformeTrelloCaja informe={informe} ocupado={ocupado} onRecargar={onRecargarBorrada} />}

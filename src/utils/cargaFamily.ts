@@ -280,8 +280,10 @@ export interface AjustePrecio {
   variantes: { id: string; talle: string }[];
   /** Variantes a las que se les pone el costo nuevo (las que llegan y las que están en 0 en Martínez). */
   costos: { id: string; talle: string; actual: number | null }[];
-  /** Variantes con stock en Martínez que no llegan en esta entrega: conservan su costo. */
-  conservan: { talle: string; stock: number; costo: number | null }[];
+  /** Talles que llegan y ya tenían stock en Martínez: promedio ponderado (gax, 12-nov-2026). */
+  ponderados: { id: string; talle: string; stock: number; suma: number; actual: number; costo: number }[];
+  /** Variantes con stock en Martínez que conservan su costo (no llegan, o su costo es desconocido). */
+  conservan: { talle: string; stock: number; costo: number | null; motivo?: string }[];
   /** Precio elegido por la usuaria (si hace falta cambiarlo). */
   precio?: number;
 }
@@ -689,6 +691,7 @@ export function resumenCarga(plan: PlanCarga, elecciones: EleccionesCarga): { al
       const extra = a ? [
         a.precio !== undefined ? `precio de toda la curva ${fmt(a.precioActual ?? 0)} → ${fmt(a.precio)}` : '',
         a.costos.length ? `costo ${fmt(a.costoNuevo)} en ${a.costos.map((c) => c.talle).join(', ')}` : '',
+        a.ponderados.length ? `costo promedio en ${a.ponderados.map((c) => `${c.talle} ${fmt(c.costo)}`).join(', ')}` : '',
       ].filter(Boolean) : [];
       lineas.push(`• ${codigo}: sumar ${u} u. en «${accion.titulo}»${extra.length ? ` · ${extra.join(' · ')}` : ''}`);
     }
