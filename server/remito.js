@@ -30,7 +30,7 @@ const ESQUEMA = {
       items: {
         type: 'object',
         additionalProperties: false,
-        required: ['codigo', 'cantidad', 'talles'],
+        required: ['codigo', 'cantidad', 'talles', 'retirado'],
         properties: {
           codigo: { type: 'string' },
           cantidad: { type: 'number', description: 'Total de unidades del artículo.' },
@@ -39,10 +39,15 @@ const ESQUEMA = {
             items: {
               type: 'object',
               additionalProperties: false,
-              required: ['talle', 'cantidad'],
-              properties: { talle: { type: 'string' }, cantidad: { type: 'number' } },
+              required: ['talle', 'cantidad', 'retirado'],
+              properties: {
+                talle: { type: 'string' },
+                cantidad: { type: 'number', description: 'Cantidad impresa del talle.' },
+                retirado: { type: 'number', description: 'Número de una marca a mano «-n» junto a este talle (0 si no hay).' },
+              },
             },
           },
+          retirado: { type: 'number', description: 'Marca a mano «-n» del artículo entero, solo si no detalla talles (0 si no hay).' },
         },
       },
     },
@@ -61,7 +66,9 @@ También el número de remito y la fecha (AAAA-MM-DD) si se leen.
 Reglas:
 - No corrijas, no completes y no adivines. Si un código, talle o cantidad no se lee con seguridad, transcribí lo más probable y explicalo en «dudas» (código y qué no se lee).
 - Si el total impreso de un artículo no coincide con la suma de sus talles, anotalo en «dudas».
-- Ignorá firmas y sellos. Las marcas a mano (tildes, cruces, «NO», números escritos) no cambian lo impreso, pero anotalas en «dudas» indicando el código y el talle, porque el depósito las usa para marcar lo que no llegó.
+- Ignorá firmas y sellos. Las marcas a mano no cambian la cantidad impresa.
+- Una marca a mano con un número negativo («-1», «-2», a veces con una flecha «└> -1») junto a un talle es lo que el depósito sacó para órdenes ya vendidas: poné ese número, sin el signo, en «retirado» de ESE talle (si el artículo no detalla talles, en el «retirado» del artículo). En todo lo demás, retirado = 0. Si no se sabe a qué talle apunta la marca o no se lee el número, dejá retirado en 0 y anotalo en «dudas».
+- Las demás marcas a mano (tildes, cruces, «NO», otros números) anotalas en «dudas» indicando el código y el talle.
 - Si hay una «cantidad total» o «total de unidades» impresa, compará con la suma de los artículos y anotá en «dudas» si no coincide.`;
 
 // Planilla «ENTREGA MERCADERIA» de Family (11-nov-2026): además de talles trae precios.
@@ -83,7 +90,15 @@ const ESQUEMA_ENTREGA = {
           precioMayor: { type: 'number', description: 'Precio por mayor, sin símbolos (0 si no figura).' },
           precioPublico: { type: 'number', description: 'Precio público, sin símbolos (0 si no figura).' },
           cantidad: { type: 'number', description: 'TOTAL impreso del artículo.' },
-          talles: ESQUEMA.properties.renglones.items.properties.talles,
+          talles: {
+            type: 'array',
+            items: {
+              type: 'object',
+              additionalProperties: false,
+              required: ['talle', 'cantidad'],
+              properties: { talle: { type: 'string' }, cantidad: { type: 'number' } },
+            },
+          },
         },
       },
     },
@@ -123,6 +138,14 @@ const cant = (v) => {
   return Number.isFinite(n) && n >= 0 && n <= 100000 ? Math.round(n) : 0;
 };
 
+/** Marca a mano «-n»: salió para órdenes. Nunca más de lo impreso; si se pasa, no se aplica y queda en dudas. */
+function conRetirado(x, crudo, donde, dudas) {
+  const n = cant(crudo);
+  if (!n) return x;
+  if (n > x.cantidad) { dudas.push(`${donde}: la marca a mano dice -${n} y llegaron ${x.cantidad}; no se descontó.`); return x; }
+  return { ...x, retirado: n };
+}
+
 /** Normaliza lo que devuelve el modelo: textos cortos, cantidades enteras, total = suma de talles. */
 export function normalizarRemito(crudo) {
   const dudas = (Array.isArray(crudo?.dudas) ? crudo.dudas : []).slice(0, 50).map((d) => txt(d, 300)).filter(Boolean);
@@ -131,12 +154,13 @@ export function normalizarRemito(crudo) {
     const codigo = txt(r?.codigo, 80).toUpperCase().replace(/\s+/g, '');
     if (!codigo) continue;
     const talles = (Array.isArray(r?.talles) ? r.talles : []).slice(0, 60)
-      .map((t) => ({ talle: txt(t?.talle, 20).toUpperCase().replace(',', '.'), cantidad: cant(t?.cantidad) }))
+      .map((t) => conRetirado({ talle: txt(t?.talle, 20).toUpperCase().replace(',', '.'), cantidad: cant(t?.cantidad) }, t?.retirado, `${codigo} talle ${txt(t?.talle, 20)}`, dudas))
       .filter((t) => t.talle && t.cantidad > 0);
     const suma = talles.reduce((s, t) => s + t.cantidad, 0);
     const total = cant(r?.cantidad);
     if (talles.length && total && total !== suma) dudas.push(`${codigo}: el total impreso (${total}) no coincide con la suma de talles (${suma}); se usa la suma.`);
-    renglones.push({ codigo, cantidad: talles.length ? suma : total, talles });
+    const renglon = { codigo, cantidad: talles.length ? suma : total, talles };
+    renglones.push(talles.length ? renglon : conRetirado(renglon, r?.retirado, codigo, dudas));
   }
   const fecha = /^\d{4}-\d{2}-\d{2}$/.test(String(crudo?.fecha || '')) ? crudo.fecha : '';
   return { numero: txt(crudo?.numero, 40), fecha, renglones, dudas, origen: 'foto' };

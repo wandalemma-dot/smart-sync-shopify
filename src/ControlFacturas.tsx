@@ -917,6 +917,10 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
         </Parte>
       </div>
       <Controles r={r} unidadesRemito={unidadesRemito} pendiente={pendiente} />
+      {r.retirados.length > 0 && <div style={{ marginTop: 4, fontSize: '0.86rem', color: '#a5b4fc' }}>
+        ✋ Salieron para órdenes (marcado a mano en el remito, no se cargan): {r.retirados.map((x) => `${x.codigo}${x.talle ? ` T ${x.talle}` : ''} −${x.cantidad}`).join(' · ')}.
+        {' '}Hay que cargar {unidadesRemito - r.retirados.reduce((t, x) => t + x.cantidad, 0)} u. de las {unidadesRemito} del remito.
+      </div>}
       <TarjetasTrello ids={r.pedidosCubiertos} pedidos={pedidos} />
       {r.semaforo !== 'incompleta' && r.pedidosCubiertos.length > 0 && <PlanillasMarcadas r={r} res={res} pedidos={todas} nombrePedido={nombrePedido} ocupado={ocupado} consejos={consejos} />}
       {informe && <InformeTrelloCaja informe={informe} ocupado={ocupado} onRecargar={onRecargarBorrada} />}
@@ -925,6 +929,7 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
         <div style={{ marginTop: 10, padding: 10, borderRadius: 8, background: 'rgba(0,0,0,0.2)' }}>
           <div style={{ fontSize: '0.82rem', opacity: 0.85, marginBottom: 6 }}>
             Una línea por artículo: código y después talle/cantidad. Ej.: <code>571818C 5.0/1 6.0/2 6.5/3</code>. Si no tiene talles: <code>A10520C 3</code>.
+            {' '}Si el depósito marcó a mano «-1» (salió para órdenes y no se carga), escribilo después de la cantidad: <code>CTO0325003 XL/3-1</code> (llegaron 3, se cargan 2).
           </div>
           {r.remito?.dudas?.length ? <div style={{ fontSize: '0.82rem', color: '#fbbf24', marginBottom: 6 }}>
             Dudas de la lectura de la foto (revisalas contra el papel):{r.remito.dudas.map((d, i) => <div key={i}>• {d}</div>)}
@@ -1143,7 +1148,7 @@ function Deposito({ facturas, elegida, onElegir, recepciones, onGuardar }: {
           <p style={{ fontSize: '0.85rem', opacity: 0.85 }}>Contá lo que llegó y anotá la cantidad recibida. Si un talle no está en la lista, agregalo. Si llegó un artículo de otro color, cargalo abajo en «Recibido y no facturado».</p>
           {r.checklist.map((c) => (
             <div key={c.codigo} style={{ border: '1px solid rgba(255,255,255,0.12)', borderRadius: 8, padding: '8px 10px', marginBottom: 8 }}>
-              <div><strong>{c.codigo}</strong> <span style={{ opacity: 0.8 }}>{c.descripcion}</span> · facturado {c.cantidad}</div>
+              <div><strong>{c.codigo}</strong> <span style={{ opacity: 0.8 }}>{c.descripcion}</span> · facturado {c.cantidad}{c.retirado ? ` · cargar ${Math.max(0, c.cantidad - c.retirado)}` : ''}</div>
               {c.nota && <div style={{ color: '#fbbf24', fontSize: '0.82rem' }}>{c.nota}</div>}
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 6 }}>
                 {(c.talles ?? Object.keys(rec.recibido).filter((k) => k.startsWith(claveRecepcion(c.codigo, ''))).map((k) => ({ talle: k.split('|')[1], cantidad: NaN }))).map((t) => {
@@ -1151,7 +1156,7 @@ function Deposito({ facturas, elegida, onElegir, recepciones, onGuardar }: {
                   const v = rec.recibido[k];
                   const dif = Number.isNaN(t.cantidad) ? 0 : (v ?? 0) - t.cantidad;
                   return <label key={t.talle} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', fontSize: '0.8rem' }}>
-                    <span>T {t.talle}{Number.isNaN(t.cantidad) ? '' : ` · esp. ${t.cantidad}`}</span>
+                    <span>T {t.talle}{Number.isNaN(t.cantidad) ? '' : 'retirado' in t && t.retirado ? ` · cargar ${t.cantidad} (−${t.retirado} órdenes)` : ` · esp. ${t.cantidad}`}</span>
                     <input type="number" min={0} inputMode="numeric" value={v ?? ''} onChange={(e) => cambiar(k, e.target.value)}
                       style={{ ...numSt, borderColor: v === undefined ? undefined : dif ? '#f87171' : '#34d399' }} />
                   </label>;

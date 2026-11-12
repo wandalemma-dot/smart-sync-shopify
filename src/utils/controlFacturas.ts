@@ -93,12 +93,21 @@ export const NUNCA_PENDIENTE = '0000-00-00';
 export const notaDisponible = (p: Pedido, fechaFactura: string) =>
   !p.cerradaDesde || (p.cerradaDesde !== NUNCA_PENDIENTE && (!fechaFactura || fechaFactura <= p.cerradaDesde));
 
-export interface TalleCantidad { talle: string; cantidad: number }
+/**
+ * `retirado`: lo que el depósito marcó a mano en el remito con «-1», «-2»… (12-nov-2026, gax):
+ * llegó, pero salió enseguida para órdenes ya vendidas y no se carga. La cantidad sigue siendo la impresa.
+ */
+export interface TalleCantidad { talle: string; cantidad: number; retirado?: number }
 export interface RenglonRemito {
   codigo: string;
-  cantidad: number;           // total del código (suma de talles, o el total si no hay talles)
+  cantidad: number;           // total del código (suma de talles, o el total si no hay talles), tal como está impreso
   talles: TalleCantidad[];
+  retirado?: number;          // marca a mano del artículo entero, solo si no detalla talles
 }
+
+/** Unidades del renglón que salieron para órdenes (marcas «-n» a mano). */
+export const retiradoDe = (x: RenglonRemito): number =>
+  x.talles.length ? x.talles.reduce((s, t) => s + (Number(t.retirado) || 0), 0) : Number(x.retirado) || 0;
 /** Lo que llegó según el remito de la entrega (foto leída o escrito a mano). */
 export interface Remito {
   numero: string;
@@ -217,6 +226,8 @@ export interface ResultadoFactura {
   difRemito: { codigo: string; factura: number; remito: number }[];
   /** Talles del remito que no estaban pedidos (o llegaron más de los pedidos). */
   tallesNoPedidos: { codigo: string; talle: string; llegaron: number; pedidos: number }[];
+  /** Marcas «-n» a mano en el remito: llegaron y salieron para órdenes, no se cargan (talle '' = artículo entero). */
+  retirados: { codigo: string; talle: string; cantidad: number }[];
   /** Lo que queda pendiente de los pedidos de esta factura (iD factura calzado y ropa por separado). */
   pendientePedidos: { pedidoId: string; codigo: string; descripcion: string; pendiente: number }[];
   /** Lo que se reclama (precio de más + sin pedir): la nota de crédito se pide por el neto. */
@@ -242,9 +253,12 @@ export interface PendienteTalle {
 export interface FilaChecklist {
   codigo: string;
   descripcion: string;
-  cantidad: number;
-  talles: { talle: string; cantidad: number }[] | null; // null = a confirmar
+  cantidad: number;           // facturado
+  /** Por talle, lo que hay que CARGAR (lo del remito menos lo que salió para órdenes). null = a confirmar. */
+  talles: { talle: string; cantidad: number; retirado?: number }[] | null;
   nota: string;
+  /** Unidades que salieron para órdenes (marcas «-n» del remito): no se cargan. */
+  retirado?: number;
 }
 
 export interface ResultadoGeneral {
@@ -545,7 +559,10 @@ export function ajustarRemito(rem: Remito, f: Factura, pedidos: Pedido[]): Remit
     const dePedido = Math.max(0, ...(lineas.get(claveCodigo(cod)) ?? []).map((l) => l.unidadesPorUdm || 0));
     const pack = dePedido > 1 ? dePedido : Number(/\bpack\s*x\s*(\d{1,3})\b/i.exec(desc)?.[1] || /\bM(\d{1,2})U?\s+\d/.exec(desc)?.[1] || 0);
     if (pack > 1 && llegaron > 0 && llegaron !== facturado && llegaron * pack === facturado) {
-      for (const x of rs) x.cantidad = (Number(x.cantidad) || 0) * pack;
+      for (const x of rs) {
+        x.cantidad = (Number(x.cantidad) || 0) * pack;
+        if (x.retirado) x.retirado *= pack;
+      }
     }
   }
   return { ...rem, renglones };
@@ -831,6 +848,9 @@ export function analizarFacturas(
       remito: rem,
       difRemito,
       tallesNoPedidos,
+      retirados: (rem?.renglones ?? []).flatMap((x) => x.talles.length
+        ? x.talles.filter((t) => (Number(t.retirado) || 0) > 0).map((t) => ({ codigo: normCodigo(x.codigo), talle: t.talle, cantidad: Number(t.retirado) }))
+        : (Number(x.retirado) || 0) > 0 ? [{ codigo: normCodigo(x.codigo), talle: '', cantidad: Number(x.retirado) }] : []),
       pendientePedidos,
       reclamo,
     });
@@ -864,15 +884,28 @@ export function analizarFacturas(
     ((mapa.get(codigo) ?? []).find((g) => g.pedido.id === pedidoId)?.porTalle ?? []).map((t) => ({ talle: t.talle, cantidad: t.cantidad }));
   for (const res of resultados) {
     const delRemito = new Map<string, TalleCantidad[]>();
+    const retiradoCodigo = new Map<string, number>(); // marcas a mano del artículo entero (sin talles)
     for (const x of res.remito?.renglones ?? []) {
       const cod = normCodigo(x.codigo);
       if (x.talles.length) delRemito.set(cod, [...(delRemito.get(cod) ?? []), ...x.talles.filter((t) => t.cantidad > 0)]);
+      else if ((Number(x.retirado) || 0) > 0) retiradoCodigo.set(cod, (retiradoCodigo.get(cod) ?? 0) + Number(x.retirado));
     }
+    const notaRetirado = (n: number) => (n > 0 ? `Salieron ${n} para órdenes (marcado a mano en el remito): no se cargan` : '');
+    const unir = (...xs: string[]) => xs.filter(Boolean).join(' · ');
     res.checklist = res.renglones.map((r) => {
       const remitoTalles = delRemito.get(r.codigo);
       if (remitoTalles?.length) {
-        return { codigo: r.codigo, descripcion: r.descripcion, cantidad: r.cantidad, talles: sumarTalles(remitoTalles), nota: r.sinPedir > 0 ? `${r.sinPedir} sin pedir: controlar que no sea otro color` : '' };
+        // Se carga lo del remito menos lo que salió para órdenes.
+        const talles = sumarTalles(remitoTalles);
+        const retirado = talles.reduce((s, t) => s + (t.retirado ?? 0), 0);
+        return {
+          codigo: r.codigo, descripcion: r.descripcion, cantidad: r.cantidad,
+          talles: talles.map((t) => (t.retirado ? { talle: t.talle, cantidad: Math.max(0, t.cantidad - t.retirado), retirado: t.retirado } : { talle: t.talle, cantidad: t.cantidad })),
+          nota: unir(r.sinPedir > 0 ? `${r.sinPedir} sin pedir: controlar que no sea otro color` : '', notaRetirado(retirado)),
+          ...(retirado ? { retirado } : {}),
+        };
       }
+      const retirado = retiradoCodigo.get(r.codigo) ?? 0;
       const partes = r.asignaciones.map((a) => {
         const g = (mapa.get(r.codigo) ?? []).find((x) => x.pedido.id === a.pedidoId);
         if (!g) return null;
@@ -882,13 +915,15 @@ export function analizarFacturas(
         const nVerde = g.porTalle.reduce((s, t) => s + t.entregado, 0);
         return nVerde > 0 && g.facturado === a.cantidad && a.cantidad === sinVerde.reduce((s, t) => s + t.cantidad, 0) ? sinVerde : null;
       });
-      const deducibles = r.sinPedir === 0 && partes.length > 0 && partes.every((x) => x !== null);
+      // Si salió algo para órdenes sin decir de qué talle, no se sabe qué talle cargar: se cuenta el total.
+      const deducibles = r.sinPedir === 0 && !retirado && partes.length > 0 && partes.every((x) => x !== null);
       return {
         codigo: r.codigo,
         descripcion: r.descripcion,
         cantidad: r.cantidad,
         talles: deducibles ? sumarTalles(partes.flat() as { talle: string; cantidad: number }[]) : null,
-        nota: r.sinPedir > 0 ? `${r.sinPedir} sin pedir: controlar que no sea otro color` : deducibles ? '' : 'Talle a confirmar por depósito',
+        nota: unir(r.sinPedir > 0 ? `${r.sinPedir} sin pedir: controlar que no sea otro color` : deducibles ? '' : 'Talle a confirmar por depósito', notaRetirado(retirado)),
+        ...(retirado ? { retirado } : {}),
       };
     });
   }
@@ -896,10 +931,15 @@ export function analizarFacturas(
   return { facturas: resultados, pendientes, consumidoPorPedido, estado: resultados.some((r) => r.estado === 'revisar') ? 'revisar' : 'ok' };
 }
 
-function sumarTalles(xs: { talle: string; cantidad: number }[]) {
-  const m = new Map<string, number>();
-  for (const x of xs) m.set(x.talle, (m.get(x.talle) ?? 0) + x.cantidad);
-  return [...m.entries()].map(([talle, cantidad]) => ({ talle, cantidad }));
+function sumarTalles(xs: { talle: string; cantidad: number; retirado?: number }[]) {
+  const m = new Map<string, { cantidad: number; retirado: number }>();
+  for (const x of xs) {
+    const v = m.get(x.talle) ?? { cantidad: 0, retirado: 0 };
+    v.cantidad += x.cantidad;
+    v.retirado += Number(x.retirado) || 0;
+    m.set(x.talle, v);
+  }
+  return [...m.entries()].map(([talle, v]) => (v.retirado ? { talle, cantidad: v.cantidad, retirado: v.retirado } : { talle, cantidad: v.cantidad }));
 }
 
 /** $ 1.234.567,89 */
@@ -977,7 +1017,8 @@ export function compararRecepcion(checklist: FilaChecklist[], rec: Recepcion): {
       const porTalle = Object.entries(rec.recibido).filter(([k]) => k.startsWith(pref));
       const total = porTalle.reduce((s, [, v]) => s + (Number(v) || 0), 0);
       for (const [k, v] of porTalle) filas.push({ codigo: c.codigo, talle: k.slice(pref.length) || '(sin talle)', esperado: null, recibido: Number(v) || 0, diferencia: null });
-      filas.push({ codigo: c.codigo, talle: 'TOTAL', esperado: c.cantidad, recibido: total, diferencia: total - c.cantidad });
+      const esperado = Math.max(0, c.cantidad - (c.retirado ?? 0)); // lo que salió para órdenes no se carga
+      filas.push({ codigo: c.codigo, talle: 'TOTAL', esperado, recibido: total, diferencia: total - esperado });
     }
   }
   for (const e of rec.extras) filas.push({ codigo: normCodigo(e.codigo), talle: e.talle, esperado: 0, recibido: e.cantidad, diferencia: e.cantidad });

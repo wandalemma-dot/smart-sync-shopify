@@ -59,6 +59,18 @@ describe('lectura de la foto del remito', () => {
     await expect(leerRemito({ fotos: [foto], cliente: cliente({ stop_reason: 'max_tokens', content: [] }).cliente })).rejects.toThrow(/demasiado largo/);
     expect(normalizarRemito({ fecha: '04/11/2026', renglones: [{ codigo: 'A1', cantidad: -3, talles: [] }] })).toMatchObject({ fecha: '', renglones: [{ codigo: 'A1', cantidad: 0 }] });
   });
+
+  it('la marca a mano «-1» va como retirado del talle, sin cambiar lo impreso, y nunca más de lo que llegó', () => {
+    const r = normalizarRemito({ numero: '1', fecha: '', dudas: [], renglones: [
+      { codigo: 'cto0325003', cantidad: 6, retirado: 0, talles: [{ talle: 'L', cantidad: 3, retirado: 0 }, { talle: 'XL', cantidad: 3, retirado: 1 }] },
+      { codigo: 'A1', cantidad: 2, retirado: 1, talles: [] },
+      { codigo: 'B2', cantidad: 1, retirado: 0, talles: [{ talle: '40', cantidad: 1, retirado: 4 }] },
+    ] });
+    expect(r.renglones[0]).toEqual({ codigo: 'CTO0325003', cantidad: 6, talles: [{ talle: 'L', cantidad: 3 }, { talle: 'XL', cantidad: 3, retirado: 1 }] });
+    expect(r.renglones[1]).toEqual({ codigo: 'A1', cantidad: 2, talles: [], retirado: 1 });
+    expect(r.renglones[2].talles).toEqual([{ talle: '40', cantidad: 1 }]);
+    expect(r.dudas.join(' ')).toMatch(/-4 y llegaron 1/);
+  });
 });
 
 describe('api/leer-remito', () => {
