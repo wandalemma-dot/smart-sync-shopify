@@ -45,8 +45,22 @@ export function limpiarPedido(p) {
     lineas: lista(p?.lineas).map((l) => ({
       sku: txt(l?.sku, 80), codigo: txt(l?.codigo, 80), descripcion: txt(l?.descripcion), talle: txt(l?.talle, 40),
       unidadesPorUdm: num(l?.unidadesPorUdm || 1), precioLista: num(l?.precioLista || 0), descuento: num(l?.descuento || 0), cantidad: num(l?.cantidad || 0),
+      // Celda de la planilla y lo marcado en verde (ya entró), 12-nov-2026.
+      ...(RE_CELDA.test(String(l?.celda ?? '')) ? { celda: String(l.celda) } : {}),
+      ...(RE_CELDA.test(String(l?.celdaTotal ?? '')) ? { celdaTotal: String(l.celdaTotal) } : {}),
+      ...(Number(l?.entregado) > 0 ? { entregado: num(l.entregado), entregadoDesde: fecha(l?.entregadoDesde) } : {}),
     })),
+    ...(Number.isInteger(p?.lector) && p.lector > 0 && p.lector < 1000 ? { lector: p.lector } : {}),
+    ...(Array.isArray(p?.copias) ? { copias: lista(p.copias, 30).map(limpiarCopia) } : {}),
   };
+}
+
+const RE_CELDA = /^[A-Z]{1,3}[1-9]\d{0,6}$/;
+/** Una copia de la planilla en Trello (la original o una marcada que se subió después). */
+function limpiarCopia(c) {
+  const tarjeta = String(c?.tarjeta ?? ''), adjunto = String(c?.adjunto ?? '');
+  if (!/^[a-f0-9]{24}$/.test(tarjeta) || !/^[a-f0-9]{24}$/.test(adjunto)) throw new Error('Copia de planilla inválida.');
+  return { tarjeta, adjunto, fecha: fecha(c?.fecha), nombre: txt(c?.nombre, 120) };
 }
 
 export function limpiarFactura(f) {

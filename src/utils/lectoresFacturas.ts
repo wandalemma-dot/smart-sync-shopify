@@ -32,7 +32,22 @@ export function numero(v: unknown): number {
 // ---------------------------------------------------------------------------
 export interface LecturaPedido { pedido: Pedido; avisos: string[] }
 
-export function leerPedidoExcel(filas: unknown[][], id: string, nombre: string, fecha: string): LecturaPedido {
+/**
+ * Celdas pintadas de verde en la planilla (12-nov-2026, gax: «lo que está en verde ya entró»).
+ * verdes: referencias A1 de la hoja; origen: fila/columna donde empieza la hoja leída
+ * (las filas de sheet_to_json arrancan ahí); fecha: la de la copia de la planilla.
+ */
+export interface HojaMarcada { verdes: Set<string>; origen?: { r: number; c: number }; fecha: string }
+
+/** Referencia A1 de una celda (fila y columna desde 0). */
+export function a1(r: number, c: number): string {
+  let col = '';
+  for (let n = c + 1; n > 0; n = Math.floor((n - 1) / 26)) col = String.fromCharCode(65 + ((n - 1) % 26)) + col;
+  return `${col}${r + 1}`;
+}
+const refDe = (hoja: HojaMarcada | undefined, fila: number, col: number) => a1(fila + (hoja?.origen?.r ?? 0), col + (hoja?.origen?.c ?? 0));
+
+export function leerPedidoExcel(filas: unknown[][], id: string, nombre: string, fecha: string, hoja?: HojaMarcada): LecturaPedido {
   const avisos: string[] = [];
   const iEnc = filas.findIndex((f) => {
     const h = (f || []).map(sinAcento);
@@ -65,6 +80,9 @@ export function leerPedidoExcel(filas: unknown[][], id: string, nombre: string, 
     const desc = String(f[cDesc] ?? '').trim();
     if (!(precio > 0)) { avisos.push(`Fila ${i + 1} (${sku}): sin precio Mayorista, no se puede controlar el precio.`); }
     if (!Number.isInteger(cant)) avisos.push(`Fila ${i + 1} (${sku}): cantidad pedida no entera (${cant}).`);
+    const celda = refDe(hoja, i, cPed);
+    // Fila en verde (la cantidad pedida o el SKU): ya entró.
+    const verde = !!hoja && [cPed, cSku, cMod].some((c) => c >= 0 && hoja.verdes.has(refDe(hoja, i, c)));
     lineas.push({
       sku,
       codigo,
@@ -74,6 +92,8 @@ export function leerPedidoExcel(filas: unknown[][], id: string, nombre: string, 
       precioLista: porUdm > 1 ? precio / porUdm : precio,
       descuento: dto,
       cantidad: cant * porUdm,
+      celda,
+      ...(verde ? { entregado: cant * porUdm, entregadoDesde: hoja!.fecha } : {}),
     });
   }
   if (!lineas.length) avisos.push(`${nombre}: no tiene ninguna fila con cantidad en «Pedido».`);
@@ -96,7 +116,7 @@ function fechaDeCelda(v: unknown): string {
   return `${m[3]}-${m[2].padStart(2, '0')}-${m[1].padStart(2, '0')}`;
 }
 
-export function leerPedidoId(filas: unknown[][], id: string, nombre: string, fecha: string): LecturaPedido & { nroProveedor: string; fechaArchivo: string } {
+export function leerPedidoId(filas: unknown[][], id: string, nombre: string, fecha: string, hoja?: HojaMarcada): LecturaPedido & { nroProveedor: string; fechaArchivo: string } {
   const avisos: string[] = [];
   let nroProveedor = '';
   let fechaArchivo = '';
@@ -136,12 +156,23 @@ export function leerPedidoId(filas: unknown[][], id: string, nombre: string, fec
     const color = cColor >= 0 ? String(f[cColor] ?? '').trim() : '';
     const desc = [cDesc >= 0 ? String(f[cDesc] ?? '').trim() : '', color].filter(Boolean).join(' · ');
     let suma = 0;
+    // Verde: la celda del talle. Si ningún talle de la fila está en verde pero sí el código o el
+    // total, llegó la fila entera (así marca a veces el depósito).
+    const verde = (c: number) => !!hoja && c >= 0 && hoja.verdes.has(refDe(hoja, i, c));
+    const tallesVerdes = talles.some((t) => numero(f[t.col]) > 0 && verde(t.col));
+    const filaVerde = !tallesVerdes && (verde(cCod) || verde(cTotal));
+    const celdaTotal = cTotal >= 0 ? refDe(hoja, i, cTotal) : undefined;
     for (const t of talles) {
       const cant = numero(f[t.col]);
       if (!(cant > 0)) continue;
       if (!Number.isInteger(cant)) avisos.push(`Fila ${i + 1} (${codigo}): cantidad no entera en talle ${t.talle}.`);
       suma += cant;
-      lineas.push({ sku: `${codigo}-${t.talle}`, codigo, descripcion: desc, talle: t.talle, unidadesPorUdm: 1, precioLista: precio, descuento: bonif, cantidad: cant });
+      const llego = filaVerde || verde(t.col);
+      lineas.push({
+        sku: `${codigo}-${t.talle}`, codigo, descripcion: desc, talle: t.talle, unidadesPorUdm: 1, precioLista: precio, descuento: bonif, cantidad: cant,
+        celda: refDe(hoja, i, t.col), ...(celdaTotal ? { celdaTotal } : {}),
+        ...(llego ? { entregado: cant, entregadoDesde: hoja!.fecha } : {}),
+      });
     }
     if (suma > 0 && !(precio > 0)) avisos.push(`Fila ${i + 1} (${codigo}): sin precio unitario, no se puede controlar el precio.`);
     const tot = cTotal >= 0 ? numero(f[cTotal]) : NaN;
@@ -152,13 +183,13 @@ export function leerPedidoId(filas: unknown[][], id: string, nombre: string, fec
 }
 
 /** Elige el lector según los encabezados: Distrinando (SKU / Modelo color / Pedido) o iD (Código + talles). */
-export function leerPedidoAuto(filas: unknown[][], id: string, nombre: string, fecha: string): LecturaPedido & { nroProveedor: string; fechaArchivo: string; proveedor: 'distrinando' | 'id' } {
+export function leerPedidoAuto(filas: unknown[][], id: string, nombre: string, fecha: string, hoja?: HojaMarcada): LecturaPedido & { nroProveedor: string; fechaArchivo: string; proveedor: 'distrinando' | 'id' } {
   const esDistri = filas.some((f) => {
     const h = (f || []).map(sinAcento);
     return h.includes('pedido') && h.includes('sku') && (h.includes('modelo color') || h.includes('modelo-color'));
   });
-  if (esDistri) return { ...leerPedidoExcel(filas, id, nombre, fecha), nroProveedor: '', fechaArchivo: '', proveedor: 'distrinando' };
-  return { ...leerPedidoId(filas, id, nombre, fecha), proveedor: 'id' };
+  if (esDistri) return { ...leerPedidoExcel(filas, id, nombre, fecha, hoja), nroProveedor: '', fechaArchivo: '', proveedor: 'distrinando' };
+  return { ...leerPedidoId(filas, id, nombre, fecha, hoja), proveedor: 'id' };
 }
 
 function curva(sku: string): string {

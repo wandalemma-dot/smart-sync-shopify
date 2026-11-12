@@ -152,14 +152,48 @@ export async function bajarAdjunto(tarjetaId, adjuntoId, fetchImpl = fetch) {
     idTablero(fetchImpl),
   ]);
   if (!tarjeta || !idTab || tarjeta.idBoard !== idTab) throw error('La tarjeta no es del tablero de compras.', 403);
-  const adj = await get(`/cards/${tarjetaId}/attachments/${adjuntoId}?fields=id,name,bytes,isUpload`, fetchImpl);
+  const adj = await get(`/cards/${tarjetaId}/attachments/${adjuntoId}?fields=id,name,bytes,isUpload,date`, fetchImpl);
   if (!adj?.isUpload || !esExcel(adj.name)) throw error('El adjunto no es un Excel subido a la tarjeta.', 400);
   if (Number(adj.bytes) > MAX_DESCARGA) throw error('El Excel pesa más de 25 MB: subilo a mano.', 413);
   const datos = await get(`/cards/${tarjetaId}/attachments/${adjuntoId}/download/${encodeURIComponent(adj.name)}`, fetchImpl, true);
   if (datos.length > MAX_DESCARGA) throw error('El Excel pesa más de 25 MB: subilo a mano.', 413);
-  const liviano = datos.length > MAX_ADJUNTO ? sinFotos(datos) : datos;
+  // Lo pintado en verde se lee del archivo original: la copia liviana no lleva colores.
+  const hoja = verdesDe(datos);
+  const completo = datos.length <= MAX_ADJUNTO;
+  const liviano = completo ? datos : sinFotos(datos);
   if (liviano.length > MAX_ADJUNTO) throw error('El Excel tiene demasiados datos para leerlo desde Trello: subilo a mano.', 413);
-  return { nombre: String(adj.name), datos: liviano.toString('base64') };
+  return {
+    nombre: String(adj.name),
+    fecha: /^\d{4}-\d{2}-\d{2}/.test(String(adj.date || '')) ? String(adj.date).slice(0, 10) : '',
+    // completo: es el archivo tal cual (con fotos y colores), sirve para devolverlo marcado.
+    completo,
+    ...hoja,
+    datos: liviano.toString('base64'),
+  };
+}
+
+/**
+ * Celdas con relleno verde de la primera hoja visible (12-nov-2026, gax: «lo que está en verde ya
+ * entró»), y dónde empieza la hoja (las filas que lee la app arrancan ahí). Si no se puede leer, sin verdes.
+ */
+export function verdesDe(datos) {
+  try {
+    const wb = XLSX.read(datos, { type: 'buffer', cellStyles: true });
+    const nombre = wb.SheetNames.find((_, i) => !wb.Workbook?.Sheets?.[i]?.Hidden) || wb.SheetNames[0];
+    const ws = wb.Sheets[nombre];
+    if (!ws) return { verdes: [], origen: { r: 0, c: 0 } };
+    const verdes = Object.keys(ws).filter((k) => !k.startsWith('!') && esVerde(ws[k]?.s?.fgColor?.rgb) && (ws[k]?.s?.patternType ?? 'solid') !== 'none').slice(0, 5000);
+    const r = ws['!ref'] ? XLSX.utils.decode_range(ws['!ref']).s : { r: 0, c: 0 };
+    return { verdes, origen: { r: r.r, c: r.c } };
+  } catch { return { verdes: [], origen: { r: 0, c: 0 } }; }
+}
+
+/** Mismo criterio que src/utils/planillaVerde.ts: el verde manda claramente (92D050, 00B050, C6EFCE…). */
+export function esVerde(rgb) {
+  const m = /^(?:[0-9A-F]{2})?([0-9A-F]{2})([0-9A-F]{2})([0-9A-F]{2})$/i.exec(String(rgb ?? '').trim());
+  if (!m) return false;
+  const [r, g, b] = [m[1], m[2], m[3]].map((x) => parseInt(x, 16));
+  return g >= 0x80 && g - Math.max(r, b) >= 12;
 }
 
 /**
