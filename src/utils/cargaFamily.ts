@@ -579,6 +579,8 @@ async function crearAlta(codigo: string, a: AltaFamily, plan: PlanCarga, deps: D
 }
 
 async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga, deps: DepsCarga): Promise<Paso> {
+  // iD: todo lo que llegó estaba vendido en iD; solo se cambiaron precio y costo (antes de este paso).
+  if (!rep.lineas.length) return { estado: 'cargada', mensaje: 'No se sumó stock: todo lo que llegó está vendido en iD.', productoId: rep.productoId, titulo: rep.titulo, unidades: 0, talles: [] };
   const activas = rep.lineas.filter((l) => l.actual !== null);
   const sinAlta = rep.lineas.filter((l) => l.actual === null);
   const hechas: string[] = [];
@@ -703,7 +705,7 @@ export function resumenCarga(plan: PlanCarga, elecciones: EleccionesCarga): { al
         a.ponderados.length ? `costo promedio en ${a.ponderados.map((c) => `${c.talle} ${fmt(c.costo)}`).join(', ')}` : '',
       ].filter(Boolean) : [];
       if (accion.separar?.length && accion.separarAplicado) extra.push(`separar para órdenes de iD ${textoSeparar(accion.separar)} (no se suman)`);
-      lineas.push(`• ${codigo}: sumar ${u} u. en «${accion.titulo}»${extra.length ? ` · ${extra.join(' · ')}` : ''}`);
+      lineas.push(`• ${codigo}: ${u ? `sumar ${u} u. en` : 'no se suma stock (vendido en iD), solo precio y costo de'} «${accion.titulo}»${extra.length ? ` · ${extra.join(' · ')}` : ''}`);
     }
   }
   return { altas, reposiciones, unidades, lineas };

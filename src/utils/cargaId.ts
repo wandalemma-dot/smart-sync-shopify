@@ -353,10 +353,16 @@ function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefi
   }
   const sep = separar.length ? { separar, separarAplicado: !cargarIgual } : {};
   if (otras.length) avisos.push(`También hay ventas pendientes en iD que no descuento: ${otras.join(', ')}. Revisalas a mano.`);
-  if (!lineas.length) return { ...base, ...sep, accion: null, bloqueo: 'Todo lo que llegó ya está vendido en iD: separalo para esas órdenes. No queda nada para sumar en Martínez.' };
+  // Todo vendido en iD: no se suma stock, pero el precio y el costo de la factura se actualizan igual
+  // (12-nov-2026, gax: «no saques lo del precio, es importante actualizarlo igual»).
+  const vendidoTodo = !lineas.length;
   for (const l of lineas) if (l.actual === null) avisos.push(`Talle ${l.talle}: no está dado de alta en ${SUCURSAL_CARGA_ID}; se da de alta con ${l.suma}.`);
   if (p.estado !== 'ACTIVE') avisos.push(`El producto está ${p.estado === 'DRAFT' ? 'en borrador' : 'archivado'} en Shopify: se le suma igual el stock.`);
   const ajuste = ren ? ajusteDe(p, ren, lineas) : null;
+  if (vendidoTodo && (!ajuste || (ajuste.ok && !ajuste.costos.length && !ajuste.ponderados.length))) {
+    return { ...base, ...sep, accion: null, bloqueo: 'Todo lo que llegó ya está vendido en iD: separalo para esas órdenes. No queda nada para sumar en Martínez ni precio o costo para cambiar.' };
+  }
+  if (vendidoTodo) avisos.push('Todo lo que llegó ya está vendido en iD: no se suma stock en Martínez, pero se actualizan el precio y el costo.');
   if (!ajuste) avisos.push('La factura no trae el precio de lista de este artículo: no reviso el margen ni el costo.');
   else {
     for (const c of ajuste.conservan) if (c.motivo) avisos.push(`Talle ${c.talle}: ya tenía ${c.stock} en Martínez y ${c.motivo}. Conserva su costo: revisalo a mano.`);
