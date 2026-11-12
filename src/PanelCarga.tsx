@@ -1,0 +1,125 @@
+// ============================================================================
+// VISTA PREVIA DE UNA CARGA EN SHOPIFY (Family e iD)
+// ----------------------------------------------------------------------------
+// Qué se crea y qué se suma, artículo por artículo. Nada se escribe hasta confirmar.
+// iD (12-nov-2026, gax): cada reposición muestra el margen con el costo nuevo de la
+// factura. 50% o más = verde; menos = amarillo y hay que poner un precio nuevo para
+// TODA la curva (los básicos tienen precio impuesto: se avisa, no obliga).
+// ============================================================================
+import { useState } from 'react';
+import { fmt } from './utils/controlFacturas';
+import { leerPrecio, precioAEscribir, resumenCarga, type AjustePrecio, type EleccionesCarga, type ItemCarga, type PlanCarga } from './utils/cargaFamily';
+import { margenPct } from './utils/margen';
+import { botonChico, botonPrincipal, inputSt } from './utils/entregasUi';
+
+const COLOR_ITEM = { listo: '#34d399', elegir: '#fbbf24', bloqueado: '#f87171', cargado: '#94a3b8' } as const;
+const VERDE = '#34d399', AMARILLO = '#fbbf24', ROJO = '#f87171';
+type Eleccion = EleccionesCarga[string];
+
+export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, explicacion }: {
+  plan: PlanCarga; ocupado: boolean; onConfirmar: (e: EleccionesCarga) => void; onCancelar: () => void;
+  sucursal: string; explicacion: string;
+}) {
+  const [elecciones, setElecciones] = useState<EleccionesCarga>(() =>
+    Object.fromEntries(plan.items.filter((it) => it.opciones.length).map((it) => [it.codigo, { clave: it.opciones[0].clave }])));
+  const elegir = (codigo: string, cambio: Partial<Eleccion>) =>
+    setElecciones((x) => ({ ...x, [codigo]: { ...(x[codigo] ?? { clave: 'no' }), ...cambio } }));
+  const res = resumenCarga(plan, elecciones);
+  return (
+    <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, border: '1px solid rgba(99,102,241,0.6)', background: 'rgba(99,102,241,0.08)' }}>
+      <strong>⬆️ Carga en Shopify ({sucursal}): revisá antes de confirmar</strong>
+      <div style={{ fontSize: '0.8rem', opacity: 0.8, margin: '4px 0 8px' }}>{explicacion}</div>
+      {plan.avisos.map((a, i) => <div key={i} style={{ color: AMARILLO, fontSize: '0.84rem' }}>⚠️ {a}</div>)}
+      {plan.items.some((it) => it.estado === 'listo') && <div style={{ fontSize: '0.8rem', opacity: 0.8, marginBottom: 4 }}>
+        ¿Algo no llegó todavía? Destildalo: queda pendiente y lo cargás otro día con el mismo botón.
+      </div>}
+      {plan.items.map((it) => <FilaCarga key={it.codigo} it={it} eleccion={elecciones[it.codigo]} onElegir={(c) => elegir(it.codigo, c)} />)}
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
+        <button style={{ ...botonPrincipal, opacity: res.lineas.length && !ocupado ? 1 : 0.5, cursor: res.lineas.length && !ocupado ? 'pointer' : 'not-allowed' }}
+          disabled={!res.lineas.length || ocupado} onClick={() => onConfirmar(elecciones)}>✅ Confirmar y cargar</button>
+        <button style={botonChico} disabled={ocupado} onClick={onCancelar}>Cancelar</button>
+        <span style={{ fontSize: '0.84rem', opacity: 0.85 }}>
+          {res.lineas.length ? `${res.altas ? `${res.altas} nuevo(s) y ` : ''}${res.reposiciones} reposición(es): ${res.unidades} unidades.` : 'No hay nada elegido para cargar.'}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function FilaCarga({ it, eleccion, onElegir }: { it: ItemCarga; eleccion?: Eleccion; onElegir: (c: Partial<Eleccion>) => void }) {
+  const op = it.opciones.find((o) => o.clave === (eleccion?.clave ?? it.opciones[0]?.clave));
+  const a = op?.accion;
+  // Con una sola cosa para hacer, una casilla deja dejarlo para otro día (lo que no llegó todavía).
+  const casilla = it.estado === 'listo' && it.opciones.length === 1;
+  const fuera = casilla && !a;
+  return (
+    <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', padding: '7px 0', fontSize: '0.84rem' }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        {casilla && <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', cursor: 'pointer' }} title="Destildalo si todavía no llegó: queda pendiente">
+          <input type="checkbox" checked={!fuera} onChange={(ev) => onElegir({ clave: ev.target.checked ? it.opciones[0].clave : 'no' })} />
+        </label>}
+        <strong style={{ color: COLOR_ITEM[it.estado], opacity: fuera ? 0.55 : 1 }}>{it.codigo}</strong>
+        <span style={{ opacity: fuera ? 0.5 : 0.8 }}>{it.descripcion} · {it.unidades} u.</span>
+        {fuera && <span style={{ fontSize: '0.8rem', color: AMARILLO }}>queda pendiente: no se carga ahora</span>}
+        {it.opciones.length > 1 && <select value={eleccion?.clave ?? it.opciones[0].clave} onChange={(ev) => onElegir({ clave: ev.target.value })} style={{ ...inputSt, maxWidth: '100%' }}>
+          {it.opciones.map((o) => <option key={o.clave} value={o.clave} disabled={!!o.bloqueo}>{o.etiqueta}{o.bloqueo ? ' (no se puede)' : ''}</option>)}
+        </select>}
+      </div>
+      {it.motivo && <div style={{ color: COLOR_ITEM[it.estado], marginTop: 2 }}>{it.estado === 'bloqueado' ? '⛔ ' : ''}{it.motivo}</div>}
+      {it.opciones.filter((o) => o.bloqueo && it.opciones.length > 1).map((o) => <div key={o.clave} style={{ opacity: 0.75 }}>· {o.etiqueta}: {o.bloqueo}</div>)}
+      {a?.tipo === 'alta' && <div style={{ marginTop: 4 }}>
+        🆕 Crear <input value={eleccion?.titulo ?? a.titulo} onChange={(ev) => onElegir({ titulo: ev.target.value })} style={{ ...inputSt, width: 'min(420px, 100%)' }} />
+        <div style={{ opacity: 0.8, marginTop: 2 }}>
+          Tipo {a.productType} · precio {fmt(a.precio)} · costo {fmt(a.costo)} · {a.variantes.map((v) => `${v.talle}:${v.cantidad}`).join(' ')} · SKU {a.variantes[0]?.sku}… · etiquetas {a.etiquetas.join(', ')}
+        </div>
+      </div>}
+      {a?.tipo === 'reposicion' && <div style={{ marginTop: 4 }}>
+        🔁 Sumar en «{a.titulo}»: {a.lineas.map((l) => (l.actual === null ? `${l.talle} alta con ${l.suma}` : `${l.talle} ${l.actual}→${l.actual + l.suma}`)).join(' · ')}
+      </div>}
+      {a?.tipo === 'reposicion' && a.ajuste && <Ajuste a={a.ajuste} precio={eleccion?.precio} onPrecio={(precio) => onElegir({ precio })} />}
+      {op?.avisos.map((x, i) => <div key={i} style={{ color: AMARILLO }}>⚠️ {x}</div>)}
+    </div>
+  );
+}
+
+const pct = (m: number | null) => (m === null ? '—' : `${Math.floor(m * 10) / 10}%`.replace('.', ','));
+/** Margen con el costo nuevo de la factura y, si no llega al 50%, el precio nuevo para toda la curva. */
+function Ajuste({ a, precio, onPrecio }: { a: AjustePrecio; precio?: number; onPrecio: (p: number | undefined) => void }) {
+  const [texto, setTexto] = useState(precio === undefined ? '' : String(precio));
+  const escribir = precioAEscribir(a, precio);
+  const falta = Number.isNaN(escribir);
+  const obliga = !a.basico && (a.precioActual === null || !a.ok);
+  const nuevoMargen = precio !== undefined && Number.isFinite(precio) ? margenPct(precio, a.costoNuevo) : null;
+  const cambiar = (s: string) => { setTexto(s); onPrecio(leerPrecio(s)); };
+  const color = a.precioActual !== null && a.ok ? VERDE : AMARILLO;
+  return (
+    <div style={{ marginTop: 4, padding: '6px 8px', borderRadius: 6, background: 'rgba(0,0,0,0.18)' }}>
+      <div style={{ color }}>
+        {a.precioActual === null
+          ? `⚠️ Los talles tienen precios distintos (${a.precios.map(fmt).join(', ') || 'sin precio'}): poné un precio para toda la curva.`
+          : `${a.ok ? '✅' : '⚠️'} Margen con el costo nuevo (${fmt(a.costoNuevo)}) y el precio actual (${fmt(a.precioActual)}): ${pct(a.margen)}${a.ok ? '' : ' — no llega al 50%'}.`}
+        {a.basico && !a.ok && a.precioActual !== null && ' Es un básico (precio impuesto): podés dejar el precio como está.'}
+      </div>
+      {(obliga || a.basico || precio !== undefined) && <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 4 }}>
+        <span>{obliga ? 'Precio nuevo para toda la curva (obligatorio):' : 'Precio nuevo para toda la curva (opcional):'}</span>
+        <input value={texto} onChange={(ev) => cambiar(ev.target.value)} placeholder={a.precioActual !== null ? String(a.precioActual) : ''} inputMode="numeric"
+          style={{ ...inputSt, width: 110, borderColor: falta && texto ? ROJO : undefined }} />
+        <button style={{ ...botonChico, padding: '2px 8px' }} onClick={() => cambiar(String(a.sugerido))}>usar {fmt(a.sugerido)} ({pct(margenPct(a.sugerido, a.costoNuevo))})</button>
+        {nuevoMargen !== null && <span style={{ color: falta ? ROJO : VERDE }}>margen {pct(nuevoMargen)}</span>}
+      </div>}
+      {falta && <div style={{ color: ROJO, marginTop: 2 }}>
+        {precio !== undefined && !Number.isNaN(precio) && Number.isInteger(precio) && precio > 0
+          ? 'Con ese precio el margen no llega al 50%: este artículo no se carga hasta que lo corrijas.'
+          : precio !== undefined && precio !== a.precioActual ? 'Escribí el precio en pesos, sin centavos: este artículo no se carga hasta que lo corrijas.'
+          : 'Este artículo no se carga hasta que pongas el precio nuevo.'}
+      </div>}
+      {!falta && escribir !== null && <div style={{ color: VERDE, marginTop: 2 }}>Se cambia el precio de todos los talles ({a.variantes.length}) a {fmt(escribir)}.</div>}
+      {a.costos.length > 0 && <div style={{ opacity: 0.85, marginTop: 2 }}>
+        Costo nuevo {fmt(a.costoNuevo)} en {a.costos.map((c) => `${c.talle}${c.actual !== null ? ` (antes ${fmt(c.actual)})` : ''}`).join(', ')}.
+      </div>}
+      {a.conservan.length > 0 && <div style={{ opacity: 0.75, marginTop: 2 }}>
+        Conservan su costo porque tienen stock en Martínez: {a.conservan.map((c) => `${c.talle} (${c.stock} u.${c.costo !== null ? `, ${fmt(c.costo)}` : ''})`).join(', ')}.
+      </div>}
+    </div>
+  );
+}

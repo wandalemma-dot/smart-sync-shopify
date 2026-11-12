@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { Archivo, Copiar, Parte } from './EntregasPartes';
+import { PanelCarga } from './PanelCarga';
 import type { Remito } from './utils/controlFacturas';
 import { fmt } from './utils/controlFacturas';
 import {
@@ -21,7 +22,7 @@ import {
 } from './utils/controlFamily';
 import {
   cargasDeEntrega, ejecutarCargaFamily, estadoShopifyEntrega, leerEstadoCarga, planCargaFamily, resumenCarga, SUCURSAL_FAMILY, textoCarga,
-  type CargaFamily, type EleccionesCarga, type ItemCarga, type PlanCarga,
+  type CargaFamily, type EleccionesCarga, type PlanCarga,
 } from './utils/cargaFamily';
 import { leerTextoRemito, textoRemito } from './utils/lectoresFacturas';
 import { shopifyGraphQL } from './utils/shopify';
@@ -391,7 +392,8 @@ function TarjetaFamily({ r, abierta, ocupado, cargas, plan, onArmar, onConfirmar
           <button style={{ ...botonChico, padding: '1px 7px' }} disabled={ocupado} onClick={() => onLiberar(codigo, c)}>🔓 Ya lo revisé: liberar</button>
         </div>)}
       </div>}
-      {plan && <PanelCarga plan={plan} ocupado={ocupado} onConfirmar={onConfirmar} onCancelar={onCancelarCarga} />}
+      {plan && <PanelCarga plan={plan} ocupado={ocupado} onConfirmar={onConfirmar} onCancelar={onCancelarCarga} sucursal={SUCURSAL_FAMILY}
+        explicacion="Los nuevos se crean activos y solo en Point of Sale (las fotos se agregan a mano), con el precio público de la planilla y el costo por mayor − 15%. La reposición se SUMA a lo que hay. Los precios de lo que ya existe no se tocan." />}
 
       {editando === 'remito' && <EditorTexto texto={texto} onTexto={setTexto} onGuardar={guardarRemito} onCancelar={() => setEditando(null)}
         ayuda={AYUDA_REMITO} etiqueta="💾 Guardar remito" errores={errores} dudas={r.remito?.dudas ?? []}
@@ -443,73 +445,6 @@ function TarjetaFamily({ r, abierta, ocupado, cargas, plan, onArmar, onConfirmar
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-const COLOR_ITEM = { listo: '#34d399', elegir: '#fbbf24', bloqueado: '#f87171', cargado: '#94a3b8' } as const;
-
-/** Vista previa de la carga: qué se crea y qué se suma, artículo por artículo. Nada se escribe hasta confirmar. */
-function PanelCarga({ plan, ocupado, onConfirmar, onCancelar }: { plan: PlanCarga; ocupado: boolean; onConfirmar: (e: EleccionesCarga) => void; onCancelar: () => void }) {
-  const [elecciones, setElecciones] = useState<EleccionesCarga>(() =>
-    Object.fromEntries(plan.items.filter((it) => it.opciones.length).map((it) => [it.codigo, { clave: it.opciones[0].clave }])));
-  const elegir = (codigo: string, cambio: Partial<{ clave: string; titulo: string }>) =>
-    setElecciones((x) => ({ ...x, [codigo]: { ...(x[codigo] ?? { clave: 'no' }), ...cambio } }));
-  const res = resumenCarga(plan, elecciones);
-  return (
-    <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, border: '1px solid rgba(99,102,241,0.6)', background: 'rgba(99,102,241,0.08)' }}>
-      <strong>⬆️ Carga en Shopify ({SUCURSAL_FAMILY}): revisá antes de confirmar</strong>
-      <div style={{ fontSize: '0.8rem', opacity: 0.8, margin: '4px 0 8px' }}>
-        Los nuevos se crean activos y solo en Point of Sale (las fotos se agregan a mano), con el precio público de la planilla y el costo por mayor − 15%. La reposición se SUMA a lo que hay. Los precios de lo que ya existe no se tocan.
-      </div>
-      {plan.avisos.map((a, i) => <div key={i} style={{ color: '#fbbf24', fontSize: '0.84rem' }}>⚠️ {a}</div>)}
-      {plan.items.some((it) => it.estado === 'listo') && <div style={{ fontSize: '0.8rem', opacity: 0.8, marginBottom: 4 }}>
-        ¿Algo no llegó todavía? Destildalo: queda pendiente y lo cargás otro día con el mismo botón.
-      </div>}
-      {plan.items.map((it) => <FilaCarga key={it.codigo} it={it} eleccion={elecciones[it.codigo]} onElegir={(c) => elegir(it.codigo, c)} />)}
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
-        <button style={{ ...botonPrincipal, opacity: res.lineas.length && !ocupado ? 1 : 0.5, cursor: res.lineas.length && !ocupado ? 'pointer' : 'not-allowed' }}
-          disabled={!res.lineas.length || ocupado} onClick={() => onConfirmar(elecciones)}>✅ Confirmar y cargar</button>
-        <button style={botonChico} disabled={ocupado} onClick={onCancelar}>Cancelar</button>
-        <span style={{ fontSize: '0.84rem', opacity: 0.85 }}>
-          {res.lineas.length ? `${res.altas} nuevo(s) y ${res.reposiciones} reposición(es): ${res.unidades} unidades.` : 'No hay nada elegido para cargar.'}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function FilaCarga({ it, eleccion, onElegir }: { it: ItemCarga; eleccion?: { clave: string; titulo?: string }; onElegir: (c: Partial<{ clave: string; titulo: string }>) => void }) {
-  const op = it.opciones.find((o) => o.clave === (eleccion?.clave ?? it.opciones[0]?.clave));
-  const a = op?.accion;
-  // Con una sola cosa para hacer, una casilla deja dejarlo para otro día (lo que no llegó todavía).
-  const casilla = it.estado === 'listo' && it.opciones.length === 1;
-  const fuera = casilla && !a;
-  return (
-    <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', padding: '7px 0', fontSize: '0.84rem' }}>
-      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
-        {casilla && <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', cursor: 'pointer' }} title="Destildalo si todavía no llegó: queda pendiente">
-          <input type="checkbox" checked={!fuera} onChange={(ev) => onElegir({ clave: ev.target.checked ? it.opciones[0].clave : 'no' })} />
-        </label>}
-        <strong style={{ color: COLOR_ITEM[it.estado], opacity: fuera ? 0.55 : 1 }}>{it.codigo}</strong>
-        <span style={{ opacity: fuera ? 0.5 : 0.8 }}>{it.descripcion} · {it.unidades} u.</span>
-        {fuera && <span style={{ fontSize: '0.8rem', color: '#fbbf24' }}>queda pendiente: no se carga ahora</span>}
-        {it.opciones.length > 1 && <select value={eleccion?.clave ?? it.opciones[0].clave} onChange={(ev) => onElegir({ clave: ev.target.value })} style={{ ...inputSt, maxWidth: '100%' }}>
-          {it.opciones.map((o) => <option key={o.clave} value={o.clave} disabled={!!o.bloqueo}>{o.etiqueta}{o.bloqueo ? ' (no se puede)' : ''}</option>)}
-        </select>}
-      </div>
-      {it.motivo && <div style={{ color: COLOR_ITEM[it.estado], marginTop: 2 }}>{it.estado === 'bloqueado' ? '⛔ ' : ''}{it.motivo}</div>}
-      {it.opciones.filter((o) => o.bloqueo && it.opciones.length > 1).map((o) => <div key={o.clave} style={{ opacity: 0.75 }}>· {o.etiqueta}: {o.bloqueo}</div>)}
-      {a?.tipo === 'alta' && <div style={{ marginTop: 4 }}>
-        🆕 Crear <input value={eleccion?.titulo ?? a.titulo} onChange={(ev) => onElegir({ titulo: ev.target.value })} style={{ ...inputSt, width: 'min(420px, 100%)' }} />
-        <div style={{ opacity: 0.8, marginTop: 2 }}>
-          Tipo {a.productType} · precio {fmt(a.precio)} · costo {fmt(a.costo)} · {a.variantes.map((v) => `${v.talle}:${v.cantidad}`).join(' ')} · SKU {a.variantes[0]?.sku}… · etiquetas {a.etiquetas.join(', ')}
-        </div>
-      </div>}
-      {a?.tipo === 'reposicion' && <div style={{ marginTop: 4 }}>
-        🔁 Sumar en «{a.titulo}»: {a.lineas.map((l) => (l.actual === null ? `${l.talle} alta con ${l.suma}` : `${l.talle} ${l.actual}→${l.actual + l.suma}`)).join(' · ')}
-      </div>}
-      {op?.avisos.map((x, i) => <div key={i} style={{ color: '#fbbf24' }}>⚠️ {x}</div>)}
     </div>
   );
 }
