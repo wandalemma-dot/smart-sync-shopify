@@ -8,18 +8,20 @@
 // ============================================================================
 import { useState } from 'react';
 import { fmt } from './utils/controlFacturas';
-import { leerPrecio, precioAEscribir, resumenCarga, type AjustePrecio, type EleccionesCarga, type ItemCarga, type PlanCarga } from './utils/cargaFamily';
+import { leerPrecio, precioAEscribir, resumenCarga, textoSeparar, type AjustePrecio, type EleccionesCarga, type ItemCarga, type OpcionCarga, type PlanCarga } from './utils/cargaFamily';
 import { margenPct } from './utils/margen';
 import { botonChico, botonPrincipal, inputSt } from './utils/entregasUi';
 
 // Lo listo va en el color normal: solo resalta lo que necesita atención (12-nov-2026, gax: «hay mucho color»).
 const COLOR_ITEM = { listo: 'inherit', elegir: '#fbbf24', bloqueado: '#f87171', cargado: '#94a3b8' } as const;
-const VERDE = '#34d399', AMARILLO = '#fbbf24', ROJO = '#f87171';
+const VERDE = '#34d399', AMARILLO = '#fbbf24', ROJO = '#f87171', VIOLETA = '#a78bfa';
 type Eleccion = EleccionesCarga[string];
 
-export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, explicacion }: {
+export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, explicacion, onCargarIgual }: {
   plan: PlanCarga; ocupado: boolean; onConfirmar: (e: EleccionesCarga) => void; onCancelar: () => void;
   sucursal: string; explicacion: string;
+  /** iD: lo vendido en iD se separa; «cargarlo igual» lo suma (si ya se separó antes). */
+  onCargarIgual?: (codigo: string, si: boolean) => void;
 }) {
   const [elecciones, setElecciones] = useState<EleccionesCarga>(() =>
     Object.fromEntries(plan.items.filter((it) => it.opciones.length).map((it) => [it.codigo, { clave: it.opciones[0].clave }])));
@@ -34,7 +36,8 @@ export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, e
       {plan.items.some((it) => it.estado === 'listo') && <div style={{ fontSize: '0.8rem', opacity: 0.8, marginBottom: 4 }}>
         ¿Algo no llegó todavía? Destildalo: queda pendiente y lo cargás otro día con el mismo botón.
       </div>}
-      {plan.items.map((it) => <FilaCarga key={it.codigo} it={it} eleccion={elecciones[it.codigo]} onElegir={(c) => elegir(it.codigo, c)} />)}
+      {plan.items.map((it) => <FilaCarga key={it.codigo} it={it} eleccion={elecciones[it.codigo]} onElegir={(c) => elegir(it.codigo, c)}
+        onCargarIgual={onCargarIgual && ((si) => onCargarIgual(it.codigo, si))} ocupado={ocupado} />)}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
         <button style={{ ...botonPrincipal, opacity: res.lineas.length && !ocupado ? 1 : 0.5, cursor: res.lineas.length && !ocupado ? 'pointer' : 'not-allowed' }}
           disabled={!res.lineas.length || ocupado} onClick={() => onConfirmar(elecciones)}>✅ Confirmar y cargar</button>
@@ -47,7 +50,9 @@ export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, e
   );
 }
 
-function FilaCarga({ it, eleccion, onElegir }: { it: ItemCarga; eleccion?: Eleccion; onElegir: (c: Partial<Eleccion>) => void }) {
+function FilaCarga({ it, eleccion, onElegir, onCargarIgual, ocupado }: {
+  it: ItemCarga; eleccion?: Eleccion; onElegir: (c: Partial<Eleccion>) => void; onCargarIgual?: (si: boolean) => void; ocupado: boolean;
+}) {
   const op = it.opciones.find((o) => o.clave === (eleccion?.clave ?? it.opciones[0]?.clave));
   const a = op?.accion;
   // Con una sola cosa para hacer, una casilla deja dejarlo para otro día (lo que no llegó todavía).
@@ -66,6 +71,7 @@ function FilaCarga({ it, eleccion, onElegir }: { it: ItemCarga; eleccion?: Elecc
           {it.opciones.map((o) => <option key={o.clave} value={o.clave} disabled={!!o.bloqueo}>{o.etiqueta}{o.bloqueo ? ' (no se puede)' : ''}</option>)}
         </select>}
       </div>
+      {op?.separar?.length ? <Separar op={op} onCargarIgual={onCargarIgual} ocupado={ocupado} /> : null}
       {it.motivo && <div style={{ color: COLOR_ITEM[it.estado], marginTop: 2 }}>{it.estado === 'bloqueado' ? '⛔ ' : ''}{it.motivo}</div>}
       {it.opciones.filter((o) => o.bloqueo && it.opciones.length > 1).map((o) => <div key={o.clave} style={{ opacity: 0.75 }}>· {o.etiqueta}: {o.bloqueo}</div>)}
       {a?.tipo === 'alta' && <div style={{ marginTop: 4 }}>
@@ -79,6 +85,24 @@ function FilaCarga({ it, eleccion, onElegir }: { it: ItemCarga; eleccion?: Elecc
       </div>}
       {a?.tipo === 'reposicion' && a.ajuste && <Ajuste a={a.ajuste} precio={eleccion?.precio} onPrecio={(precio) => onElegir({ precio })} />}
       {op?.avisos.map((x, i) => <div key={i} style={{ color: AMARILLO, marginTop: 6, fontSize: '0.8rem' }}>⚠️ {x}</div>)}
+    </div>
+  );
+}
+
+/** Cartel «vendido en iD: separar» (12-nov-2026, gax): no se suma a Martínez, salvo «cargarlo igual». */
+function Separar({ op, onCargarIgual, ocupado }: { op: OpcionCarga; onCargarIgual?: (si: boolean) => void; ocupado: boolean }) {
+  const xs = op.separar ?? [];
+  const u = xs.reduce((s, x) => s + x.cantidad, 0);
+  return (
+    <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 6, borderLeft: `4px solid ${VIOLETA}`, background: 'rgba(167,139,250,0.12)' }}>
+      {op.separarAplicado
+        ? <><strong>🏷️ Vendido en iD: separá {u} u. antes de cargar</strong> — {textoSeparar(xs)}. No se suman a Martínez.</>
+        : <><strong>🏷️ Vendido en iD ({u} u.)</strong> — {textoSeparar(xs)}. Elegiste cargarlo igual: se suma todo a Martínez.</>}
+      {onCargarIgual && <div style={{ marginTop: 4 }}>
+        <button style={{ ...botonChico, padding: '2px 8px' }} disabled={ocupado} onClick={() => onCargarIgual(!!op.separarAplicado)}>
+          {op.separarAplicado ? 'Ya lo separé antes: cargarlo igual' : 'Volver a separarlo'}
+        </button>
+      </div>}
     </div>
   );
 }

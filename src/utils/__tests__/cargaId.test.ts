@@ -2,8 +2,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { accionesElegidas, ejecutarCargaFamily, leerPrecio, llegaAl50, precioAEscribir, resumenCarga, type CargaFamily, type DepsCarga } from '../cargaFamily';
 import {
-  ajusteDe, costoPromedio, estadoCargaFactura, firmaCargaId, formasCodigo, leerEstadoCargaId, planCargaId, precioYCostoAntes, talleEnShopify,
-  type EstadoCargaId, type ProductoId, type VarianteId,
+  ajusteDe, costoPromedio, estadoCargaFactura, firmaCargaId, formasCodigo, leerEstadoCargaId, leerPendientesId, planCargaId, precioYCostoAntes, separarDe, talleEnShopify,
+  type EstadoCargaId, type OrdenPendienteId, type ProductoId, type VarianteId,
 } from '../cargaId';
 import type { FilaChecklist, RenglonFactura, ResultadoFactura } from '../controlFacturas';
 
@@ -280,5 +280,85 @@ describe('iD: el ajuste se arma solo con precio de lista', () => {
     const op = plan.items[0].opciones[0];
     expect(op.accion?.tipo === 'reposicion' && op.accion.ajuste).toBeFalsy();
     expect(op.avisos.join(' ')).toMatch(/no trae el precio de lista/);
+  });
+});
+
+describe('iD: lo que llegó y ya está vendido en iD se separa (gax, 12-nov-2026)', () => {
+  const orden = (nombre: string, cantidad: number, fecha: string, extra: Partial<OrdenPendienteId> = {}): OrdenPendienteId => ({ nombre, fecha, cantidad, cuenta: true, ...extra });
+  const conPendientes = (pend: Record<string, OrdenPendienteId[]>): EstadoCargaId => ({ ...estado(), pendientesId: pend });
+  const VS = 'gid://shopify/ProductVariant/S', VXL = 'gid://shopify/ProductVariant/XL';
+
+  it('separa de la venta más vieja a la más nueva, sin pasar lo que llegó; lo marcado «-1» ya cuenta como separado', () => {
+    const ords = [orden('#2', 2, '2026-11-02'), orden('#1', 1, '2026-11-01')].sort((a, b) => a.fecha.localeCompare(b.fecha));
+    expect(separarDe(ords, 2, 0)).toEqual({ cantidad: 2, ordenes: [{ nombre: '#1', cantidad: 1 }, { nombre: '#2', cantidad: 1 }] });
+    expect(separarDe(ords, 5, 0)).toEqual({ cantidad: 3, ordenes: [{ nombre: '#1', cantidad: 1 }, { nombre: '#2', cantidad: 2 }] });
+    // El depósito ya sacó 1 («-1») para la #1: de lo que queda se separan las 2 de la #2.
+    expect(separarDe(ords, 2, 1)).toEqual({ cantidad: 2, ordenes: [{ nombre: '#2', cantidad: 2 }] });
+    expect(separarDe(ords, 1, 2)).toEqual({ cantidad: 1, ordenes: [{ nombre: '#2', cantidad: 1 }] });
+    expect(separarDe([orden('#1', 1, '2026-11-01')], 2, 1)).toEqual({ cantidad: 0, ordenes: [] });
+    // «solucionar» o sin pagar: no se descuentan.
+    expect(separarDe([orden('#9', 1, '2026-11-01', { cuenta: false, motivo: 'etiqueta solucionar' })], 2, 0).cantidad).toBe(0);
+  });
+
+  it('descuenta de la carga lo vendido y lo muestra; «cargarlo igual» suma todo', () => {
+    const r = resultado([fila([{ talle: 'S', cantidad: 2 }, { talle: 'XL', cantidad: 2 }])]);
+    const e = conPendientes({ [VS]: [orden('#210776', 1, '2026-10-29')], [VXL]: [orden('#205595', 1, '2026-07-16', { cuenta: false, motivo: 'etiqueta solucionar' })] });
+    const op = planCargaId(r, e, {}).items[0].opciones[0];
+    if (op.accion?.tipo !== 'reposicion') throw new Error('esperaba reposición');
+    expect(op.accion.lineas.map((l) => [l.talle, l.suma])).toEqual([['S', 1], ['XL', 2]]);
+    expect(op.separar).toEqual([{ talle: 'S', cantidad: 1, ordenes: [{ nombre: '#210776', cantidad: 1 }] }]);
+    expect(op.separarAplicado).toBe(true);
+    expect(op.avisos.join(' ')).toMatch(/no descuento: XL #205595 \(etiqueta solucionar\)/);
+    const plan = planCargaId(r, e, {});
+    expect(resumenCarga(plan, {}).lineas[0]).toMatch(/sumar 3 u\..*separar para órdenes de iD S ×1 \(#210776\)/);
+
+    const igual = planCargaId(r, e, {}, new Set(['CTO0325003'])).items[0].opciones[0];
+    if (igual.accion?.tipo !== 'reposicion') throw new Error('esperaba reposición');
+    expect(igual.accion.lineas.map((l) => [l.talle, l.suma])).toEqual([['S', 2], ['XL', 2]]);
+    expect(igual.separarAplicado).toBe(false);
+  });
+
+  it('si todo lo que llegó está vendido, no se suma nada pero se puede cargar igual', () => {
+    const r = resultado([fila([{ talle: 'S', cantidad: 1 }])]);
+    const e = conPendientes({ [VS]: [orden('#210776', 2, '2026-10-29')] });
+    const it = planCargaId(r, e, {}).items[0];
+    expect(it.estado).toBe('bloqueado');
+    expect(it.motivo).toMatch(/ya está vendido en iD/);
+    expect(it.opciones[0].separar).toEqual([{ talle: 'S', cantidad: 1, ordenes: [{ nombre: '#210776', cantidad: 1 }] }]);
+    expect(accionesElegidas(planCargaId(r, e, {}), {})).toEqual([]);
+    expect(planCargaId(r, e, {}, new Set(['CTO0325003'])).items[0].estado).toBe('listo');
+  });
+
+  it('si no se pudieron leer las ventas de iD, se avisa y no se separa nada', () => {
+    const plan = planCargaId(resultado([fila([{ talle: 'S', cantidad: 2 }])]), { ...estado(), errorPendientes: 'sin permiso' }, {});
+    expect(plan.avisos.join(' ')).toMatch(/No pude leer las ventas pendientes de iD \(sin permiso\)/);
+    const a = plan.items[0].opciones[0].accion;
+    expect(a?.tipo === 'reposicion' && a.lineas[0].suma).toBe(2);
+  });
+
+  it('lee solo las preparaciones abiertas de iD, de órdenes no canceladas, con todas las páginas (solo lectura)', async () => {
+    const fo = (id: string, status: string, order: object, lineas: object[], mas = false) => ({
+      id, status, order, lineItems: { pageInfo: { hasNextPage: mas, endCursor: mas ? 'L1' : null }, nodes: lineas },
+    });
+    const pagada = (name: string, extra: object = {}) => ({ name, createdAt: `2026-11-0${name.length}T00:00:00Z`, cancelledAt: null, displayFinancialStatus: 'PAID', tags: ['pedido id'], ...extra });
+    const linea = (id: string, q: number) => ({ remainingQuantity: q, variant: { id } });
+    const gql = shopify({
+      'fulfillmentOrders(': (v) => v.cursor
+        ? { fulfillmentOrders: { pageInfo: sinPagina, nodes: [fo('F3', 'IN_PROGRESS', pagada('#3', { displayFinancialStatus: 'PENDING' }), [linea(VS, 1)])] } }
+        : { fulfillmentOrders: { pageInfo: { hasNextPage: true, endCursor: 'C1' }, nodes: [
+          fo('F1', 'OPEN', pagada('#1'), [linea(VS, 1), linea('gid://otra', 5)], true),
+          fo('F2', 'OPEN', pagada('#22', { cancelledAt: '2026-11-02' }), [linea(VS, 1)]),
+          fo('F4', 'ON_HOLD', pagada('#4'), [linea(VS, 1)]),
+        ] } },
+      'fulfillmentOrder(id': () => ({ fulfillmentOrder: { lineItems: { pageInfo: sinPagina, nodes: [linea(VXL, 2), linea(VS, 0)] } } }),
+    });
+    const out = await leerPendientesId('gid://shopify/Location/92732457203', new Set([VS, VXL]), gql);
+    expect(out[VS]).toEqual([
+      { nombre: '#1', fecha: '2026-11-02T00:00:00Z', cantidad: 1, cuenta: true },
+      { nombre: '#3', fecha: '2026-11-02T00:00:00Z', cantidad: 1, cuenta: false, motivo: 'sin pagar' },
+    ]);
+    expect(out[VXL]).toEqual([{ nombre: '#1', fecha: '2026-11-02T00:00:00Z', cantidad: 2, cuenta: true }]);
+    expect(gql.mock.calls[0][1]).toMatchObject({ q: 'assigned_location_id:92732457203' });
+    expect(gql.mock.calls.every(([q]) => !/^\s*mutation/.test(q))).toBe(true);
   });
 });
