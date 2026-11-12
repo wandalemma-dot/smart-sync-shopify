@@ -53,8 +53,10 @@ const ESQUEMA = {
 const INSTRUCCIONES = `Transcribí este remito de un proveedor de calzado e indumentaria (puede venir en varias fotos: son páginas del mismo remito).
 Por cada artículo devolvé:
 - codigo: el código de artículo exacto como está impreso (por ejemplo 571818C, A12744C, LFO0125084, RBK110S236105). Sin el talle.
+  Si el código viene partido en dos columnas (modelo y color, por ejemplo RBKLIP15 y RBKGY2120), escribilos juntos con guion: RBKLIP15-RBKGY2120.
+  Si el código trae un agregado después de «---» (por ejemplo RBK1100225417---M12U 5/7,5 (3441)), escribí solo lo de antes: RBK1100225417.
 - talles: cada talle con su cantidad, tal como figura (por ejemplo 5.0, 5.5, 10.0, 040, S, M, XL, TU). Si el artículo no detalla talles, lista vacía.
-- cantidad: el total de unidades del artículo.
+- cantidad: el total del artículo tal como está impreso (si son packs, la cantidad de packs; no la conviertas a pares).
 También el número de remito y la fecha (AAAA-MM-DD) si se leen.
 Reglas:
 - No corrijas, no completes y no adivines. Si un código, talle o cantidad no se lee con seguridad, transcribí lo más probable y explicalo en «dudas» (código y qué no se lee).

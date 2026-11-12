@@ -123,10 +123,10 @@ function leerHoja(buf: ArrayBuffer, fecha: string, deTrello?: Pick<Bajado, 'verd
 }
 
 const SEMAFORO = {
-  ok: { icono: '✅', texto: 'OK para pagar', color: '#34d399' },
+  ok: { icono: '✅', texto: 'Todo coincide', color: '#34d399' },
   observaciones: { icono: '⚠️', texto: 'Con observaciones', color: '#fbbf24' },
-  reclamar: { icono: '❌', texto: 'Reclamar, no pagar', color: '#f87171' },
-  incompleta: { icono: '⏳', texto: 'Incompleta, no pagar todavía', color: '#94a3b8' },
+  reclamar: { icono: '❌', texto: 'No coincide: reclamar al proveedor', color: '#f87171' },
+  incompleta: { icono: '⏳', texto: 'Incompleta: falta el remito o la nota', color: '#94a3b8' },
 } as const;
 
 interface PdfJs {
@@ -756,7 +756,7 @@ export default function ControlFacturas() {
                 disabled={!nuevaFactura || !!ocupado} onClick={controlarEntrega}>Controlar</button>
             </div>
             <p style={{ fontSize: '0.8rem', opacity: 0.75, margin: '8px 0 0' }}>
-              La nota de pedido la busco sola en Trello. Si no la encuentro, te la pido en la entrega. Hasta tener las tres cosas, la entrega queda «incompleta» y no se paga.
+              La nota de pedido la busco sola en Trello. Si no la encuentro, te la pido en la entrega. Primero controlo que el remito traiga lo mismo que la factura; después, que la nota de pedido coincida con lo facturado y lo que llegó. Hasta tener las tres cosas, la entrega queda «incompleta».
             </p>
           </div>
 
@@ -777,7 +777,7 @@ export default function ControlFacturas() {
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 16, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
             <button style={enlace} onClick={() => setVista('pedidos')}>📋 Notas de pedido cargadas ({pedidosVigentes.length})</button>
             <button style={enlace} onClick={() => setVista('deposito')}>📦 Checklist del depósito</button>
-            <button style={enlace} onClick={() => setVista('reportes')}>💬 Mensajes para pagos y pendientes</button>
+            <button style={enlace} onClick={() => setVista('reportes')}>💬 Mensajes de control y pendientes</button>
           </div>
           <details style={{ marginTop: 14 }}>
             <summary style={{ cursor: 'pointer', fontSize: '0.88rem', opacity: 0.85 }}>🤖 ¿Otra consulta? Preguntale al asistente (órdenes pendientes, costo ponderado, un código)</summary>
@@ -916,6 +916,7 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
           </>}
         </Parte>
       </div>
+      <Controles r={r} unidadesRemito={unidadesRemito} pendiente={pendiente} />
       <TarjetasTrello ids={r.pedidosCubiertos} pedidos={pedidos} />
       {r.semaforo !== 'incompleta' && r.pedidosCubiertos.length > 0 && <PlanillasMarcadas r={r} res={res} pedidos={todas} nombrePedido={nombrePedido} ocupado={ocupado} consejos={consejos} />}
       {informe && <InformeTrelloCaja informe={informe} ocupado={ocupado} onRecargar={onRecargarBorrada} />}
@@ -992,6 +993,31 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
       )}
     </div>
   );
+}
+
+/**
+ * Los dos controles, en orden (gax, 12-nov-2026: «todo esto ya está pagado; es control y carga»):
+ * 1. el remito trae lo mismo que la factura; 2. la nota de pedido coincide con lo facturado y lo que llegó.
+ */
+function Controles({ r, unidadesRemito, pendiente }: { r: ResultadoFactura; unidadesRemito: number; pendiente: number }) {
+  const linea = (ok: boolean | null, texto: string) => (
+    <div style={{ color: ok === null ? '#94a3b8' : ok ? '#34d399' : '#f87171' }}>{ok === null ? '⏳' : ok ? '✔' : '✖'} {texto}</div>
+  );
+  const distintos = r.difRemito.length;
+  const remito = r.faltaRemito || !r.remito
+    ? linea(null, '1 · Remito contra factura: falta el remito.')
+    : linea(!distintos, `1 · Remito contra factura: ${!distintos ? `coinciden (${r.unidades} u.)` : `la factura dice ${r.unidades} u. y el remito ${unidadesRemito} u.; no coinciden ${distintos} artículo(s)`}.`);
+  const sinPedir = r.renglones.reduce((t, x) => t + x.sinPedir, 0);
+  const caros = r.renglones.filter((x) => x.difPrecio.some((d) => d.diferencia > 0)).length;
+  const problemas = [
+    sinPedir ? `${sinPedir} u. facturadas que no están en la nota` : '',
+    caros ? `${caros} artículo(s) más caros que en la nota` : '',
+    r.tallesNoPedidos.length ? `${r.tallesNoPedidos.length} talle(s) que no se pidieron` : '',
+  ].filter(Boolean);
+  const nota = r.faltaNota
+    ? linea(null, '2 · Nota de pedido: falta la nota.')
+    : linea(!problemas.length, `2 · Nota de pedido contra factura y remito: ${problemas.length ? problemas.join(' · ') : 'todo lo facturado está pedido'}${pendiente ? ` (de la nota falta entregar ${pendiente} u.)` : ''}.`);
+  return <div style={{ marginTop: 8, fontSize: '0.86rem' }}>{remito}{nota}</div>;
 }
 
 /** La copia más nueva de la planilla en Trello (la original si no hay otras). */

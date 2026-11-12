@@ -372,7 +372,7 @@ describe('tres partes obligatorias y remito', () => {
     const sinRemito = analizarFacturas([ped], [f], {}, {}).facturas[0];
     expect(sinRemito.semaforo).toBe('incompleta');
     expect(sinRemito.faltaRemito).toBe(true);
-    expect(mensajePagos(sinRemito)).toMatch(/⏳ INCOMPLETA, NO PAGAR TODAVÍA/);
+    expect(mensajePagos(sinRemito)).toMatch(/⏳ INCOMPLETA \(FALTA EL REMITO O LA NOTA\)/);
     const sinNota = analizarFacturas([], [f], {}, { 1: rem('571818C 6\nA12744C 4') }).facturas[0];
     expect(sinNota.semaforo).toBe('incompleta');
     expect(sinNota.faltaNota).toBe(true);
@@ -447,5 +447,50 @@ describe('huellaPedido (notas de Trello borradas a mano, 11-nov-2026)', () => {
     expect(huellaPedido(a)).toBe(huellaPedido(b));
     expect(huellaPedido(a)).toMatch(/^[a-z0-9]{1,16}$/);
     expect(huellaPedido([{ sku: 'A13438C-055', cantidad: 5 }, { sku: 'CTO0325003-S', cantidad: 2 }])).not.toBe(huellaPedido(a));
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Remito de Distrinando 0085-00206200 (12-nov-2026): hoja 2 con el código partido en dos
+// columnas, talles en US y packs contados en packs. Antes daba «el remito trae 0».
+describe('remito escrito como lo imprime Distrinando', () => {
+  const lin = (codigo: string, us: string, ar: string, cantidad: number, porUdm = 1) =>
+    ({ sku: `${codigo}-${us}`, codigo, descripcion: `NANOFLEX ${ar}`, talle: porUdm > 1 ? `Pack x${porUdm} (M12U 5/7,5 (3441))` : ar, unidadesPorUdm: porUdm, precioLista: 63982.4, descuento: 40, cantidad });
+  const nota: Pedido = { id: 'D', nombre: 'DISTRINANDO', fecha: '2026-11-05', lineas: [
+    lin('RBKLIP15-RBKGY2120', '8', 'AR 40', 3), lin('RBKLIP15-RBKGY2120', '8.5', 'AR 41', 5), lin('RBKLIP15-RBKGY2120', '9', 'AR 41.5', 5),
+    lin('RBKLTH41-RBKHQ1099', '9.5', 'AR 42', 4), lin('RBKLTH41-RBKHQ1099', '10', 'AR 43', 2),
+    lin('RBK1100225417', 'X', '', 24, 12),
+    lin('RBK110S236046', '11', 'AR 44', 4),
+  ] };
+  const f = factura('9', '2026-11-10', [ren('RBKLIP15-RBKGY2120', 13, 63982.4), ren('RBKLTH41-RBKHQ1099', 4, 63982.4), { ...ren('RBK1100225417', 24, 63982.4), descripcion: '5/7,5 (3441) · NANO COURT - BLACK/GREY 5 - M12U 5/7,5 (3441)' }, ren('RBK110S236046', 4, 63982.4)]);
+  const remito = { numero: '0085-00206200', fecha: '2026-11-10', renglones: [
+    { codigo: 'RBK110S236046', cantidad: 4, talles: [{ talle: '11', cantidad: 4 }] },
+    { codigo: 'RBKLIP15 RBKGY2120', cantidad: 13, talles: [{ talle: '8', cantidad: 3 }, { talle: '8.5', cantidad: 5 }, { talle: '9', cantidad: 5 }] },
+    { codigo: 'RBKLTH41', cantidad: 4, talles: [{ talle: '9.5', cantidad: 4 }] },
+    { codigo: 'RBK1100225417---M12U 5/7,5 (3441)', cantidad: 2, talles: [] },
+  ] };
+
+  it('cruza código partido, código con «---», packs y talles US', () => {
+    const r = analizarFacturas([nota], [f], {}, { 9: remito }).facturas[0];
+    expect(r.renglones.map((x) => [x.codigo, x.remito])).toEqual([['RBKLIP15-RBKGY2120', 13], ['RBKLTH41-RBKHQ1099', 4], ['RBK1100225417', 24], ['RBK110S236046', 4]]);
+    expect(r.difRemito).toEqual([]);
+    expect(r.tallesNoPedidos).toEqual([]);
+    expect(r.remito!.renglones[1].talles.map((t) => t.talle)).toEqual(['AR 40', 'AR 41', 'AR 41.5']);
+    expect(r.checklist.find((c) => c.codigo === 'RBKLTH41-RBKHQ1099')?.talles).toEqual([{ talle: 'AR 42', cantidad: 4 }]);
+    expect(r.motivos.join(' ')).not.toMatch(/REMITO|TALLES/);
+  });
+
+  it('no adivina: un pack que no da justo, o un modelo que está en dos códigos, queda como está', () => {
+    const otra = { ...remito, renglones: [{ codigo: 'RBK1100225417', cantidad: 3, talles: [] }] };
+    expect(analizarFacturas([nota], [f], {}, { 9: otra }).facturas[0].renglones[2].remito).toBe(3);
+    const dos = factura('8', '2026-11-10', [ren('RBKLIP15-RBKGY2120', 13), ren('RBKLIP15-RBKGY9999', 1)]);
+    const r = analizarFacturas([nota], [dos], {}, { 8: { ...remito, renglones: [{ codigo: 'RBKLIP15', cantidad: 13, talles: [] }] } }).facturas[0];
+    expect(r.renglones.map((x) => x.remito)).toEqual([0, 0]);
+    expect(r.difRemito.map((d) => d.codigo)).toContain('RBKLIP15');
+  });
+
+  it('«AR 43» de la nota y «43» del remito son el mismo talle', () => {
+    expect(mismoTalle('AR 43', '43')).toBe(true);
+    expect(mismoTalle('AR 43.5', '43')).toBe(false);
   });
 });
