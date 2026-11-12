@@ -1019,6 +1019,9 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
         <Parte ok={!r.faltaRemito} titulo="Remito" detalle={r.remito ? `${r.remito.numero || ''} · ${unidadesRemito} u.${r.remito.origen === 'foto' ? ' (de la foto)' : ''}` : 'falta'}>
           {r.faltaRemito && <Archivo etiqueta="📷 Subir foto" accept="image/*" multiple disabled={ocupado} estilo={botonChico} onArchivos={onFotos} />}
           <button style={botonChico} onClick={() => (editando ? setEditando(false) : abrirEditor())}>{r.remito ? '✏️ Ver o corregir' : '✏️ Escribirlo'}</button>
+          {r.remito && <Archivo etiqueta="📷 Volver a leer de la foto" accept="image/*" multiple disabled={ocupado} estilo={botonChico} onArchivos={(x) => { setEditando(false); onFotos(x); }} />}
+          {r.remito && <button style={{ ...botonChico, color: '#f87171' }} disabled={ocupado} title="Borra solo el remito de esta entrega (la factura, las notas y lo ya cargado en Shopify quedan). Después lo podés subir de nuevo."
+            onClick={() => { setEditando(false); onBorrarRemito(); }}>🗑️ Borrar remito</button>}
         </Parte>
         <Parte ok={!r.faltaNota && !r.codigosSinNota.length} titulo="Nota de pedido"
           detalle={r.faltaNota ? 'falta: no la encontré en Trello' : `${notas || '—'}${r.codigosSinNota.length ? ` · falta la de ${r.codigosSinNota.length} artículo(s)` : ''}`}>
@@ -1066,8 +1069,6 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
           <div style={{ display: 'flex', gap: 8, marginTop: 6, flexWrap: 'wrap' }}>
             <button style={{ ...botonChico, background: '#6366f1', border: '1px solid #6366f1' }} onClick={guardarTexto}>💾 Guardar remito</button>
             <button style={botonChico} onClick={() => setEditando(false)}>Cancelar</button>
-            {r.remito && <Archivo etiqueta="📷 Volver a leer de la foto" accept="image/*" multiple disabled={ocupado} estilo={botonChico} onArchivos={(x) => { setEditando(false); onFotos(x); }} />}
-            {r.remito && <button style={{ ...botonChico, color: '#f87171' }} onClick={onBorrarRemito}>Borrar remito</button>}
           </div>
         </div>
       )}
