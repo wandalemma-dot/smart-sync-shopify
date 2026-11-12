@@ -356,6 +356,11 @@ export interface ItemCarga {
   /** La primera es la elegida por defecto (en «elegir», «No cargar»). */
   opciones: OpcionCarga[];
   carga?: CargaFamily;
+  /**
+   * iD (12-nov-2026, gax: «que se coloque automáticamente pero que yo pueda escribir»): lo que llega por talle,
+   * editable antes de confirmar. `original` es lo del remito (menos las marcas «-1»).
+   */
+  talles?: { talle: string; cantidad: number; original: number }[];
 }
 export interface PlanCarga {
   entregaId: string; locationId: string; posId: string | null; items: ItemCarga[]; avisos: string[]; /** Para los mensajes (iD carga en Martínez). */ sucursal?: string;

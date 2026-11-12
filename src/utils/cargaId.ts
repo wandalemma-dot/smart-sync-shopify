@@ -421,7 +421,11 @@ const NO_CARGAR: OpcionCarga = { clave: 'no', etiqueta: 'No cargar este artícul
  * Vista previa de la carga de una entrega de iD. No escribe nada.
  * `cargas`: las marcas guardadas de todas las entregas de iD, leídas recién de la base.
  */
-export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: Record<string, CargaFamily>, modos: ReadonlyMap<string, ModoVenta> = new Map()): PlanCarga {
+/** Cantidades escritas a mano en la vista previa: código → talle → unidades a cargar. */
+export type CantidadesCarga = ReadonlyMap<string, Readonly<Record<string, number>>>;
+
+export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: Record<string, CargaFamily>, modos: ReadonlyMap<string, ModoVenta> = new Map(),
+  cantidades: CantidadesCarga = new Map()): PlanCarga {
   const f = r.factura;
   const avisos: string[] = [];
   const remito = r.remito?.numero || f.remito || '';
@@ -430,24 +434,32 @@ export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: 
   if (fuera.length) avisos.push(`En el remito y no en la factura: ${[...new Set(fuera)].join(', ')}. No se cargan desde acá: revisalo y cargalo a mano.`);
   if (r.difRemito.length) avisos.push('El remito y la factura no coinciden en algún artículo: se carga lo del remito (lo que llegó).');
   if (estado.errorPendientes) avisos.push(`No pude leer las ventas pendientes de iD (${estado.errorPendientes}): no separo nada. Revisá a mano si algo de lo que llegó ya está vendido antes de cargar.`);
-  const items = r.checklist.map((c): ItemCarga => {
-    const ren = r.factura.renglones.find((x) => claveCodigo(x.codigo) === claveCodigo(c.codigo));
-    const descripcion = ren?.descripcion || c.descripcion;
-    const firma = firmaCargaId(f.fecha, remito, c);
+  const items = r.checklist.map((orig): ItemCarga => {
+    const ren = r.factura.renglones.find((x) => claveCodigo(x.codigo) === claveCodigo(orig.codigo));
+    const descripcion = ren?.descripcion || orig.descripcion;
+    // La firma es la del remito, no la de lo escrito a mano: así la misma mercadería nunca se carga dos veces.
+    const firma = firmaCargaId(f.fecha, remito, orig);
+    const escritas = cantidades.get(orig.codigo);
+    const c = orig.talles && escritas
+      ? { ...orig, talles: orig.talles.map((t) => (escritas[t.talle] !== undefined ? { ...t, cantidad: escritas[t.talle] } : t)) }
+      : orig;
     const unidades = (c.talles ?? []).reduce((s, t) => s + t.cantidad, 0);
-    const base = { codigo: c.codigo, descripcion, unidades, firma };
+    const talles = c.talles?.map((t, i) => ({ talle: t.talle, cantidad: t.cantidad, original: orig.talles![i].cantidad }));
+    const cambiadas = (talles ?? []).filter((t) => t.cantidad !== t.original);
+    const base = { codigo: c.codigo, descripcion, unidades, firma, ...(talles ? { talles } : {}) };
     const bloqueado = (motivo: string): ItemCarga => ({ ...base, estado: 'bloqueado', motivo, opciones: [] });
     const carga = cargas[`${f.id}|${c.codigo}`];
-    if (carga) return { ...base, estado: 'cargado', motivo: textoCarga(carga), opciones: [], carga };
+    if (carga) return { codigo: c.codigo, descripcion, unidades, firma, estado: 'cargado', motivo: textoCarga(carga), opciones: [], carga };
     const otra = Object.entries(cargas).find(([k, x]) => !k.startsWith(`${f.id}|`) && x.firma === firma);
     if (otra) return bloqueado(`Esta misma mercadería (mismo día, remito, código y talles) ya se cargó desde otra entrega (${textoCarga(otra[1])}).`);
     if (!c.talles) return bloqueado('No sé qué talles llegaron: escribí el remito con los talles («✏️ Ver o corregir») y armá la carga de nuevo.');
-    if (!unidades) return bloqueado(c.retirado ? 'Todo lo que llegó salió para órdenes: no hay nada para cargar.' : 'No tiene cantidades.');
+    if (!unidades) return bloqueado(cambiadas.length ? 'Pusiste 0 en todos los talles: no hay nada para cargar.' : c.retirado ? 'Todo lo que llegó salió para órdenes: no hay nada para cargar.' : 'No tiene cantidades.');
     if (!buscable(c.codigo.toUpperCase())) return bloqueado('El código tiene caracteres que no puedo buscar en Shopify: cargalo a mano.');
     const ids = estado.porCodigo[c.codigo.toUpperCase()] ?? [];
     if (!ids.length) return bloqueado('No está en Shopify: crealo desde Sincronización (con el archivo de iD) y armá la carga de nuevo.');
     const opciones = ids.map((id) => opcion(c, descripcion, estado.productos[id], ren, estado.pendientesId, modos.get(c.codigo) ?? 'separar'));
-    if (c.retirado) for (const o of opciones) o.avisos.push(`Salieron ${c.retirado} para órdenes (marca a mano en el remito): no se suman.`);
+    if (c.retirado && !cambiadas.length) for (const o of opciones) o.avisos.push(`Salieron ${c.retirado} para órdenes (marca a mano en el remito): no se suman.`);
+    if (cambiadas.length) for (const o of opciones) o.avisos.push(`Cantidad escrita a mano: ${cambiadas.map((t) => `${t.talle} ${t.original}→${t.cantidad}`).join(' · ')} (el remito dice otra cosa).`);
     // Todo vendido en iD: queda bloqueado pero con la opción, para mostrar qué separar y «cargarlo igual».
     if (ids.length === 1) return opciones[0].bloqueo ? { ...bloqueado(opciones[0].bloqueo), opciones: opciones[0].separar ? opciones : [] } : { ...base, estado: 'listo', motivo: '', opciones };
     return { ...base, estado: 'elegir', motivo: `El código está en ${ids.length} productos de Shopify: elegí en cuál sumar el stock.`, opciones: [NO_CARGAR, ...opciones] };
