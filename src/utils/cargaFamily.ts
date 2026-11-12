@@ -276,7 +276,7 @@ export interface LineaOrdenId { lineaId: string; titulo: string; talle: string; 
 /** Unidades de esta entrega que se lleva una orden de iD: separadas, pasadas a Martínez o ya retiradas («-1»). */
 export interface CubiertaOrden { orden: string; lineaId: string; cantidad: number; como: 'separar' | 'pasar' | 'retirado' }
 /** Una venta de iD que pasa a prepararse desde Martínez después de sumar el stock. */
-export interface MoverVenta { talle: string; orden: string; cantidad: number; foId: string; lineaId: string }
+export interface MoverVenta { talle: string; orden: string; cantidad: number; foId: string; lineaId: string; /** Para dejar iD como estaba (gax, 12-nov-2026). */ inventoryItemId?: string }
 export interface ReposicionFamily {
   tipo: 'reposicion'; productoId: string; titulo: string; lineas: LineaReposicion[]; etiquetar: boolean; ajuste?: AjustePrecio;
   /** iD: vendido en iD que llegó en esta entrega. Con `separarAplicado` ya está descontado de `lineas`. */
@@ -366,6 +366,8 @@ export interface PlanCarga {
   entregaId: string; locationId: string; posId: string | null; items: ItemCarga[]; avisos: string[]; /** Para los mensajes (iD carga en Martínez). */ sucursal?: string;
   /** iD: todo lo que esperan de iD las órdenes que se llevan algo de esta entrega. */
   ordenesId?: Record<string, LineaOrdenId[]>;
+  /** iD: la sucursal del proveedor (para que pasar una venta a Martínez no libere stock ahí). */
+  idLocationId?: string;
 }
 
 const NO_CARGAR: OpcionCarga = { clave: 'no', etiqueta: 'No cargar este artículo', accion: null, avisos: [] };
@@ -529,6 +531,10 @@ const SUMAR = `mutation SumarFamily($input: InventorySetQuantitiesInput!, $key: 
 }`;
 const ACTIVAR = `mutation ActivarFamily($inventoryItemId: ID!, $locationId: ID!, $available: Int, $key: String!) {
   inventoryActivate(inventoryItemId: $inventoryItemId, locationId: $locationId, available: $available) @idempotent(key: $key) { inventoryLevel { id } userErrors { field message } }
+}`;
+// iD (12-nov-2026, gax: «si está en cero, que quede en cero»): el disponible de iD de lo que se pasa a Martínez.
+const DISPONIBLE_ID = `query DisponibleId($ids: [ID!]!, $loc: ID!) {
+  nodes(ids: $ids) { ... on InventoryItem { id inventoryLevel(locationId: $loc) { quantities(names: ["available"]) { name quantity } } } }
 }`;
 // iD (12-nov-2026, gax): pasa a Martínez la venta que estaba asignada a iD (la orden espera otro artículo).
 // Necesita el permiso write_merchant_managed_fulfillment_orders en la app de Shopify.
@@ -737,19 +743,64 @@ const ACCESO = /ACCESS_DENIED|access denied|write_merchant_managed_fulfillment_o
  * sus líneas: después de mover, Shopify puede cerrar esa preparación y crear otra. No se reintenta sola.
  * Devuelve el texto para cada código.
  */
-export async function pasarVentas(xs: { codigo: string; ventas: MoverVenta[] }[], plan: PlanCarga, deps: Pick<DepsCarga, 'gql'>): Promise<Record<string, string>> {
+/** Disponible en iD de cada artículo (null si no se pudo leer o no está dado de alta). */
+async function disponiblesId(ids: string[], loc: string, gql: DepsCarga['gql']): Promise<Map<string, number | null>> {
+  const out = new Map<string, number | null>(ids.map((id) => [id, null]));
+  if (!ids.length) return out;
+  try {
+    const d = (await gql(DISPONIBLE_ID, { ids, loc })) as { nodes?: ({ id?: string; inventoryLevel?: { quantities?: { name?: string; quantity?: number }[] } | null } | null)[] } | null;
+    for (const n of d?.nodes ?? []) {
+      const q = n?.inventoryLevel?.quantities?.find((x) => x.name === 'available');
+      if (n?.id && out.has(n.id) && Number.isInteger(q?.quantity)) out.set(n.id, q!.quantity!);
+    }
+  } catch { /* queda null: se avisa */ }
+  return out;
+}
+
+/**
+ * Al pasar una venta de iD a Martínez, Shopify libera esa unidad en iD (el disponible sube). Pero el disponible de
+ * iD es lo que el proveedor tiene, sincronizado: si estaba en 0, el proveedor no tiene más y esa unidad no existe.
+ * Se deja iD como estaba antes de mover (gax, 12-nov-2026), con control de cambio: si el número no es el esperado,
+ * no se toca y se avisa.
+ */
+async function dejarIdComoEstaba(antes: Map<string, number | null>, loc: string, deps: Pick<DepsCarga, 'gql' | 'clave'>): Promise<{ ok: string[]; mal: string[] }> {
+  const ids = [...antes.keys()];
+  const despues = await disponiblesId(ids, loc, deps.gql);
+  const ok: string[] = [], mal: string[] = [];
+  const quantities: { inventoryItemId: string; locationId: string; quantity: number; changeFromQuantity: number }[] = [];
+  for (const id of ids) {
+    const a = antes.get(id), d = despues.get(id);
+    if (a == null || d == null) { mal.push(id); continue; }
+    if (d > a) quantities.push({ inventoryItemId: id, locationId: loc, quantity: a, changeFromQuantity: d });
+    else ok.push(id);
+  }
+  if (!quantities.length) return { ok, mal };
+  try {
+    const r = (await deps.gql(SUMAR, { input: { name: 'available', reason: 'correction', quantities }, key: deps.clave() })) as
+      { inventorySetQuantities?: { inventoryAdjustmentGroup?: unknown; userErrors?: unknown[] } } | null;
+    const ue = r?.inventorySetQuantities?.userErrors;
+    if (Array.isArray(ue) && !ue.length && r?.inventorySetQuantities?.inventoryAdjustmentGroup) ok.push(...quantities.map((q) => q.inventoryItemId));
+    else mal.push(...quantities.map((q) => q.inventoryItemId));
+  } catch { mal.push(...quantities.map((q) => q.inventoryItemId)); }
+  return { ok, mal };
+}
+
+export async function pasarVentas(xs: { codigo: string; ventas: MoverVenta[] }[], plan: PlanCarga, deps: Pick<DepsCarga, 'gql' | 'clave'>): Promise<Record<string, string>> {
   const porFO = new Map<string, { codigo: string; v: MoverVenta }[]>();
   for (const x of xs) for (const v of x.ventas) {
     const g = porFO.get(v.foId) ?? [];
     g.push({ codigo: x.codigo, v });
     porFO.set(v.foId, g);
   }
-  const bien: Record<string, string[]> = {}, mal: Record<string, string[]> = {};
+  const bien: Record<string, string[]> = {}, mal: Record<string, string[]> = {}, revisar: Record<string, string[]> = {};
+  const loc = plan.idLocationId;
   const anotar = (destino: Record<string, string[]>, g: { codigo: string; v: MoverVenta }[], extra = '') => {
     for (const { codigo, v } of g) (destino[codigo] ??= []).push(`${v.talle} ${v.orden}${extra}`);
   };
   for (const [foId, g] of porFO) {
     const items = [...new Map(g.map(({ v }) => [v.lineaId, 0])).keys()].map((id) => ({ id, quantity: g.filter(({ v }) => v.lineaId === id).reduce((t, { v }) => t + v.cantidad, 0) }));
+    const articulos = [...new Set(g.map(({ v }) => v.inventoryItemId).filter((x): x is string => !!x))];
+    const antes = loc ? await disponiblesId(articulos, loc, deps.gql) : new Map<string, number | null>();
     try {
       const d = (await deps.gql(PASAR_VENTA, { id: foId, loc: plan.locationId, items })) as
         { fulfillmentOrderMove?: { movedFulfillmentOrder?: { id?: string } | null; userErrors?: { message?: string }[] } } | null;
@@ -757,7 +808,11 @@ export async function pasarVentas(xs: { codigo: string; ventas: MoverVenta[] }[]
       if (!Array.isArray(ue)) anotar(mal, g, DUDA);
       else if (ue.length) anotar(mal, g, ` (${errores(ue)})`);
       else if (!d?.fulfillmentOrderMove?.movedFulfillmentOrder?.id) anotar(mal, g, DUDA);
-      else anotar(bien, g);
+      else {
+        anotar(bien, g);
+        const r = loc ? await dejarIdComoEstaba(antes, loc, deps) : { ok: [], mal: articulos };
+        for (const x of g) if (!x.v.inventoryItemId || r.mal.includes(x.v.inventoryItemId)) (revisar[x.codigo] ??= []).push(x.v.talle);
+      }
     } catch (e) {
       anotar(mal, g, ACCESO.test(motivo(e))
         ? ' (a la app le falta el permiso write_merchant_managed_fulfillment_orders en Shopify)'
@@ -768,6 +823,7 @@ export async function pasarVentas(xs: { codigo: string; ventas: MoverVenta[] }[]
   for (const codigo of new Set(xs.map((x) => x.codigo))) {
     const t: string[] = [];
     if (bien[codigo]) t.push(`🔀 Venta pasada de iD a ${plan.sucursal ?? 'Martínez'}: ${bien[codigo].join(', ')}.`);
+    if (revisar[codigo]) t.push(`⚠️ Revisá el stock de iD de ${[...new Set(revisar[codigo])].join(', ')}: al pasar la venta, Shopify pudo dejar una unidad libre en iD y no la pude volver a dejar como estaba. Si el proveedor no la tiene, ponela a mano como estaba.`);
     if (mal[codigo]) t.push(`⚠️ No pude pasar la venta a ${plan.sucursal ?? 'Martínez'}: ${mal[codigo].join(', ')}. El stock ya quedó sumado: pasala a mano en la orden («⋯» → «Cambiar ubicación»).`);
     out[codigo] = t.join(' ');
   }

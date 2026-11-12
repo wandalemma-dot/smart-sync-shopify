@@ -51,6 +51,8 @@ export interface EstadoCargaId {
   errorPendientes?: string;
   /** Todo lo que cada una de esas órdenes espera de iD (para decir cuáles ya pueden salir). */
   ordenesId?: Record<string, LineaOrdenId[]>;
+  /** La sucursal de iD (para dejar su stock como estaba al pasar una venta a Martínez). */
+  idLocationId?: string;
 }
 
 export interface OrdenPendienteId {
@@ -162,7 +164,8 @@ export async function leerEstadoCargaId(codigos: string[], gql: Gql): Promise<Es
   const estado: EstadoCargaId = { locationId: loc.id, porCodigo, productos };
   const locId = suc.locations.nodes.find((l) => mismaSucursal(l.name, SUCURSAL_ID));
   if (!locId) estado.errorPendientes = `no encontré la sucursal ${SUCURSAL_ID}`;
-  else if (ids.size) {
+  else estado.idLocationId = locId.id;
+  if (locId && ids.size) {
     const variantes = new Set(Object.values(productos).flatMap((p) => p.variantes.map((v) => v.id)));
     try { ({ porVariante: estado.pendientesId, porOrden: estado.ordenesId } = await leerVentasId(locId.id, variantes, gql)); }
     catch (e) { estado.errorPendientes = e instanceof Error ? e.message : 'error'; }
@@ -377,7 +380,7 @@ function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefi
       movibles += o.cantidad;
       if (modo !== 'pasar') continue;
       pasan += o.cantidad;
-      mover.push({ talle: l.v.talle, orden: o.nombre, cantidad: o.cantidad, foId: o.fo.id, lineaId: o.fo.lineaId });
+      mover.push({ talle: l.v.talle, orden: o.nombre, cantidad: o.cantidad, foId: o.fo.id, lineaId: o.fo.lineaId, inventoryItemId: l.v.inventoryItemId });
     }
     if (modo === 'pasar') for (const o of s.ordenes) if (!o.fo?.abierta) enCurso.push(`${l.v.talle} ${o.nombre}`);
     // Qué orden se lleva cada unidad que llegó (para decir cuáles ya pueden salir). «Cargarlo igual»: ya se separó antes.
@@ -396,7 +399,7 @@ function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefi
     : separar;
   const sepAccion = separadas.length ? { separar: separadas, separarAplicado: modo !== 'igual' } : {};
   if (enCurso.length) avisos.push(`No puedo pasar a Martínez la venta de ${enCurso.join(', ')}: en Shopify figura en preparación en iD. Esas unidades se separan; pasala a mano si hace falta.`);
-  if (mover.length) avisos.push(`Después de sumar el stock, la venta de ${mover.map((m) => `${m.talle} ${m.orden}`).join(', ')} pasa de iD a Martínez (en Shopify la orden queda en dos envíos si tiene otros artículos en iD, y esa unidad queda libre en el stock de iD hasta la próxima sincronización).`);
+  if (mover.length) avisos.push(`Después de sumar el stock, la venta de ${mover.map((m) => `${m.talle} ${m.orden}`).join(', ')} pasa de iD a Martínez (en Shopify la orden queda en dos envíos si tiene otros artículos en iD). El stock de iD queda como estaba: la unidad que Shopify libera ahí no se suma, porque iD lo lleva la sincronización.`);
   if (otras.length) avisos.push(`También hay ventas pendientes en iD que no descuento: ${otras.join(', ')}. Revisalas a mano.`);
   // Todo vendido en iD: no se suma stock, pero el precio y el costo de la factura se actualizan igual
   // (12-nov-2026, gax: «no saques lo del precio, es importante actualizarlo igual»).
@@ -464,7 +467,7 @@ export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: 
     if (ids.length === 1) return opciones[0].bloqueo ? { ...bloqueado(opciones[0].bloqueo), opciones: opciones[0].separar ? opciones : [] } : { ...base, estado: 'listo', motivo: '', opciones };
     return { ...base, estado: 'elegir', motivo: `El código está en ${ids.length} productos de Shopify: elegí en cuál sumar el stock.`, opciones: [NO_CARGAR, ...opciones] };
   });
-  return { entregaId: f.id, locationId: estado.locationId, posId: null, items, avisos, sucursal: SUCURSAL_CARGA_ID, ...(estado.ordenesId ? { ordenesId: estado.ordenesId } : {}) };
+  return { entregaId: f.id, locationId: estado.locationId, posId: null, items, avisos, sucursal: SUCURSAL_CARGA_ID, ...(estado.ordenesId ? { ordenesId: estado.ordenesId } : {}), ...(estado.idLocationId ? { idLocationId: estado.idLocationId } : {}) };
 }
 
 /** Cuántos artículos de la factura ya están cargados en Shopify. */
