@@ -27,7 +27,7 @@ import EnlacesRapidos from './EnlacesRapidos';
 import { Archivo, Copiar, Parte } from './EntregasPartes';
 import { PanelCarga } from './PanelCarga';
 import { ejecutarCargaFamily, resumenCarga, textoCarga, type CargaFamily, type EleccionesCarga, type PlanCarga } from './utils/cargaFamily';
-import { estadoCargaFactura, leerEstadoCargaId, planCargaId, precioYCostoAntes, SUCURSAL_CARGA_ID } from './utils/cargaId';
+import { estadoCargaFactura, leerEstadoCargaId, planCargaId, precioYCostoAntes, SUCURSAL_CARGA_ID, type EstadoCargaId } from './utils/cargaId';
 import { actualizarPreciosManualmente, shopifyGraphQL } from './utils/shopify';
 import {
   apiControl, boton, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, nombreArchivoPlanilla, slug, td, th,
@@ -189,6 +189,8 @@ export default function ControlFacturas() {
   const [verCerradas, setVerCerradas] = useState(false);
   // iD: vista previa de la carga en Shopify (una entrega por vez).
   const [planCarga, setPlanCarga] = useState<PlanCarga | null>(null);
+  // Lo leído para armar la carga: «cargarlo igual» (no separar lo vendido en iD) rearma sin volver a leer.
+  const baseCarga = useRef<{ r: ResultadoFactura; estado: EstadoCargaId; cargas: Record<string, CargaFamily>; igual: Set<string> } | null>(null);
   const listasRevisadas = useRef(new Set<Prov>());
   // Proveedor elegido ahora: una búsqueda o carga que termina después de cambiarlo no toca la pantalla.
   const provRef = useRef(prov);
@@ -648,9 +650,18 @@ export default function ControlFacturas() {
       const estado = await leerEstadoCargaId(r.checklist.map((c) => c.codigo), shopifyGraphQL);
       if (!sigue(p)) return;
       setDatos({ ...VACIO, ...d });
+      baseCarga.current = { r, estado, cargas: d.cargas ?? {}, igual: new Set() };
       setPlanCarga(planCargaId(r, estado, d.cargas ?? {}));
     } catch (e) { if (sigue(p)) setAvisos([`No pude armar la carga: ${mensaje(e)} No se cargó nada.`]); }
     finally { setOcupado(''); }
+  }
+
+  /** Lo vendido en iD: separarlo (por defecto) o cargarlo igual (si ya se separó antes). */
+  function cargarIgual(codigo: string, si: boolean) {
+    const b = baseCarga.current;
+    if (!b) return;
+    if (si) b.igual.add(codigo); else b.igual.delete(codigo);
+    setPlanCarga(planCargaId(b.r, b.estado, b.cargas, new Set(b.igual)));
   }
 
   async function confirmarCarga(r: ResultadoFactura, plan: PlanCarga, elecciones: EleccionesCarga) {
@@ -840,7 +851,7 @@ export default function ControlFacturas() {
             carga={prov === 'id' ? {
               cargas: datos.cargas ?? {}, plan: planCarga?.entregaId === r.factura.id ? planCarga : null,
               onArmar: () => armarCarga(r), onConfirmar: (e) => planCarga && confirmarCarga(r, planCarga, e),
-              onCancelar: () => setPlanCarga(null), onLiberar: (codigo, c) => liberarCarga(r.factura.id, codigo, c),
+              onCancelar: () => setPlanCarga(null), onLiberar: (codigo, c) => liberarCarga(r.factura.id, codigo, c), onCargarIgual: cargarIgual,
             } : undefined} />)}
 
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 16, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
@@ -941,7 +952,7 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
   /** iD: carga en Shopify (Martínez). */
   carga?: {
     cargas: Record<string, CargaFamily>; plan: PlanCarga | null; onArmar: () => void; onConfirmar: (e: EleccionesCarga) => void;
-    onCancelar: () => void; onLiberar: (codigo: string, c: CargaFamily) => void;
+    onCancelar: () => void; onLiberar: (codigo: string, c: CargaFamily) => void; onCargarIgual: (codigo: string, si: boolean) => void;
   };
 }) {
   const f = r.factura;
@@ -1010,7 +1021,8 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
         </div>)}
       </div>}
       {carga?.plan && <PanelCarga plan={carga.plan} ocupado={ocupado} onConfirmar={carga.onConfirmar} onCancelar={carga.onCancelar} sucursal={SUCURSAL_CARGA_ID}
-        explicacion="Lo que llegó (el remito, menos lo que salió para órdenes) se SUMA al stock de Martínez; el stock de iD lo lleva la sincronización. Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (si un talle que llega ya tenía stock, lleva el promedio ponderado), y si el margen no llega al 50% hay que poner un precio nuevo para toda la curva. Los productos que no están en Shopify se crean desde Sincronización." />}
+        onCargarIgual={carga.onCargarIgual}
+        explicacion="Lo que llegó (el remito, menos lo que salió para órdenes y lo que ya está vendido en iD, que se separa) se SUMA al stock de Martínez; el stock de iD lo lleva la sincronización. Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (si un talle que llega ya tenía stock, lleva el promedio ponderado), y si el margen no llega al 50% hay que poner un precio nuevo para toda la curva. Los productos que no están en Shopify se crean desde Sincronización." />}
       <TarjetasTrello ids={r.pedidosCubiertos} pedidos={pedidos} />
       {r.semaforo !== 'incompleta' && r.pedidosCubiertos.length > 0 && <PlanillasMarcadas r={r} res={res} pedidos={todas} nombrePedido={nombrePedido} ocupado={ocupado} consejos={consejos} />}
       {informe && <InformeTrelloCaja informe={informe} ocupado={ocupado} onRecargar={onRecargarBorrada} />}

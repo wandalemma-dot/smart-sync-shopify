@@ -24,12 +24,17 @@ function inspectOperation(query) {
   return { operation: operations[0].operation, roots };
 }
 
+// Lecturas que van a la API 2026-07 (el resto sigue en 2024-04): los informes de ShopifyQL y las
+// ventas sin preparar de iD (fulfillmentOrders con el filtro assigned_location_id, carga de iD 12-nov-2026).
+const VERSION_NUEVA = new Set(['shopifyqlQuery', 'fulfillmentOrders']);
+const versionNueva = roots => roots.some(name => VERSION_NUEVA.has(name));
+
 // El bot sigue teniendo únicamente las consultas acotadas de stock.
 export function inspectReadQuery(query, automation = false) {
   const { operation, roots } = inspectOperation(query);
   if (operation !== 'query') throw new Error('Read only');
   if (automation && roots.some(name => !['shop', 'locations', 'products'].includes(name))) throw new Error('Read scope');
-  return { reports: roots.includes('shopifyqlQuery') };
+  return { reports: versionNueva(roots) };
 }
 
 // Funciones manuales existentes, sin filtro de marca. Requiere sesión humana
@@ -41,7 +46,7 @@ const manualWrites = new Set([
 ]);
 export function inspectUserQuery(query) {
   const { operation, roots } = inspectOperation(query);
-  if (operation === 'query') return { reports: roots.includes('shopifyqlQuery') };
+  if (operation === 'query') return { reports: versionNueva(roots) };
   if (operation !== 'mutation' || !roots.length || roots.some(name => !manualWrites.has(name))) throw new Error('Unsupported app operation');
   return { reports: false, write: true };
 }

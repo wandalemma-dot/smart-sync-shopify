@@ -16,11 +16,16 @@
 //     llega y ya tenía stock en Martínez lleva el promedio ponderado (lo que había a su costo +
 //     lo que llega al costo nuevo); los que tienen stock y no llegan conservan el suyo. Se
 //     escribe por /api/prices ANTES del stock (el servidor relee stock y costo del promedio).
+//   · Vendido en iD (12-nov-2026, gax): las ventas sin preparar asignadas a la sucursal de iD
+//     (las que se le piden a iD) se SEPARAN de lo que llegó y no se suman a Martínez. Se leen en
+//     vivo (fulfillment orders abiertas de iD); lo que el depósito ya marcó «-1» en el remito cuenta
+//     como separado. Órdenes canceladas, sin pagar o con la etiqueta «solucionar» no se descuentan:
+//     se avisan. Si ya se separó antes, «cargarlo igual» suma todo.
 // La ejecución, la marca «una sola vez» y la vista previa son las mismas de Family.
 // ============================================================================
 import { claveCodigo, fmt, type FilaChecklist, type RenglonFactura, type ResultadoFactura } from './controlFacturas';
 import {
-  llegaAl50, textoCarga, type AjustePrecio, type CargaFamily, type ItemCarga, type LineaReposicion, type OpcionCarga, type PlanCarga, type ReposicionFamily,
+  llegaAl50, textoCarga, type AjustePrecio, type SepararId, type CargaFamily, type ItemCarga, type LineaReposicion, type OpcionCarga, type PlanCarga, type ReposicionFamily,
 } from './cargaFamily';
 import { esPrecioSugerido } from './conversePreciosFijos';
 import { margenPct } from './margen';
@@ -28,6 +33,8 @@ import { converseTablaInfo, LOC_MARTINEZ_NOMBRE, precioId, redondear2, talleShop
 import { mismaSucursal } from './shopify';
 
 export const SUCURSAL_CARGA_ID = LOC_MARTINEZ_NOMBRE;
+/** Sucursal del proveedor: sus ventas sin preparar son las que se separan de la entrega. */
+export const SUCURSAL_ID = 'ID (Converse - Le Coq Sportif)';
 
 type Gql = (query: string, variables?: Record<string, unknown>) => Promise<unknown>;
 
@@ -38,6 +45,15 @@ export interface EstadoCargaId {
   /** código de la factura → productos de Shopify que lo llevan en el SKU o en una etiqueta. */
   porCodigo: Record<string, string[]>;
   productos: Record<string, ProductoId>;
+  /** Ventas sin preparar asignadas a iD, por variante (lo que llega puede ser para ellas). */
+  pendientesId?: Record<string, OrdenPendienteId[]>;
+  /** No se pudieron leer: se avisa y no se separa nada. */
+  errorPendientes?: string;
+}
+export interface OrdenPendienteId {
+  nombre: string; fecha: string; cantidad: number;
+  /** false = se avisa pero no se descuenta (cancelada, sin pagar o «solucionar»). */
+  cuenta: boolean; motivo?: string;
 }
 
 const buscable = (c: string) => /^[A-Z0-9._-]+$/.test(c);
@@ -73,6 +89,19 @@ const Q_PRODUCTO = `query($id: ID!, $loc: ID!) {
     id title vendor status tags
     variants(first: 100) { nodes { id title sku price inventoryItem { id tracked unitCost { amount } inventoryLevel(locationId: $loc) { quantities(names: ["available"]) { name quantity } } } } }
   }
+}`;
+const Q_PENDIENTES_ID = `query($q: String!, $cursor: String) {
+  fulfillmentOrders(first: 20, after: $cursor, query: $q) {
+    pageInfo { hasNextPage endCursor }
+    nodes {
+      id status
+      order { name createdAt cancelledAt displayFinancialStatus tags }
+      lineItems(first: 40) { pageInfo { hasNextPage endCursor } nodes { remainingQuantity variant { id } } }
+    }
+  }
+}`;
+const Q_LINEAS_FO = `query($id: ID!, $cursor: String) {
+  fulfillmentOrder(id: $id) { lineItems(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { remainingQuantity variant { id } } } }
 }`;
 interface Pagina<T> { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: T[] }
 type NodoProducto = {
@@ -125,7 +154,79 @@ export async function leerEstadoCargaId(codigos: string[], gql: Gql): Promise<Es
       }),
     };
   }
-  return { locationId: loc.id, porCodigo, productos };
+  const estado: EstadoCargaId = { locationId: loc.id, porCodigo, productos };
+  const locId = suc.locations.nodes.find((l) => mismaSucursal(l.name, SUCURSAL_ID));
+  if (!locId) estado.errorPendientes = `no encontré la sucursal ${SUCURSAL_ID}`;
+  else if (ids.size) {
+    const variantes = new Set(Object.values(productos).flatMap((p) => p.variantes.map((v) => v.id)));
+    try { estado.pendientesId = await leerPendientesId(locId.id, variantes, gql); }
+    catch (e) { estado.errorPendientes = e instanceof Error ? e.message : 'error'; }
+  }
+  return estado;
+}
+
+type LineaFO = { remainingQuantity: number; variant: { id: string } | null };
+type NodoFO = {
+  id: string; status: string;
+  order: { name: string; createdAt: string; cancelledAt: string | null; displayFinancialStatus: string | null; tags?: string[] } | null;
+  lineItems: Pagina<LineaFO>;
+};
+const PAGADA = new Set(['PAID', 'PARTIALLY_PAID', 'PARTIALLY_REFUNDED']);
+/** Ventas sin preparar asignadas a iD (solo lectura), de las variantes que interesan. */
+export async function leerPendientesId(locationId: string, variantes: Set<string>, gql: Gql): Promise<Record<string, OrdenPendienteId[]>> {
+  const num = locationId.split('/').pop();
+  const out: Record<string, OrdenPendienteId[]> = {};
+  let cursor: string | null = null;
+  for (let pagina = 0; ; pagina++) {
+    if (pagina >= 80) throw new Error('hay demasiadas ventas pendientes en iD para leerlas todas');
+    const d = (await gql(Q_PENDIENTES_ID, { q: `assigned_location_id:${num}`, cursor })) as { fulfillmentOrders: Pagina<NodoFO> };
+    for (const fo of d.fulfillmentOrders.nodes) {
+      if (fo.status !== 'OPEN' && fo.status !== 'IN_PROGRESS') continue;
+      const o = fo.order;
+      if (!o || o.cancelledAt) continue;
+      const lineas = [...fo.lineItems.nodes];
+      let lc = fo.lineItems.pageInfo.hasNextPage ? fo.lineItems.pageInfo.endCursor : null;
+      for (let i = 0; lc && i < 20; i++) {
+        const m = (await gql(Q_LINEAS_FO, { id: fo.id, cursor: lc })) as { fulfillmentOrder: { lineItems: Pagina<LineaFO> } | null };
+        if (!m.fulfillmentOrder) break;
+        lineas.push(...m.fulfillmentOrder.lineItems.nodes);
+        lc = m.fulfillmentOrder.lineItems.pageInfo.hasNextPage ? m.fulfillmentOrder.lineItems.pageInfo.endCursor : null;
+      }
+      const solucionar = (o.tags ?? []).some((t) => String(t).trim().toLowerCase() === 'solucionar');
+      const pagada = PAGADA.has(String(o.displayFinancialStatus || ''));
+      const motivo = solucionar ? 'etiqueta solucionar' : pagada ? undefined : 'sin pagar';
+      for (const l of lineas) {
+        const id = l.variant?.id;
+        if (!id || !variantes.has(id) || !(l.remainingQuantity > 0)) continue;
+        (out[id] ??= []).push({ nombre: o.name, fecha: o.createdAt, cantidad: l.remainingQuantity, cuenta: !motivo, ...(motivo ? { motivo } : {}) });
+      }
+    }
+    if (!d.fulfillmentOrders.pageInfo.hasNextPage) break;
+    cursor = d.fulfillmentOrders.pageInfo.endCursor;
+  }
+  for (const xs of Object.values(out)) xs.sort((a, b) => a.fecha.localeCompare(b.fecha));
+  return out;
+}
+
+/**
+ * Cuánto de lo que llegó de una variante es para ventas de iD: hasta lo pendiente (de la más vieja a la más
+ * nueva), sin pasar lo que llegó. Lo que el depósito ya marcó «-1» cuenta como separado (no se separa dos veces).
+ */
+export function separarDe(ordenes: OrdenPendienteId[], cantidad: number, retirado: number): { cantidad: number; ordenes: { nombre: string; cantidad: number }[] } {
+  const cuentan = ordenes.filter((o) => o.cuenta);
+  const pendiente = cuentan.reduce((s, o) => s + o.cantidad, 0);
+  const total = Math.min(cantidad + retirado, pendiente);
+  const sep = Math.max(0, Math.min(cantidad, total - retirado));
+  const out: { nombre: string; cantidad: number }[] = [];
+  let saltar = retirado, falta = sep;
+  for (const o of cuentan) {
+    let q = o.cantidad;
+    const s = Math.min(saltar, q); saltar -= s; q -= s;
+    const t = Math.min(falta, q); falta -= t;
+    if (t > 0) out.push({ nombre: o.nombre, cantidad: t });
+    if (!falta) break;
+  }
+  return { cantidad: sep, ordenes: out };
 }
 
 // ---------------------------------------------------------------------------
@@ -215,13 +316,14 @@ export function costoPromedio(stock: number, costo: number, suma: number, costoN
   return Math.round((stock * Math.round(costo * 100) + suma * Math.round(costoNuevo * 100)) / (stock + suma)) / 100;
 }
 
-function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefined, ren?: RenglonFactura): OpcionCarga {
+function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefined, ren: RenglonFactura | undefined,
+  pendientes: Record<string, OrdenPendienteId[]> | undefined, cargarIgual: boolean): OpcionCarga {
   if (!p) return { clave: 'falta', etiqueta: 'Producto que no pude leer', accion: null, bloqueo: 'No pude leer ese producto en Shopify.', avisos: [] };
   const avisos: string[] = [];
   const base = { clave: `repo:${p.id}`, etiqueta: `Sumar el stock en «${p.titulo}»`, avisos };
   const marca = marcaDe(p.vendor);
   if (!marca) return { ...base, accion: null, bloqueo: `«${p.titulo}» es de ${p.vendor || 'otra marca'}, no de Converse ni Le Coq: cargalo a mano.` };
-  const lineas: LineaReposicion[] = [];
+  const llegan: { v: VarianteId; cantidad: number; retirado: number }[] = [];
   const problemas: string[] = [];
   for (const t of fila.talles ?? []) {
     if (!(t.cantidad > 0)) continue;
@@ -232,11 +334,26 @@ function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefi
     if (!vs.length) { problemas.push(`no existe el talle ${como}`); continue; }
     if (vs.length > 1) { problemas.push(`hay dos variantes del talle ${como}`); continue; }
     if (!vs[0].seguimiento || !vs[0].inventoryItemId) { problemas.push(`el talle ${como} no lleva control de stock`); continue; }
-    const ya = lineas.find((l) => l.inventoryItemId === vs[0].inventoryItemId);
-    if (ya) { ya.suma += t.cantidad; continue; }
-    lineas.push({ talle: vs[0].talle, inventoryItemId: vs[0].inventoryItemId, actual: vs[0].disponible, suma: t.cantidad });
+    const ya = llegan.find((l) => l.v.id === vs[0].id);
+    if (ya) { ya.cantidad += t.cantidad; ya.retirado += t.retirado ?? 0; continue; }
+    llegan.push({ v: vs[0], cantidad: t.cantidad, retirado: t.retirado ?? 0 });
   }
   if (problemas.length) return { ...base, accion: null, bloqueo: `En «${p.titulo}»: ${problemas.join('; ')}. Corregilo en Shopify (o el remito) y armá la carga de nuevo.` };
+  // Vendido en iD: se separa para esas órdenes y no se suma (salvo «cargarlo igual»).
+  const separar: SepararId[] = [];
+  const otras: string[] = [];
+  const lineas: LineaReposicion[] = [];
+  for (const l of llegan) {
+    const ords = pendientes?.[l.v.id] ?? [];
+    const s = separarDe(ords, l.cantidad, l.retirado);
+    if (s.cantidad) separar.push({ talle: l.v.talle, cantidad: s.cantidad, ordenes: s.ordenes });
+    for (const o of ords) if (!o.cuenta) otras.push(`${l.v.talle} ${o.nombre} (${o.motivo})`);
+    const suma = cargarIgual ? l.cantidad : l.cantidad - s.cantidad;
+    if (suma > 0) lineas.push({ talle: l.v.talle, inventoryItemId: l.v.inventoryItemId, actual: l.v.disponible, suma });
+  }
+  const sep = separar.length ? { separar, separarAplicado: !cargarIgual } : {};
+  if (otras.length) avisos.push(`También hay ventas pendientes en iD que no descuento: ${otras.join(', ')}. Revisalas a mano.`);
+  if (!lineas.length) return { ...base, ...sep, accion: null, bloqueo: 'Todo lo que llegó ya está vendido en iD: separalo para esas órdenes. No queda nada para sumar en Martínez.' };
   for (const l of lineas) if (l.actual === null) avisos.push(`Talle ${l.talle}: no está dado de alta en ${SUCURSAL_CARGA_ID}; se da de alta con ${l.suma}.`);
   if (p.estado !== 'ACTIVE') avisos.push(`El producto está ${p.estado === 'DRAFT' ? 'en borrador' : 'archivado'} en Shopify: se le suma igual el stock.`);
   const ajuste = ren ? ajusteDe(p, ren, lineas) : null;
@@ -244,7 +361,7 @@ function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefi
   else {
     for (const c of ajuste.conservan) if (c.motivo) avisos.push(`Talle ${c.talle}: ya tenía ${c.stock} en Martínez y ${c.motivo}. Conserva su costo: revisalo a mano.`);
   }
-  return { ...base, accion: { tipo: 'reposicion', productoId: p.id, titulo: p.titulo, lineas, etiquetar: false, ...(ajuste ? { ajuste } : {}) } };
+  return { ...base, ...sep, accion: { tipo: 'reposicion', productoId: p.id, titulo: p.titulo, lineas, etiquetar: false, ...(ajuste ? { ajuste } : {}), ...sep } };
 }
 
 const NO_CARGAR: OpcionCarga = { clave: 'no', etiqueta: 'No cargar este artículo', accion: null, avisos: [] };
@@ -253,7 +370,7 @@ const NO_CARGAR: OpcionCarga = { clave: 'no', etiqueta: 'No cargar este artícul
  * Vista previa de la carga de una entrega de iD. No escribe nada.
  * `cargas`: las marcas guardadas de todas las entregas de iD, leídas recién de la base.
  */
-export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: Record<string, CargaFamily>): PlanCarga {
+export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: Record<string, CargaFamily>, cargarIgual: ReadonlySet<string> = new Set()): PlanCarga {
   const f = r.factura;
   const avisos: string[] = [];
   const remito = r.remito?.numero || f.remito || '';
@@ -261,6 +378,7 @@ export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: 
   const fuera = (r.remito?.renglones ?? []).filter((x) => !enFactura.has(claveCodigo(x.codigo))).map((x) => x.codigo);
   if (fuera.length) avisos.push(`En el remito y no en la factura: ${[...new Set(fuera)].join(', ')}. No se cargan desde acá: revisalo y cargalo a mano.`);
   if (r.difRemito.length) avisos.push('El remito y la factura no coinciden en algún artículo: se carga lo del remito (lo que llegó).');
+  if (estado.errorPendientes) avisos.push(`No pude leer las ventas pendientes de iD (${estado.errorPendientes}): no separo nada. Revisá a mano si algo de lo que llegó ya está vendido antes de cargar.`);
   const items = r.checklist.map((c): ItemCarga => {
     const ren = r.factura.renglones.find((x) => claveCodigo(x.codigo) === claveCodigo(c.codigo));
     const descripcion = ren?.descripcion || c.descripcion;
@@ -277,9 +395,10 @@ export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: 
     if (!buscable(c.codigo.toUpperCase())) return bloqueado('El código tiene caracteres que no puedo buscar en Shopify: cargalo a mano.');
     const ids = estado.porCodigo[c.codigo.toUpperCase()] ?? [];
     if (!ids.length) return bloqueado('No está en Shopify: crealo desde Sincronización (con el archivo de iD) y armá la carga de nuevo.');
-    const opciones = ids.map((id) => opcion(c, descripcion, estado.productos[id], ren));
+    const opciones = ids.map((id) => opcion(c, descripcion, estado.productos[id], ren, estado.pendientesId, cargarIgual.has(c.codigo)));
     if (c.retirado) for (const o of opciones) o.avisos.push(`Salieron ${c.retirado} para órdenes (marca a mano en el remito): no se suman.`);
-    if (ids.length === 1) return opciones[0].bloqueo ? bloqueado(opciones[0].bloqueo) : { ...base, estado: 'listo', motivo: '', opciones };
+    // Todo vendido en iD: queda bloqueado pero con la opción, para mostrar qué separar y «cargarlo igual».
+    if (ids.length === 1) return opciones[0].bloqueo ? { ...bloqueado(opciones[0].bloqueo), opciones: opciones[0].separar ? opciones : [] } : { ...base, estado: 'listo', motivo: '', opciones };
     return { ...base, estado: 'elegir', motivo: `El código está en ${ids.length} productos de Shopify: elegí en cuál sumar el stock.`, opciones: [NO_CARGAR, ...opciones] };
   });
   return { entregaId: f.id, locationId: estado.locationId, posId: null, items, avisos, sucursal: SUCURSAL_CARGA_ID };

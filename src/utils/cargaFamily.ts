@@ -258,7 +258,16 @@ export interface AltaFamily {
   variantes: { talle: string; sku: string; cantidad: number }[];
 }
 export interface LineaReposicion { talle: string; inventoryItemId: string; actual: number | null; suma: number }
-export interface ReposicionFamily { tipo: 'reposicion'; productoId: string; titulo: string; lineas: LineaReposicion[]; etiquetar: boolean; ajuste?: AjustePrecio }
+/**
+ * iD (12-nov-2026, gax): lo que llegó y ya está vendido en iD (ventas sin preparar asignadas a la
+ * sucursal de iD) se SEPARA para esas órdenes y no se suma a Martínez.
+ */
+export interface SepararId { talle: string; cantidad: number; ordenes: { nombre: string; cantidad: number }[] }
+export interface ReposicionFamily {
+  tipo: 'reposicion'; productoId: string; titulo: string; lineas: LineaReposicion[]; etiquetar: boolean; ajuste?: AjustePrecio;
+  /** iD: vendido en iD que llegó en esta entrega. Con `separarAplicado` ya está descontado de `lineas`. */
+  separar?: SepararId[]; separarAplicado?: boolean;
+}
 /**
  * iD (12-nov-2026): antes de sumar el stock en Martínez, el costo nuevo de la factura y, si el
  * margen no llega al 50%, el precio nuevo de TODA la curva (ver cargaId.ts).
@@ -312,7 +321,7 @@ export function leerPrecio(s: string): number | undefined {
   return Number.isFinite(n) ? n : NaN;
 }
 
-export interface OpcionCarga { clave: string; etiqueta: string; accion: AltaFamily | ReposicionFamily | null; bloqueo?: string; avisos: string[] }
+export interface OpcionCarga { clave: string; etiqueta: string; accion: AltaFamily | ReposicionFamily | null; bloqueo?: string; avisos: string[]; separar?: SepararId[]; separarAplicado?: boolean }
 export interface ItemCarga {
   codigo: string;
   descripcion: string;
@@ -693,8 +702,14 @@ export function resumenCarga(plan: PlanCarga, elecciones: EleccionesCarga): { al
         a.costos.length ? `costo ${fmt(a.costoNuevo)} en ${a.costos.map((c) => c.talle).join(', ')}` : '',
         a.ponderados.length ? `costo promedio en ${a.ponderados.map((c) => `${c.talle} ${fmt(c.costo)}`).join(', ')}` : '',
       ].filter(Boolean) : [];
+      if (accion.separar?.length && accion.separarAplicado) extra.push(`separar para órdenes de iD ${textoSeparar(accion.separar)} (no se suman)`);
       lineas.push(`• ${codigo}: sumar ${u} u. en «${accion.titulo}»${extra.length ? ` · ${extra.join(' · ')}` : ''}`);
     }
   }
   return { altas, reposiciones, unidades, lineas };
+}
+
+/** «S ×1 (#210776) · M ×2 (#210782 ×2)». */
+export function textoSeparar(xs: SepararId[]): string {
+  return xs.map((x) => `${x.talle} ×${x.cantidad} (${x.ordenes.map((o) => (o.cantidad > 1 ? `${o.nombre} ×${o.cantidad}` : o.nombre)).join(', ')})`).join(' · ');
 }

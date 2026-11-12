@@ -121,6 +121,11 @@ describe('human manual functions and separate bot scope', () => {
   it('uses the GraphQL syntax, not words in comments and strings', () => {
     expect(inspectReadQuery('query { products(first: 1, query: "mutation") { nodes { id } } }', true)).toEqual({ reports: false });
   });
+  it('sends the iD pending fulfillment orders read to the newer API version, still read only', () => {
+    expect(inspectUserQuery('query($q: String!) { fulfillmentOrders(first: 20, query: $q) { nodes { id } } }')).toEqual({ reports: true });
+    expect(inspectUserQuery('query { fulfillmentOrder(id: "x") { id } }')).toEqual({ reports: false });
+    expect(() => inspectReadQuery('query { fulfillmentOrders(first: 1) { nodes { id } } }', true)).toThrow();
+  });
 });
 
 describe('session entry', () => {
