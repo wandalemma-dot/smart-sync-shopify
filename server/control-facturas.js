@@ -153,6 +153,8 @@ export function limpiarEntrega(e) {
 // después queda «cargada», «parcial» o «dudosa» (respuesta incompleta: revisar en Shopify).
 // Solo «liberarCarga» (a mano, con confirmación) la borra. Borrar la entrega no la borra.
 // ---------------------------------------------------------------------------
+// Family desde el 11-nov; iD (Converse/Le Coq, a Martínez) desde el 12-nov-2026.
+const CARGAN = ['family', 'id'];
 const RE_COD_CARGA = /^[A-Z0-9][A-Z0-9._/-]{1,79}$/;
 const ESTADOS_CARGA = ['cargada', 'parcial', 'dudosa'];
 const campoCarga = (body) => {
@@ -203,7 +205,7 @@ function eventoRegistro({ tipo, prov, campo, marca, entrega, remito, hora, estad
     tipo, hora, proveedor: prov, entregaId, codigo,
     entrega: { fecha: f.fecha || txt(ent?.fecha, 10), nombre: txt(ent?.nombre, 160) },
     remito: txt(rem?.numero, 40),
-    // Family no factura. Los demás proveedores, cuando carguen desde acá, mandan la suya.
+    // Family no factura; iD manda el número de la factura al reservar la carga.
     factura: txt(marca?.factura, 40),
     estado,
     ...(d.accion ? { accion: d.accion } : {}),
@@ -221,17 +223,18 @@ const agregarAlRegistro = (evento) => [['LPUSH', REGISTRO, JSON.stringify(evento
  * existiera el registro (o que se cortaron sin terminar) se arman con su marca, para que también se vean.
  */
 export async function leerRegistro(kv) {
-  const [crudos, hash] = await kv([['LRANGE', REGISTRO, 0, VER_REGISTRO - 1], ['HGETALL', clave('family', 'cargas')]]);
+  const [crudos, ...hashes] = await kv([['LRANGE', REGISTRO, 0, VER_REGISTRO - 1], ...CARGAN.map((p) => ['HGETALL', clave(p, 'cargas')])]);
   const eventos = (Array.isArray(crudos) ? crudos : []).map(json).filter((e) => e && typeof e === 'object');
-  const sinRegistro = Object.entries(parsear(hash)).filter(([, m]) => m && !m.registrado);
-  if (sinRegistro.length) {
+  for (const [n, prov] of CARGAN.entries()) {
+    const sinRegistro = Object.entries(parsear(hashes[n])).filter(([, m]) => m && !m.registrado);
+    if (!sinRegistro.length) continue;
     const ids = [...new Set(sinRegistro.map(([campo]) => campo.split('|')[0]))];
-    const [ents, rems] = await kv([['HMGET', clave('family', 'entregas'), ...ids], ['HMGET', clave('family', 'remitos'), ...ids]]);
+    const [ents, rems] = await kv([['HMGET', clave(prov, 'entregas'), ...ids], ['HMGET', clave(prov, 'remitos'), ...ids]]);
     const pos = new Map(ids.map((x, i) => [x, i]));
     for (const [campo, marca] of sinRegistro) {
       const i = pos.get(campo.split('|')[0]);
       eventos.push({
-        ...eventoRegistro({ tipo: 'carga', prov: 'family', campo, marca, entrega: ents?.[i], remito: rems?.[i], hora: txt(marca.fecha, 30), estado: marca.estado }),
+        ...eventoRegistro({ tipo: 'carga', prov, campo, marca, entrega: ents?.[i], remito: rems?.[i], hora: txt(marca.fecha, 30), estado: marca.estado }),
         deMarca: true,
       });
     }
@@ -260,7 +263,7 @@ const parsear = (hash) => {
 };
 
 export async function leerTodo(kv, prov) {
-  const extra = prov === 'family' ? [['HGETALL', clave(prov, 'cargas')]] : [];
+  const extra = CARGAN.includes(prov) ? [['HGETALL', clave(prov, 'cargas')]] : [];
   const res = await kv([
     ...TIPOS.map((t) => ['HGETALL', clave(prov, t)]), ['HGET', 'cf:config', prov], ['HGETALL', clave(prov, 'trello')],
     ['HGETALL', clave(prov, 'tarjetas')], ['HGET', 'cf:config', 'listasTrello'], ...extra,
@@ -277,7 +280,7 @@ export async function leerTodo(kv, prov) {
     tarjetasTrello: parsear(res[TIPOS.length + 2]),
     listasTrello: Array.isArray(listas) ? listas.filter((x) => RE_TRELLO.test(String(x))) : [],
   };
-  if (prov === 'family') out.cargas = parsear(res[TIPOS.length + 4]);
+  if (CARGAN.includes(prov)) out.cargas = parsear(res[TIPOS.length + 4]);
   return out;
 }
 
@@ -436,9 +439,9 @@ export async function aplicar(kv, body) {
       return { ok: true };
     }
     case 'reservarCarga': {
-      if (prov !== 'family') throw new Error('Acción inválida.');
+      if (!CARGAN.includes(prov)) throw new Error('Acción inválida.');
       const campo = campoCarga(body);
-      const marca = { estado: 'en curso', fecha: new Date().toISOString(), firma: txt(body.firma, 400), detalle: limpiarDetalleCarga(body.detalle) };
+      const marca = { estado: 'en curso', fecha: new Date().toISOString(), firma: txt(body.firma, 400), detalle: limpiarDetalleCarga(body.detalle), ...(body.factura ? { factura: txt(body.factura, 40) } : {}) };
       const [puesto, actual] = await kv([['HSETNX', clave(prov, 'cargas'), campo, JSON.stringify(marca)], ['HGET', clave(prov, 'cargas'), campo]]);
       if (Number(puesto) === 1) return { ok: true };
       let existente = null;
@@ -446,7 +449,7 @@ export async function aplicar(kv, body) {
       return { ok: false, existente };
     }
     case 'terminarCarga': {
-      if (prov !== 'family') throw new Error('Acción inválida.');
+      if (!CARGAN.includes(prov)) throw new Error('Acción inválida.');
       const campo = campoCarga(body);
       if (!ESTADOS_CARGA.includes(body.estado)) throw new Error('Estado inválido.');
       const eid = campo.split('|')[0];
@@ -465,7 +468,7 @@ export async function aplicar(kv, body) {
       return { ok: true };
     }
     case 'liberarCarga': {
-      if (prov !== 'family') throw new Error('Acción inválida.');
+      if (!CARGAN.includes(prov)) throw new Error('Acción inválida.');
       const campo = campoCarga(body);
       // La app libera sola la marca cuando Shopify rechazó la carga (no se escribió nada): eso no se
       // anota. Lo que libera la usuaria a mano sí, porque permite cargar ese artículo otra vez.

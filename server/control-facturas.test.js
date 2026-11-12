@@ -71,8 +71,21 @@ describe('Family: entregas sin factura (11-nov-2026)', () => {
     await aplicar(fn, { ...base, accion: 'reservarCarga', firma: 'f' });
     await expect(aplicar(fn, { ...base, accion: 'terminarCarga', estado: 'en curso' })).rejects.toThrow(/Estado inválido/);
     await expect(aplicar(fn, { ...base, accion: 'reservarCarga', codigo: 'shb spec' })).rejects.toThrow(/Código inválido/);
-    await expect(aplicar(fn, { ...base, proveedor: 'id', accion: 'reservarCarga' })).rejects.toThrow(/Acción inválida/);
-    expect((await leerTodo(fn, 'id')).cargas).toBeUndefined();
+    await expect(aplicar(fn, { ...base, proveedor: 'distrinando', accion: 'reservarCarga' })).rejects.toThrow(/Acción inválida/);
+    expect((await leerTodo(fn, 'distrinando')).cargas).toBeUndefined();
+  });
+
+  it('iD también carga en Shopify (12-nov-2026): su marca lleva el número de factura y va al registro', async () => {
+    const { fn } = memoria();
+    const c = { proveedor: 'id', entregaId: 'F-0011-00139953', codigo: 'CTO0325003' };
+    await aplicar(fn, { proveedor: 'id', accion: 'guardarRemito', facturaId: c.entregaId, remito: { numero: '0013-00125274', renglones: [{ codigo: 'CTO0325003', cantidad: 3 }] } });
+    expect(await aplicar(fn, { ...c, accion: 'reservarCarga', firma: '2026-11-10|CTO0325003|2|XL:2|0013-00125274', factura: '0011-00139953', detalle: { accion: 'reposicion', titulo: 'Remera Converse' } })).toEqual({ ok: true });
+    expect((await aplicar(fn, { ...c, accion: 'reservarCarga', firma: 'x' })).ok).toBe(false);
+    await aplicar(fn, { ...c, accion: 'terminarCarga', estado: 'cargada', detalle: { unidades: 2 } });
+    expect((await leerTodo(fn, 'id')).cargas[`${c.entregaId}|CTO0325003`]).toMatchObject({ estado: 'cargada', factura: '0011-00139953' });
+    expect((await leerTodo(fn, 'family')).cargas).toEqual({});
+    const { eventos } = await leerRegistro(fn);
+    expect(eventos[0]).toMatchObject({ proveedor: 'id', codigo: 'CTO0325003', factura: '0011-00139953', remito: '0013-00125274', entrega: { fecha: '2026-11-10' }, talles: [{ talle: 'XL', cantidad: 2 }] });
   });
 });
 

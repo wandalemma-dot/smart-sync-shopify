@@ -258,7 +258,58 @@ export interface AltaFamily {
   variantes: { talle: string; sku: string; cantidad: number }[];
 }
 export interface LineaReposicion { talle: string; inventoryItemId: string; actual: number | null; suma: number }
-export interface ReposicionFamily { tipo: 'reposicion'; productoId: string; titulo: string; lineas: LineaReposicion[]; etiquetar: boolean }
+export interface ReposicionFamily { tipo: 'reposicion'; productoId: string; titulo: string; lineas: LineaReposicion[]; etiquetar: boolean; ajuste?: AjustePrecio }
+/**
+ * iD (12-nov-2026): antes de sumar el stock en Martínez, el costo nuevo de la factura y, si el
+ * margen no llega al 50%, el precio nuevo de TODA la curva (ver cargaId.ts).
+ */
+export interface AjustePrecio {
+  costoNuevo: number;
+  /** Precio común de la curva; null si los talles tienen precios distintos. */
+  precioActual: number | null;
+  precios: number[];
+  /** Margen con el precio actual y el costo nuevo (null si no se puede calcular). */
+  margen: number | null;
+  /** El margen llega al 50%: verde, el precio no se toca. */
+  ok: boolean;
+  /** Básico: precio impuesto (sugerido del proveedor); la alerta se muestra pero no obliga. */
+  basico: boolean;
+  /** Precio que propone la app (la fórmula de iD). */
+  sugerido: number;
+  /** Todas las variantes del producto (el precio va a la curva entera). */
+  variantes: { id: string; talle: string }[];
+  /** Variantes a las que se les pone el costo nuevo (las que llegan y las que están en 0 en Martínez). */
+  costos: { id: string; talle: string; actual: number | null }[];
+  /** Variantes con stock en Martínez que no llegan en esta entrega: conservan su costo. */
+  conservan: { talle: string; stock: number; costo: number | null }[];
+  /** Precio elegido por la usuaria (si hace falta cambiarlo). */
+  precio?: number;
+}
+/** El precio da 50% o más de margen con este costo (en centavos, como precioExistente). */
+export const llegaAl50 = (precio: number, costo: number) => precio > 0 && costo > 0 && Math.round(costo * 100) * 242 <= Math.round(precio * 100) * 100;
+/**
+ * Precio que se va a escribir en toda la curva: null = no se cambia; NaN = falta un precio válido
+ * (ese artículo no se carga). Margen menor al 50% o talles con precios distintos obligan a poner uno;
+ * los básicos tienen precio impuesto: la alerta se muestra pero no obliga.
+ */
+export function precioAEscribir(a: AjustePrecio, elegido?: number): number | null {
+  const p = elegido ?? a.precio;
+  if (p === undefined || p === a.precioActual) {
+    if (a.precioActual === null) return NaN;
+    return a.ok || a.basico ? null : NaN;
+  }
+  if (!Number.isInteger(p) || p <= 0) return NaN;
+  if (!a.basico && !llegaAl50(p, a.costoNuevo)) return NaN;
+  return p;
+}
+/** «84.900», «$84900» o «84900» → 84900. Lo que no es un número entero queda NaN. */
+export function leerPrecio(s: string): number | undefined {
+  const t = s.replace(/[$\s.]/g, '').replace(',', '.');
+  if (!t) return undefined;
+  const n = Number(t);
+  return Number.isFinite(n) ? n : NaN;
+}
+
 export interface OpcionCarga { clave: string; etiqueta: string; accion: AltaFamily | ReposicionFamily | null; bloqueo?: string; avisos: string[] }
 export interface ItemCarga {
   codigo: string;
@@ -272,7 +323,7 @@ export interface ItemCarga {
   opciones: OpcionCarga[];
   carga?: CargaFamily;
 }
-export interface PlanCarga { entregaId: string; locationId: string; posId: string | null; items: ItemCarga[]; avisos: string[] }
+export interface PlanCarga { entregaId: string; locationId: string; posId: string | null; items: ItemCarga[]; avisos: string[]; /** Para los mensajes (iD carga en Martínez). */ sucursal?: string }
 
 const NO_CARGAR: OpcionCarga = { clave: 'no', etiqueta: 'No cargar este artículo', accion: null, avisos: [] };
 const fechaAr = (iso: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); return m ? `${m[3]}/${m[2]}/${m[1]}` : iso; };
@@ -395,7 +446,7 @@ export function planCargaFamily(r: ResultadoFamily, estado: EstadoCarga, cargas:
 }
 
 /** Elección de la usuaria por artículo: qué opción y, si se crea, con qué título. */
-export type EleccionesCarga = Record<string, { clave: string; titulo?: string }>;
+export type EleccionesCarga = Record<string, { clave: string; titulo?: string; precio?: number }>;
 
 /** Lo que se va a hacer, con las elecciones aplicadas (solo opciones sin bloqueo). */
 export function accionesElegidas(plan: PlanCarga, elecciones: EleccionesCarga): { codigo: string; firma: string; accion: AltaFamily | ReposicionFamily }[] {
@@ -406,6 +457,12 @@ export function accionesElegidas(plan: PlanCarga, elecciones: EleccionesCarga): 
     const op = it.opciones.find((o) => o.clave === clave);
     if (!op?.accion || op.bloqueo) continue;
     let accion = op.accion;
+    if (accion.tipo === 'reposicion' && accion.ajuste) {
+      // iD: sin un precio que llegue al 50% (salvo los básicos) ese artículo no se carga.
+      const precio = precioAEscribir(accion.ajuste, elecciones[it.codigo]?.precio);
+      if (Number.isNaN(precio)) continue;
+      accion = { ...accion, ajuste: { ...accion.ajuste, precio: precio ?? undefined } };
+    }
     if (accion.tipo === 'alta') {
       const titulo = (elecciones[it.codigo]?.titulo ?? accion.titulo).replace(/\s+/g, ' ').trim();
       accion = { ...accion, titulo: titulo || accion.titulo };
@@ -443,6 +500,8 @@ export interface DepsCarga {
   /** Clave de idempotencia nueva para cada escritura de stock. */
   clave: () => string;
   onProgreso?: (hechos: number, total: number) => void;
+  /** iD: precio y costo antes de sumar el stock. Si falla, el stock no se suma. */
+  antes?: (codigo: string, accion: ReposicionFamily) => Promise<{ estado: 'ok'; mensaje: string } | { estado: 'error' | 'dudosa'; mensaje: string }>;
 }
 export interface ResultadoCarga { codigo: string; estado: 'cargada' | 'parcial' | 'dudosa' | 'error' | 'saltado'; mensaje: string; productoId?: string }
 /** talles: lo mandado a Shopify por talle, sin lo que Shopify rechazó (para el registro de cargas). */
@@ -532,7 +591,7 @@ async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga
     if (ue.length) {
       const cambio = ue.some((x) => /CHANGE_FROM_QUANTITY_STALE|COMPARE_QUANTITY_STALE/.test(String(x.code)));
       return { estado: 'error', mensaje: cambio
-        ? `El stock de «${rep.titulo}» en ${SUCURSAL_FAMILY} cambió desde que armaste la carga (por ejemplo, una venta). No se sumó nada: armá la carga de nuevo.`
+        ? `El stock de «${rep.titulo}» en ${plan.sucursal ?? SUCURSAL_FAMILY} cambió desde que armaste la carga (por ejemplo, una venta). No se sumó nada: armá la carga de nuevo.`
         : `Shopify no sumó el stock en «${rep.titulo}»: ${errores(ue)}. No se sumó nada.` };
     }
     if (!data?.inventorySetQuantities?.inventoryAdjustmentGroup) return { estado: 'dudosa', mensaje: `No sé si se sumó el stock en «${rep.titulo}»: ${NO_SE_SABE}.`, productoId: rep.productoId, titulo: rep.titulo, talles: talles(activas) };
@@ -585,7 +644,17 @@ export async function ejecutarCargaFamily(plan: PlanCarga, elecciones: Eleccione
       continue;
     }
     let paso: Paso;
-    try { paso = accion.tipo === 'alta' ? await crearAlta(codigo, accion, plan, deps) : await sumarStock(codigo, accion, plan, deps); }
+    try {
+      if (accion.tipo === 'alta') paso = await crearAlta(codigo, accion, plan, deps);
+      else {
+        const previo = deps.antes ? await deps.antes(codigo, accion) : null;
+        if (previo && previo.estado !== 'ok') paso = { estado: previo.estado, mensaje: `${previo.mensaje} No se sumó el stock.`, productoId: accion.productoId, titulo: accion.titulo };
+        else {
+          paso = await sumarStock(codigo, accion, plan, deps);
+          if (previo?.mensaje) paso = { ...paso, mensaje: `${previo.mensaje} ${paso.mensaje}`.trim() };
+        }
+      }
+    }
     catch (e) { paso = { estado: 'dudosa', mensaje: `Algo falló a mitad de camino (${e instanceof Error ? e.message : 'error'}): revisá en Shopify.` }; }
     let mensaje = paso.mensaje;
     if (paso.estado === 'error') {
@@ -616,7 +685,12 @@ export function resumenCarga(plan: PlanCarga, elecciones: EleccionesCarga): { al
       reposiciones++;
       const u = accion.lineas.reduce((s, l) => s + l.suma, 0);
       unidades += u;
-      lineas.push(`• ${codigo}: sumar ${u} u. en «${accion.titulo}»`);
+      const a = accion.ajuste;
+      const extra = a ? [
+        a.precio !== undefined ? `precio de toda la curva ${fmt(a.precioActual ?? 0)} → ${fmt(a.precio)}` : '',
+        a.costos.length ? `costo ${fmt(a.costoNuevo)} en ${a.costos.map((c) => c.talle).join(', ')}` : '',
+      ].filter(Boolean) : [];
+      lineas.push(`• ${codigo}: sumar ${u} u. en «${accion.titulo}»${extra.length ? ` · ${extra.join(' · ')}` : ''}`);
     }
   }
   return { altas, reposiciones, unidades, lineas };

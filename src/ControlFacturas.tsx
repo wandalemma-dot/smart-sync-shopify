@@ -25,6 +25,10 @@ import ControlFamily from './ControlFamily';
 import RegistroCargas from './RegistroCargas';
 import EnlacesRapidos from './EnlacesRapidos';
 import { Archivo, Copiar, Parte } from './EntregasPartes';
+import { PanelCarga } from './PanelCarga';
+import { ejecutarCargaFamily, resumenCarga, textoCarga, type CargaFamily, type EleccionesCarga, type PlanCarga } from './utils/cargaFamily';
+import { estadoCargaFactura, leerEstadoCargaId, planCargaId, precioYCostoAntes, SUCURSAL_CARGA_ID } from './utils/cargaId';
+import { actualizarPreciosManualmente, shopifyGraphQL } from './utils/shopify';
 import {
   apiControl, boton, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, slug, td, th,
 } from './utils/entregasUi';
@@ -45,6 +49,8 @@ interface Datos {
   tarjetasTrello: Record<string, EstadoTarjeta>;
   /** Listas de Trello elegidas como de pedidos pendientes (vacío = las que dicen «pendiente»). */
   listasTrello: string[];
+  /** iD: qué artículos de cada entrega ya se cargaron en Shopify («{facturaId}|{código}»). */
+  cargas?: Record<string, CargaFamily>;
 }
 /** Versión del lector de Excel de Trello. Subirla cuando cambie: los descartados se revisan de nuevo. */
 const LECTOR_TRELLO = 5; // 4: 12-nov-2026, una copia en una tarjeta de pendientes de una nota cargada desde otra lista; 5: lee el verde
@@ -181,6 +187,8 @@ export default function ControlFacturas() {
   // Listas del tablero de Trello (para elegir de cuáles salen las notas). null = todavía no se leyeron.
   const [listasTablero, setListasTablero] = useState<ListaTrello[] | null>(null);
   const [verCerradas, setVerCerradas] = useState(false);
+  // iD: vista previa de la carga en Shopify (una entrega por vez).
+  const [planCarga, setPlanCarga] = useState<PlanCarga | null>(null);
   const listasRevisadas = useRef(new Set<Prov>());
   // Proveedor elegido ahora: una búsqueda o carga que termina después de cambiarlo no toca la pantalla.
   const provRef = useRef(prov);
@@ -625,6 +633,62 @@ export default function ControlFacturas() {
     } finally { setOcupado(''); }
   }
 
+  // -------------------------------------------------------------------------
+  // CARGA EN SHOPIFY (iD, 12-nov-2026): lo que llegó se suma en DEPOSITO MARTINEZ, con precio y
+  // costo de la factura. Misma ejecución y misma marca «una sola vez» que Family (cargaFamily.ts).
+  // -------------------------------------------------------------------------
+  /** Vista previa: lee Shopify y la base en el momento. No escribe nada. */
+  async function armarCarga(r: ResultadoFactura) {
+    if (!r.remito) { setAvisos(['Para cargar en Shopify primero subí o escribí el remito.']); return; }
+    const p = prov;
+    setPlanCarga(null); setAvisos([]); setError('');
+    setOcupado('Busco los artículos en Shopify para armar la carga…');
+    try {
+      const d = await api(undefined, p);
+      const estado = await leerEstadoCargaId(r.checklist.map((c) => c.codigo), shopifyGraphQL);
+      if (!sigue(p)) return;
+      setDatos({ ...VACIO, ...d });
+      setPlanCarga(planCargaId(r, estado, d.cargas ?? {}));
+    } catch (e) { if (sigue(p)) setAvisos([`No pude armar la carga: ${mensaje(e)} No se cargó nada.`]); }
+    finally { setOcupado(''); }
+  }
+
+  async function confirmarCarga(r: ResultadoFactura, plan: PlanCarga, elecciones: EleccionesCarga) {
+    const res = resumenCarga(plan, elecciones);
+    if (!res.reposiciones) return;
+    const texto = [`Se va a cargar en Shopify (${SUCURSAL_CARGA_ID}):`, ...res.lineas, '',
+      `${res.reposiciones} artículo(s), ${res.unidades} unidades en total.`,
+      'El precio y el costo se cambian antes de sumar el stock. ¿Confirmás?'].join('\n');
+    if (!confirm(texto)) return;
+    const p = prov, eid = plan.entregaId, factura = r.factura.numero;
+    setOcupado('Cargando en Shopify… no cierres esta página.');
+    try {
+      const resultados = await ejecutarCargaFamily(plan, elecciones, {
+        gql: shopifyGraphQL,
+        reservar: (codigo, firma, detalle) => api({ proveedor: p, accion: 'reservarCarga', entregaId: eid, codigo, firma, detalle, factura }),
+        terminar: async (codigo, estado, detalle) => { await api({ proveedor: p, accion: 'terminarCarga', entregaId: eid, codigo, estado, detalle }); },
+        liberar: async (codigo) => { await api({ proveedor: p, accion: 'liberarCarga', entregaId: eid, codigo }); },
+        clave: () => crypto.randomUUID(),
+        onProgreso: (h, t) => setOcupado(`Cargando en Shopify… ${h} de ${t}. No cierres esta página.`),
+        antes: precioYCostoAntes(actualizarPreciosManualmente),
+      });
+      const icono = { cargada: '✅', parcial: '⚠️', dudosa: '❓', error: '❌', saltado: '↷' } as const;
+      if (sigue(p)) setAvisos(resultados.map((x) => `${icono[x.estado]} ${x.codigo}: ${x.mensaje}`));
+      setPlanCarga(null);
+    } catch (e) { if (sigue(p)) setAvisos([`La carga se cortó: ${mensaje(e)} Revisá en Shopify qué quedó cargado antes de volver a intentar.`]); }
+    finally { setOcupado(''); if (sigue(p)) await recargar(); }
+  }
+
+  async function liberarCarga(entregaId: string, codigo: string, c: CargaFamily) {
+    const aviso = c.estado === 'cargada'
+      ? `${codigo} figura como cargado en Shopify. Si liberás la marca, la app lo deja cargar OTRA VEZ (sumaría el stock dos veces). ¿Seguro?`
+      : `${codigo}: ${textoCarga(c)}\n\nAntes de liberar, mirá en Shopify si quedó cargado y corregilo a mano si hace falta. Si liberás, la app lo deja cargar de nuevo. ¿Liberar?`;
+    if (!confirm(aviso)) return;
+    setPlanCarga(null);
+    // manual: queda anotada en el registro de cargas.
+    await guardar({ accion: 'liberarCarga', entregaId, codigo, manual: true });
+  }
+
   async function fotosParaFactura(facturaId: string, files: File[]) {
     const p = prov;
     const m = await remitoDeFotos(facturaId, files);
@@ -699,7 +763,7 @@ export default function ControlFacturas() {
   // Las notas subidas a mano y borradas también se anotan ahí (con «P:»), pero no son Excel de Trello.
   const excelTrello = Object.entries(datos.trelloVistos).filter(([k]) => /^[a-f0-9]{24}$/.test(k)).map(([, v]) => v);
   const facturasRes = [...res.facturas].reverse();
-  const cambiarProv = (p: Prov) => { setVerRegistro(false); provRef.current = p; setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
+  const cambiarProv = (p: Prov) => { setPlanCarga(null); setVerRegistro(false); provRef.current = p; setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
 
   const cabecera = (<>
     <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
@@ -772,7 +836,12 @@ export default function ControlFacturas() {
             onBorrarRemito={() => confirm('¿Borrar el remito de esta entrega?') && guardar({ accion: 'borrarRemito', facturaId: r.factura.id })}
             onNota={(f) => subirPedidos(f, r.factura.fecha, r.factura.id)}
             onTrello={() => buscarEnTrelloParaFactura(r.factura)} res={res} todas={pedidosControl} consejos={consejos}
-            informe={informe?.prov === prov && informe.facturaId === r.factura.id ? informe : null} onRecargarBorrada={recargarBorrada} />)}
+            informe={informe?.prov === prov && informe.facturaId === r.factura.id ? informe : null} onRecargarBorrada={recargarBorrada}
+            carga={prov === 'id' ? {
+              cargas: datos.cargas ?? {}, plan: planCarga?.entregaId === r.factura.id ? planCarga : null,
+              onArmar: () => armarCarga(r), onConfirmar: (e) => planCarga && confirmarCarga(r, planCarga, e),
+              onCancelar: () => setPlanCarga(null), onLiberar: (codigo, c) => liberarCarga(r.factura.id, codigo, c),
+            } : undefined} />)}
 
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 16, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
             <button style={enlace} onClick={() => setVista('pedidos')}>📋 Notas de pedido cargadas ({pedidosVigentes.length})</button>
@@ -863,14 +932,22 @@ function estadoRenglon(x: ControlRenglon, nombrePedido: (id: string) => string):
 }
 
 
-function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, informe, onRecargarBorrada, res, todas, consejos }: {
+function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, informe, onRecargarBorrada, res, todas, consejos, carga }: {
   r: ResultadoFactura; abierta: boolean; onAbrir: () => void; pedidos: PedidoGuardado[]; cerradas: Set<string>; nombrePedido: (id: string) => string;
   res: ResultadoGeneral; todas: PedidoGuardado[]; consejos: Map<string, ConsejoNota>;
   manual: string[]; condiciones: string; ocupado: boolean; onAsignar: (ids: string[]) => void; onBorrar: () => void; onDeposito: () => void;
   onFotos: (f: File[]) => void; onGuardarRemito: (r: Remito) => Promise<boolean>; onBorrarRemito: () => void; onNota: (f: File[]) => void; onTrello: () => void;
   informe: InformeTrello | null; onRecargarBorrada: (f: FilaTrello) => void;
+  /** iD: carga en Shopify (Martínez). */
+  carga?: {
+    cargas: Record<string, CargaFamily>; plan: PlanCarga | null; onArmar: () => void; onConfirmar: (e: EleccionesCarga) => void;
+    onCancelar: () => void; onLiberar: (codigo: string, c: CargaFamily) => void;
+  };
 }) {
   const f = r.factura;
+  const enShopify = carga ? estadoCargaFactura(r, carga.cargas) : null;
+  // Marcas que no terminaron bien (o quedaron «en curso» si se cerró la página): se revisan en Shopify y se liberan a mano.
+  const aRevisar = carga ? Object.entries(carga.cargas).filter(([k, c]) => k.startsWith(`${f.id}|`) && c.estado !== 'cargada').map(([k, c]) => [k.slice(f.id.length + 1), c] as const) : [];
   const s = SEMAFORO[r.semaforo];
   const reclamo = reporteReclamo(r, nombrePedido);
   const [editando, setEditando] = useState(false);
@@ -915,12 +992,25 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
             <Archivo etiqueta="📎 Subir nota" accept=".xlsx,.xls" multiple disabled={ocupado} estilo={botonChico} onArchivos={onNota} />
           </>}
         </Parte>
+        {carga && enShopify && <Parte ok={enShopify.completa} titulo="Shopify" detalle={enShopify.cargados ? `${enShopify.cargados} de ${enShopify.total} cargados en Martínez` : 'sin cargar'}>
+          {!enShopify.completa && !carga.plan && <button style={{ ...botonChico, opacity: r.remito && !ocupado ? 1 : 0.5 }} disabled={ocupado}
+            title={r.remito ? 'Suma lo que llegó en DEPOSITO MARTINEZ, con vista previa y confirmación' : 'Primero subí o escribí el remito'}
+            onClick={carga.onArmar}>⬆️ Cargar en Shopify</button>}
+        </Parte>}
       </div>
       <Controles r={r} unidadesRemito={unidadesRemito} pendiente={pendiente} />
       {r.retirados.length > 0 && <div style={{ marginTop: 4, fontSize: '0.86rem', color: '#a5b4fc' }}>
         ✋ Salieron para órdenes (marcado a mano en el remito, no se cargan): {r.retirados.map((x) => `${x.codigo}${x.talle ? ` T ${x.talle}` : ''} −${x.cantidad}`).join(' · ')}.
         {' '}Hay que cargar {unidadesRemito - r.retirados.reduce((t, x) => t + x.cantidad, 0)} u. de las {unidadesRemito} del remito.
       </div>}
+      {aRevisar.length > 0 && carga && <div style={{ marginTop: 8, fontSize: '0.84rem', color: '#fbbf24' }}>
+        {aRevisar.map(([codigo, c]) => <div key={codigo}>
+          {codigo}: {textoCarga(c)}{' '}
+          <button style={{ ...botonChico, padding: '1px 7px' }} disabled={ocupado} onClick={() => carga.onLiberar(codigo, c)}>🔓 Ya lo revisé: liberar</button>
+        </div>)}
+      </div>}
+      {carga?.plan && <PanelCarga plan={carga.plan} ocupado={ocupado} onConfirmar={carga.onConfirmar} onCancelar={carga.onCancelar} sucursal={SUCURSAL_CARGA_ID}
+        explicacion="Lo que llegó (el remito, menos lo que salió para órdenes) se SUMA al stock de Martínez; el stock de iD lo lleva la sincronización. Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez, y si el margen no llega al 50% hay que poner un precio nuevo para toda la curva. Los productos que no están en Shopify se crean desde Sincronización." />}
       <TarjetasTrello ids={r.pedidosCubiertos} pedidos={pedidos} />
       {r.semaforo !== 'incompleta' && r.pedidosCubiertos.length > 0 && <PlanillasMarcadas r={r} res={res} pedidos={todas} nombrePedido={nombrePedido} ocupado={ocupado} consejos={consejos} />}
       {informe && <InformeTrelloCaja informe={informe} ocupado={ocupado} onRecargar={onRecargarBorrada} />}
@@ -992,6 +1082,10 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
             <Copiar etiqueta="📋 Mensaje para pagos" texto={mensajePagos(r, condiciones, nombrePedido)} />
             {reclamo && <Copiar etiqueta="📋 Texto de reclamo" texto={reclamo} />}
             <button style={botonChico} onClick={onDeposito}>📦 Checklist del depósito</button>
+            {carga && Object.entries(carga.cargas).filter(([k, c]) => k.startsWith(`${f.id}|`) && c.estado === 'cargada').map(([k, c]) => (
+              <button key={k} style={{ ...botonChico, background: 'transparent', opacity: 0.7 }} disabled={ocupado} title={textoCarga(c)}
+                onClick={() => carga.onLiberar(k.slice(f.id.length + 1), c)}>🔓 {k.slice(f.id.length + 1)}</button>
+            ))}
             <button style={{ ...botonChico, background: 'transparent', color: '#f87171' }} onClick={onBorrar}>Borrar entrega</button>
           </div>
         </div>
