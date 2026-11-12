@@ -60,16 +60,19 @@ describe('lectura de la foto del remito', () => {
     expect(normalizarRemito({ fecha: '04/11/2026', renglones: [{ codigo: 'A1', cantidad: -3, talles: [] }] })).toMatchObject({ fecha: '', renglones: [{ codigo: 'A1', cantidad: 0 }] });
   });
 
-  it('la marca a mano «-1» va como retirado del talle, sin cambiar lo impreso, y nunca más de lo que llegó', () => {
-    const r = normalizarRemito({ numero: '1', fecha: '', dudas: [], renglones: [
+  it('las marcas a mano «-1» de la foto no se descuentan: se escriben a mano en «Ver o corregir»', async () => {
+    const r = normalizarRemito({ numero: '1', fecha: '', dudas: ['CTO0325003: «-1» a mano cerca de XL'], renglones: [
       { codigo: 'cto0325003', cantidad: 6, retirado: 0, talles: [{ talle: 'L', cantidad: 3, retirado: 0 }, { talle: 'XL', cantidad: 3, retirado: 1 }] },
       { codigo: 'A1', cantidad: 2, retirado: 1, talles: [] },
-      { codigo: 'B2', cantidad: 1, retirado: 0, talles: [{ talle: '40', cantidad: 1, retirado: 4 }] },
     ] });
-    expect(r.renglones[0]).toEqual({ codigo: 'CTO0325003', cantidad: 6, talles: [{ talle: 'L', cantidad: 3 }, { talle: 'XL', cantidad: 3, retirado: 1 }] });
-    expect(r.renglones[1]).toEqual({ codigo: 'A1', cantidad: 2, talles: [], retirado: 1 });
-    expect(r.renglones[2].talles).toEqual([{ talle: '40', cantidad: 1 }]);
-    expect(r.dudas.join(' ')).toMatch(/-4 y llegaron 1/);
+    expect(r.renglones[0]).toEqual({ codigo: 'CTO0325003', cantidad: 6, talles: [{ talle: 'L', cantidad: 3 }, { talle: 'XL', cantidad: 3 }] });
+    expect(r.renglones[1]).toEqual({ codigo: 'A1', cantidad: 2, talles: [] });
+    expect(r.dudas).toEqual(['CTO0325003: «-1» a mano cerca de XL']);
+    const { create, cliente: c } = cliente(json({ numero: '', fecha: '', renglones: [{ codigo: 'A1', cantidad: 1, talles: [] }], dudas: [] }));
+    await leerRemito({ fotos: [foto], cliente: c });
+    const pedido = create.mock.calls[0][0];
+    expect(JSON.stringify(pedido.output_config)).not.toMatch(/retirado/);
+    expect(JSON.stringify(pedido.messages)).toMatch(/NO cambian nada/);
   });
 });
 
