@@ -30,7 +30,7 @@ import { ejecutarCargaFamily, resumenCarga, textoCarga, type CargaFamily, type E
 import { estadoCargaFactura, leerEstadoCargaId, planCargaId, precioYCostoAntes, SUCURSAL_CARGA_ID } from './utils/cargaId';
 import { actualizarPreciosManualmente, shopifyGraphQL } from './utils/shopify';
 import {
-  apiControl, boton, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, slug, td, th,
+  apiControl, boton, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, nombreArchivoPlanilla, slug, td, th,
 } from './utils/entregasUi';
 
 type Prov = 'distrinando' | 'id' | 'family';
@@ -1174,7 +1174,7 @@ function PlanillasMarcadas({ r, res, pedidos, nombrePedido, ocupado, consejos }:
       const url = URL.createObjectURL(new Blob([new Uint8Array(out)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${slug(p.nroProveedor ? `Nota ${p.nroProveedor}` : p.nombre)} - entregado ${fechaAr(hoyAr()).slice(0, 5).replace('/', '-')}.xlsx`;
+      a.download = nombreArchivoPlanilla(p, hoyAr());
       a.click();
       setTimeout(() => URL.revokeObjectURL(url), 10_000);
       setPedirArchivo((x) => ({ ...x, [p.id]: false }));
@@ -1194,7 +1194,12 @@ function PlanillasMarcadas({ r, res, pedidos, nombrePedido, ocupado, consejos }:
         return (
           <div key={id} style={{ marginTop: 6 }}>
             <div>
-              {nombrePedido(id)}: {m.estaEntrega.length ? `en esta entrega llegó ${m.estaEntrega.map((x) => `${x.codigo} ${x.talle}×${x.cantidad}`).join(', ')}` : 'en esta entrega no se sabe de qué talles'}
+              <strong>{nombrePedido(id)}</strong>
+              {(p.nroProveedor || p.fecha) && <span style={{ opacity: 0.85 }}>
+                {p.nroProveedor && p.nombre ? <> · {p.origen?.startsWith('trello:') ? 'tarjeta' : 'archivo'} {p.enlace ? <a href={p.enlace} target="_blank" rel="noreferrer" style={{ color: '#93c5fd' }}>«{p.nombre}»</a> : `«${p.nombre}»`}</> : ''}
+                {p.fecha ? ` · del ${fechaAr(p.fecha)}` : ''}
+              </span>}
+              : {m.estaEntrega.length ? `en esta entrega llegó ${m.estaEntrega.map((x) => `${x.codigo} ${x.talle}×${x.cantidad}`).join(', ')}` : 'en esta entrega no se sabe de qué talles'}
               {' · '}hasta acá llegaron {llegaron} de {pedido} u.
               {m.facturas.length > 1 ? ` (con ${m.facturas.length - 1} entrega(s) anterior(es))` : ''}
             </div>
