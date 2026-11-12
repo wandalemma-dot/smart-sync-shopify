@@ -440,7 +440,7 @@ describe('iD: cargar y pasar la venta de iD a Martínez (gax, 12-nov-2026)', () 
     const op = planCargaId(r, e, {}, pasar).items[0].opciones[0];
     if (op.accion?.tipo !== 'reposicion') throw new Error('esperaba reposición');
     expect(op.accion.lineas.map((l) => [l.talle, l.suma])).toEqual([['S', 2]]);
-    expect(op.accion.mover).toEqual([{ talle: 'S', orden: '#210855', cantidad: 1, foId: 'F1', lineaId: 'F1-linea' }]);
+    expect(op.accion.mover).toEqual([{ talle: 'S', orden: '#210855', cantidad: 1, foId: 'F1', lineaId: 'F1-linea', inventoryItemId: 'gid://shopify/InventoryItem/S' }]);
     expect(op.accion.separar).toEqual([{ talle: 'M', cantidad: 1, ordenes: [{ nombre: '#210900', cantidad: 1, fo: fo('F2', false) }] }]);
     expect(op.modoVenta).toBe('pasar');
     expect(op.avisos.join(' ')).toMatch(/No puedo pasar a Martínez la venta de M #210900/);
@@ -464,6 +464,41 @@ describe('iD: cargar y pasar la venta de iD a Martínez (gax, 12-nov-2026)', () 
     const llamada = gql.mock.calls.find(([q]) => q.includes('fulfillmentOrderMove('))!;
     expect(llamada[1]).toEqual({ id: 'F1', loc: LOC, items: [{ id: 'F1-linea', quantity: 1 }, { id: 'L-M', quantity: 1 }] });
     expect(res.mensaje).toMatch(/Venta pasada de iD a .*S #210855, M #210855/);
+  });
+
+  it('el disponible de iD queda como estaba: la unidad que Shopify libera al mover no se suma (gax, 12-nov-2026)', async () => {
+    const ID = 'gid://shopify/Location/ID', IS = 'gid://shopify/InventoryItem/S';
+    const r = resultado([fila([{ talle: 'S', cantidad: 1 }])], [renglon(20000)]);
+    const e: EstadoCargaId = { ...estado(), idLocationId: ID, pendientesId: { [VS]: [orden('#210837', 1, { fo: fo('F1') })] } };
+    const plan = planCargaId(r, e, {}, pasar);
+    expect(plan.idLocationId).toBe(ID);
+    expect(plan.items[0].opciones[0].avisos.join(' ')).toMatch(/El stock de iD queda como estaba/);
+    const correr = async (antes: number, despues: number) => {
+      let lecturas = 0;
+      const gql = shopify({
+        'nodes(ids:': () => ({ nodes: [{ id: IS, inventoryLevel: { quantities: [{ name: 'available', quantity: lecturas++ === 0 ? antes : despues }] } }] }),
+        'inventorySetQuantities(': SUMA_OK,
+        'fulfillmentOrderMove(': () => ({ fulfillmentOrderMove: { movedFulfillmentOrder: { id: 'F9', status: 'OPEN' }, userErrors: [] } }),
+      });
+      const [res] = await ejecutarCargaFamily(plan, {}, deps(gql));
+      return { res, sets: gql.mock.calls.filter(([q]) => q.includes('inventorySetQuantities(')).map(([, v]) => v as { input: { reason: string; quantities: unknown[] } }) };
+    };
+    // Estaba en 0 y Shopify la dejó en 1: vuelve a 0, con control de cambio.
+    const a = await correr(0, 1);
+    expect(a.sets).toHaveLength(2);
+    expect(a.sets[1].input).toEqual({ name: 'available', reason: 'correction', quantities: [{ inventoryItemId: IS, locationId: ID, quantity: 0, changeFromQuantity: 1 }] });
+    expect(a.res.mensaje).not.toMatch(/Revisá el stock de iD/);
+    // Shopify no la liberó: no se toca nada.
+    const b = await correr(0, 0);
+    expect(b.sets).toHaveLength(1);
+    // No se pudo leer: se avisa para revisarlo a mano.
+    const sinLeer = shopify({
+      'nodes(ids:': () => { throw new Error('caído'); },
+      'inventorySetQuantities(': SUMA_OK,
+      'fulfillmentOrderMove(': () => ({ fulfillmentOrderMove: { movedFulfillmentOrder: { id: 'F9', status: 'OPEN' }, userErrors: [] } }),
+    });
+    const [c] = await ejecutarCargaFamily(plan, {}, deps(sinLeer));
+    expect(c.mensaje).toMatch(/Venta pasada.*Revisá el stock de iD de S/);
   });
 
   it('sin el permiso de Shopify avisa qué falta; si el stock no se sumó, no mueve nada', async () => {
