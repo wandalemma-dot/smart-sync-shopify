@@ -271,6 +271,10 @@ export interface LineaFOId { id: string; lineaId: string; abierta: boolean }
  * otro artículo que todavía no llegó, así que no se prepara desde iD).
  */
 export type ModoVenta = 'separar' | 'igual' | 'pasar';
+/** Un artículo que una orden espera de iD (preparación abierta o en curso). */
+export interface LineaOrdenId { lineaId: string; titulo: string; talle: string; cantidad: number }
+/** Unidades de esta entrega que se lleva una orden de iD: separadas, pasadas a Martínez o ya retiradas («-1»). */
+export interface CubiertaOrden { orden: string; lineaId: string; cantidad: number; como: 'separar' | 'pasar' | 'retirado' }
 /** Una venta de iD que pasa a prepararse desde Martínez después de sumar el stock. */
 export interface MoverVenta { talle: string; orden: string; cantidad: number; foId: string; lineaId: string }
 export interface ReposicionFamily {
@@ -338,6 +342,8 @@ export interface OpcionCarga {
   separar?: SepararId[]; separarAplicado?: boolean; modoVenta?: ModoVenta;
   /** Unidades vendidas en iD que se pueden pasar a Martínez (preparación abierta, no en curso). */
   movibles?: number;
+  /** Qué orden de iD se lleva cada unidad que llegó (para decir cuáles ya pueden salir). */
+  cubiertas?: CubiertaOrden[];
 }
 export interface ItemCarga {
   codigo: string;
@@ -351,7 +357,11 @@ export interface ItemCarga {
   opciones: OpcionCarga[];
   carga?: CargaFamily;
 }
-export interface PlanCarga { entregaId: string; locationId: string; posId: string | null; items: ItemCarga[]; avisos: string[]; /** Para los mensajes (iD carga en Martínez). */ sucursal?: string }
+export interface PlanCarga {
+  entregaId: string; locationId: string; posId: string | null; items: ItemCarga[]; avisos: string[]; /** Para los mensajes (iD carga en Martínez). */ sucursal?: string;
+  /** iD: todo lo que esperan de iD las órdenes que se llevan algo de esta entrega. */
+  ordenesId?: Record<string, LineaOrdenId[]>;
+}
 
 const NO_CARGAR: OpcionCarga = { clave: 'no', etiqueta: 'No cargar este artículo', accion: null, avisos: [] };
 const fechaAr = (iso: string) => { const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso || ''); return m ? `${m[3]}/${m[2]}/${m[1]}` : iso; };

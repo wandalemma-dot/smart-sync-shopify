@@ -2,7 +2,7 @@
 // «yo los voy seleccionando, así los voy controlando»). Family sigue con todo tildado.
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { PanelCarga } from '../../PanelCarga';
+import { OrdenesQueSalen, PanelCarga } from '../../PanelCarga';
 import type { PlanCarga } from '../cargaFamily';
 
 const plan = {
@@ -50,5 +50,19 @@ describe('vista previa de la carga: vendido en iD', () => {
   });
   it('si la preparación está en curso en iD, el botón de pasar la venta queda deshabilitado', () => {
     expect(html(conVenta(0))).toMatch(/disabled=""[^>]*>Cargar y pasar la venta a Martínez/);
+  });
+});
+
+describe('órdenes de iD que ya pueden salir', () => {
+  it('separa las que salen de las que esperan más de iD', () => {
+    const h = renderToStaticMarkup(<OrdenesQueSalen ordenes={[
+      { orden: '#210952', puede: true, pasa: true, llega: ['Remera Retro M (pasa a Martínez)'], faltan: [] },
+      { orden: '#210837', puede: false, pasa: false, llega: ['Remera Patch S'], faltan: ['Remera Le Coq S'] },
+    ]} />);
+    expect(h).toMatch(/Ya pueden salir \(1\)/);
+    expect(h).toMatch(/#210952<\/strong> \(se prepara desde Martínez\)/);
+    expect(h).toMatch(/Todavía no pueden salir \(1\)/);
+    expect(h).toMatch(/falta de iD: Remera Le Coq S/);
+    expect(renderToStaticMarkup(<OrdenesQueSalen ordenes={[]} />)).toBe('');
   });
 });

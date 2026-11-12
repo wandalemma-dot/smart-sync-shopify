@@ -25,7 +25,7 @@
 // ============================================================================
 import { claveCodigo, fmt, type FilaChecklist, type RenglonFactura, type ResultadoFactura } from './controlFacturas';
 import {
-  llegaAl50, textoCarga, type AjustePrecio, type LineaFOId, type ModoVenta, type MoverVenta, type SepararId, type CargaFamily, type ItemCarga, type LineaReposicion, type OpcionCarga, type PlanCarga, type ReposicionFamily,
+  llegaAl50, textoCarga, type AjustePrecio, type CubiertaOrden, type EleccionesCarga, type LineaFOId, type LineaOrdenId, type ModoVenta, type MoverVenta, type SepararId, type CargaFamily, type ItemCarga, type LineaReposicion, type OpcionCarga, type PlanCarga, type ReposicionFamily,
 } from './cargaFamily';
 import { esPrecioSugerido } from './conversePreciosFijos';
 import { margenPct } from './margen';
@@ -49,7 +49,10 @@ export interface EstadoCargaId {
   pendientesId?: Record<string, OrdenPendienteId[]>;
   /** No se pudieron leer: se avisa y no se separa nada. */
   errorPendientes?: string;
+  /** Todo lo que cada una de esas órdenes espera de iD (para decir cuáles ya pueden salir). */
+  ordenesId?: Record<string, LineaOrdenId[]>;
 }
+
 export interface OrdenPendienteId {
   nombre: string; fecha: string; cantidad: number;
   /** false = se avisa pero no se descuenta (cancelada, sin pagar o «solucionar»). */
@@ -98,12 +101,12 @@ const Q_PENDIENTES_ID = `query($q: String!, $cursor: String) {
     nodes {
       id status
       order { name createdAt cancelledAt displayFinancialStatus tags }
-      lineItems(first: 40) { pageInfo { hasNextPage endCursor } nodes { id remainingQuantity variant { id } } }
+      lineItems(first: 40) { pageInfo { hasNextPage endCursor } nodes { id remainingQuantity productTitle variantTitle variant { id } } }
     }
   }
 }`;
 const Q_LINEAS_FO = `query($id: ID!, $cursor: String) {
-  fulfillmentOrder(id: $id) { lineItems(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { id remainingQuantity variant { id } } } }
+  fulfillmentOrder(id: $id) { lineItems(first: 100, after: $cursor) { pageInfo { hasNextPage endCursor } nodes { id remainingQuantity productTitle variantTitle variant { id } } } }
 }`;
 interface Pagina<T> { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: T[] }
 type NodoProducto = {
@@ -161,13 +164,13 @@ export async function leerEstadoCargaId(codigos: string[], gql: Gql): Promise<Es
   if (!locId) estado.errorPendientes = `no encontré la sucursal ${SUCURSAL_ID}`;
   else if (ids.size) {
     const variantes = new Set(Object.values(productos).flatMap((p) => p.variantes.map((v) => v.id)));
-    try { estado.pendientesId = await leerPendientesId(locId.id, variantes, gql); }
+    try { ({ porVariante: estado.pendientesId, porOrden: estado.ordenesId } = await leerVentasId(locId.id, variantes, gql)); }
     catch (e) { estado.errorPendientes = e instanceof Error ? e.message : 'error'; }
   }
   return estado;
 }
 
-type LineaFO = { id?: string; remainingQuantity: number; variant: { id: string } | null };
+type LineaFO = { id?: string; remainingQuantity: number; productTitle?: string; variantTitle?: string | null; variant: { id: string } | null };
 type NodoFO = {
   id: string; status: string;
   order: { name: string; createdAt: string; cancelledAt: string | null; displayFinancialStatus: string | null; tags?: string[] } | null;
@@ -176,8 +179,14 @@ type NodoFO = {
 const PAGADA = new Set(['PAID', 'PARTIALLY_PAID', 'PARTIALLY_REFUNDED']);
 /** Ventas sin preparar asignadas a iD (solo lectura), de las variantes que interesan. */
 export async function leerPendientesId(locationId: string, variantes: Set<string>, gql: Gql): Promise<Record<string, OrdenPendienteId[]>> {
+  return (await leerVentasId(locationId, variantes, gql)).porVariante;
+}
+/** Lo mismo, y además todo lo que esas órdenes esperan de iD (cualquier artículo). */
+export async function leerVentasId(locationId: string, variantes: Set<string>, gql: Gql): Promise<{ porVariante: Record<string, OrdenPendienteId[]>; porOrden: Record<string, LineaOrdenId[]> }> {
   const num = locationId.split('/').pop();
   const out: Record<string, OrdenPendienteId[]> = {};
+  const todas: Record<string, LineaOrdenId[]> = {};
+  const tocadas = new Set<string>();
   let cursor: string | null = null;
   for (let pagina = 0; ; pagina++) {
     if (pagina >= 80) throw new Error('hay demasiadas ventas pendientes en iD para leerlas todas');
@@ -198,8 +207,10 @@ export async function leerPendientesId(locationId: string, variantes: Set<string
       const pagada = PAGADA.has(String(o.displayFinancialStatus || ''));
       const motivo = solucionar ? 'etiqueta solucionar' : pagada ? undefined : 'sin pagar';
       for (const l of lineas) {
+        if (l.id && l.remainingQuantity > 0) (todas[o.name] ??= []).push({ lineaId: l.id, titulo: l.productTitle || 'artículo', talle: l.variantTitle || '', cantidad: l.remainingQuantity });
         const id = l.variant?.id;
         if (!id || !variantes.has(id) || !(l.remainingQuantity > 0)) continue;
+        if (!motivo) tocadas.add(o.name);
         const enFO = l.id ? { fo: { id: fo.id, lineaId: l.id, abierta: fo.status === 'OPEN' } } : {};
         (out[id] ??= []).push({ nombre: o.name, fecha: o.createdAt, cantidad: l.remainingQuantity, cuenta: !motivo, ...(motivo ? { motivo } : {}), ...enFO });
       }
@@ -208,28 +219,32 @@ export async function leerPendientesId(locationId: string, variantes: Set<string
     cursor = d.fulfillmentOrders.pageInfo.endCursor;
   }
   for (const xs of Object.values(out)) xs.sort((a, b) => a.fecha.localeCompare(b.fecha));
-  return out;
+  const porOrden: Record<string, LineaOrdenId[]> = {};
+  for (const n of tocadas) porOrden[n] = todas[n] ?? [];
+  return { porVariante: out, porOrden };
 }
 
 /**
  * Cuánto de lo que llegó de una variante es para ventas de iD: hasta lo pendiente (de la más vieja a la más
  * nueva), sin pasar lo que llegó. Lo que el depósito ya marcó «-1» cuenta como separado (no se separa dos veces).
  */
-export function separarDe(ordenes: OrdenPendienteId[], cantidad: number, retirado: number): { cantidad: number; ordenes: { nombre: string; cantidad: number; fo?: LineaFOId }[] } {
+export function separarDe(ordenes: OrdenPendienteId[], cantidad: number, retirado: number): { cantidad: number; ordenes: { nombre: string; cantidad: number; fo?: LineaFOId }[]; retirados: { nombre: string; cantidad: number; fo?: LineaFOId }[] } {
   const cuentan = ordenes.filter((o) => o.cuenta);
   const pendiente = cuentan.reduce((s, o) => s + o.cantidad, 0);
   const total = Math.min(cantidad + retirado, pendiente);
   const sep = Math.max(0, Math.min(cantidad, total - retirado));
   const out: { nombre: string; cantidad: number; fo?: LineaFOId }[] = [];
+  const retirados: { nombre: string; cantidad: number; fo?: LineaFOId }[] = [];
   let saltar = retirado, falta = sep;
   for (const o of cuentan) {
     let q = o.cantidad;
     const s = Math.min(saltar, q); saltar -= s; q -= s;
+    if (s > 0) retirados.push({ nombre: o.nombre, cantidad: s, ...(o.fo ? { fo: o.fo } : {}) });
     const t = Math.min(falta, q); falta -= t;
     if (t > 0) out.push({ nombre: o.nombre, cantidad: t, ...(o.fo ? { fo: o.fo } : {}) });
-    if (!falta) break;
+    if (!falta && !saltar) break;
   }
-  return { cantidad: sep, ordenes: out };
+  return { cantidad: sep, ordenes: out, retirados };
 }
 
 // ---------------------------------------------------------------------------
@@ -348,6 +363,7 @@ function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefi
   const lineas: LineaReposicion[] = [];
   const mover: MoverVenta[] = [];
   const enCurso: string[] = [];
+  const cubiertas: CubiertaOrden[] = [];
   let movibles = 0;
   for (const l of llegan) {
     const ords = pendientes?.[l.v.id] ?? [];
@@ -364,10 +380,13 @@ function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefi
       mover.push({ talle: l.v.talle, orden: o.nombre, cantidad: o.cantidad, foId: o.fo.id, lineaId: o.fo.lineaId });
     }
     if (modo === 'pasar') for (const o of s.ordenes) if (!o.fo?.abierta) enCurso.push(`${l.v.talle} ${o.nombre}`);
+    // Qué orden se lleva cada unidad que llegó (para decir cuáles ya pueden salir). «Cargarlo igual»: ya se separó antes.
+    for (const o of s.retirados) if (o.fo) cubiertas.push({ orden: o.nombre, lineaId: o.fo.lineaId, cantidad: o.cantidad, como: 'retirado' });
+    if (modo !== 'igual') for (const o of s.ordenes) if (o.fo) cubiertas.push({ orden: o.nombre, lineaId: o.fo.lineaId, cantidad: o.cantidad, como: modo === 'pasar' && o.fo.abierta ? 'pasar' : 'separar' });
     const suma = modo === 'igual' ? l.cantidad : l.cantidad - s.cantidad + pasan;
     if (suma > 0) lineas.push({ talle: l.v.talle, inventoryItemId: l.v.inventoryItemId, actual: l.v.disponible, suma });
   }
-  const sep = separar.length ? { separar, separarAplicado: modo === 'separar', modoVenta: modo, movibles } : {};
+  const sep = { ...(separar.length ? { separar, separarAplicado: modo === 'separar', modoVenta: modo, movibles } : {}), ...(cubiertas.length ? { cubiertas } : {}) };
   // En la acción (resumen y registro) van solo las que se separan de verdad: en «pasar», las que están en preparación.
   const separadas = modo === 'pasar'
     ? separar.map((x) => {
@@ -433,7 +452,7 @@ export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: 
     if (ids.length === 1) return opciones[0].bloqueo ? { ...bloqueado(opciones[0].bloqueo), opciones: opciones[0].separar ? opciones : [] } : { ...base, estado: 'listo', motivo: '', opciones };
     return { ...base, estado: 'elegir', motivo: `El código está en ${ids.length} productos de Shopify: elegí en cuál sumar el stock.`, opciones: [NO_CARGAR, ...opciones] };
   });
-  return { entregaId: f.id, locationId: estado.locationId, posId: null, items, avisos, sucursal: SUCURSAL_CARGA_ID };
+  return { entregaId: f.id, locationId: estado.locationId, posId: null, items, avisos, sucursal: SUCURSAL_CARGA_ID, ...(estado.ordenesId ? { ordenesId: estado.ordenesId } : {}) };
 }
 
 /** Cuántos artículos de la factura ya están cargados en Shopify. */
@@ -441,6 +460,51 @@ export function estadoCargaFactura(r: ResultadoFactura, cargas: Record<string, C
   const codigos = [...new Set(r.checklist.map((c) => c.codigo))];
   const cargados = codigos.filter((c) => cargas[`${r.factura.id}|${c}`]?.estado === 'cargada').length;
   return { cargados, total: codigos.length, completa: codigos.length > 0 && cargados === codigos.length };
+}
+
+/** Una orden de iD que se lleva algo de esta entrega: si ya puede salir o qué le falta de iD. */
+export interface OrdenQueSale {
+  orden: string;
+  puede: boolean;
+  /** Algo de esta orden pasa a prepararse desde Martínez. */
+  pasa: boolean;
+  llega: string[];
+  faltan: string[];
+}
+/**
+ * ¿Qué órdenes ya pueden salir? (12-nov-2026, gax: «que diga qué ventas ya pueden salir… así separo los
+ * productos y los dejo apartados»). Con lo que se separa o se pasa a Martínez en esta carga (y lo marcado «-1»),
+ * una orden puede salir si ya no espera nada más de iD. Lo que la orden tenga en Martínez se da por disponible.
+ * Lo destildado no cuenta (queda para otro día).
+ */
+export function ordenesQueSalen(plan: PlanCarga, elecciones: EleccionesCarga): OrdenQueSale[] {
+  const todas = plan.ordenesId;
+  if (!todas) return [];
+  const porOrden = new Map<string, CubiertaOrden[]>();
+  for (const it of plan.items) {
+    const clave = elecciones[it.codigo]?.clave ?? it.opciones[0]?.clave;
+    if (clave === 'no') continue;
+    const op = it.opciones.find((o) => o.clave === clave) ?? (it.estado === 'bloqueado' ? it.opciones[0] : undefined);
+    for (const c of op?.cubiertas ?? []) porOrden.set(c.orden, [...(porOrden.get(c.orden) ?? []), c]);
+  }
+  const fmtLinea = (l: LineaOrdenId, n: number) => `${l.titulo}${l.talle && l.talle !== 'Default Title' ? ` ${l.talle}` : ''}${n > 1 ? ` ×${n}` : ''}`;
+  const out: OrdenQueSale[] = [];
+  for (const [orden, cs] of porOrden) {
+    const lineas = todas[orden];
+    if (!lineas) continue;
+    const llega: string[] = [], faltan: string[] = [];
+    for (const l of lineas) {
+      const mias = cs.filter((c) => c.lineaId === l.lineaId);
+      const n = Math.min(l.cantidad, mias.reduce((t, c) => t + c.cantidad, 0));
+      if (n) {
+        const como = mias.some((c) => c.como === 'pasar') ? ' (pasa a Martínez)' : mias.every((c) => c.como === 'retirado') ? ' (ya salió con la marca «-1»)' : '';
+        llega.push(`${fmtLinea(l, n)}${como}`);
+      }
+      if (l.cantidad > n) faltan.push(fmtLinea(l, l.cantidad - n));
+    }
+    out.push({ orden, puede: !faltan.length, pasa: cs.some((c) => c.como === 'pasar'), llega, faltan });
+  }
+  return out.sort((a, b) => Number(b.puede) - Number(a.puede) || a.orden.localeCompare(b.orden));
 }
 
 // ---------------------------------------------------------------------------
