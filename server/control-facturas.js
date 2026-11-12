@@ -100,12 +100,18 @@ export function limpiarRemito(r) {
       codigo: txt(x?.codigo, 80),
       cantidad: num(x?.cantidad || 0),
       talles: talles(x?.talles),
+      ...retirado(x),
     })),
     actualizado: new Date().toISOString(),
   };
 }
 
-const talles = (v) => lista(v || [], 60).map((t) => ({ talle: txt(t?.talle, 20), cantidad: num(t?.cantidad || 0) }));
+const talles = (v) => lista(v || [], 60).map((t) => ({ talle: txt(t?.talle, 20), cantidad: num(t?.cantidad || 0), ...retirado(t) }));
+/** Marca a mano «-n» del remito (salió para órdenes): entera, positiva y no más que lo que llegó. */
+const retirado = (x) => {
+  const n = Math.round(num(x?.retirado || 0));
+  return n > 0 ? { retirado: Math.min(n, Math.max(0, num(x?.cantidad || 0))) } : {};
+};
 
 /** Lo que había en Shopify al controlar la entrega de Family (solo para mostrar). */
 function limpiarConsulta(c) {

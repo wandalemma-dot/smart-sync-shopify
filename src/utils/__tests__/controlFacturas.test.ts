@@ -494,3 +494,38 @@ describe('remito escrito como lo imprime Distrinando', () => {
     expect(mismoTalle('AR 43.5', '43')).toBe(false);
   });
 });
+
+describe('marcas «-1» a mano en el remito: salieron para órdenes y no se cargan', () => {
+  const nota: Pedido = { id: 'N', nombre: 'Nota iD', fecha: '2026-11-01', lineas: [
+    linea('CTO0325003', 'L', 3), linea('CTO0325003', 'XL', 3), linea('D1533801', 'L', 3), linea('A10520C', '40', 2),
+  ] };
+  const f = factura('7', '2026-11-10', [ren('CTO0325003', 6), ren('D1533801', 3), ren('A10520C', 2)]);
+  const { remito, errores } = leerTextoRemito('Remito 0013-00125274\nCTO0325003 L/3 XL/3-1\nD1533801 L/3 -1\nA10520C 2-1');
+
+  it('el texto «XL/3-1» guarda lo impreso y lo que salió, y se vuelve a escribir igual', () => {
+    expect(errores).toEqual([]);
+    expect(remito.renglones[0]).toEqual({ codigo: 'CTO0325003', cantidad: 6, talles: [{ talle: 'L', cantidad: 3 }, { talle: 'XL', cantidad: 3, retirado: 1 }] });
+    expect(remito.renglones[1].talles).toEqual([{ talle: 'L', cantidad: 3, retirado: 1 }]);
+    expect(remito.renglones[2]).toMatchObject({ cantidad: 2, retirado: 1 });
+    expect(textoRemito(remito)).toBe('Remito 0013-00125274\nCTO0325003 L/3 XL/3-1\nD1533801 L/3-1\nA10520C 2-1');
+    expect(leerTextoRemito('A10520C 40/1-2').errores[0]).toMatch(/no pueden salir 2/);
+  });
+
+  it('remito contra factura usa lo impreso; el depósito carga lo impreso menos lo que salió', () => {
+    const r = analizarFacturas([nota], [f], {}, { 7: remito }).facturas[0];
+    expect(r.difRemito).toEqual([]);
+    expect(r.motivos.join(' ')).not.toMatch(/REMITO/);
+    expect(r.retirados).toEqual([
+      { codigo: 'CTO0325003', talle: 'XL', cantidad: 1 }, { codigo: 'D1533801', talle: 'L', cantidad: 1 }, { codigo: 'A10520C', talle: '', cantidad: 1 },
+    ]);
+    const cto = r.checklist.find((c) => c.codigo === 'CTO0325003')!;
+    expect(cto.talles).toEqual([{ talle: 'L', cantidad: 3 }, { talle: 'XL', cantidad: 2, retirado: 1 }]);
+    expect(cto.retirado).toBe(1);
+    expect(cto.nota).toMatch(/Salieron 1 para órdenes/);
+    // Sin talle en el remito: no se sabe qué talle cargar, se cuenta el total (2 − 1).
+    const a = r.checklist.find((c) => c.codigo === 'A10520C')!;
+    expect(a.talles).toBeNull();
+    const rec = { recibido: { 'CTO0325003|L': 3, 'CTO0325003|XL': 2, 'D1533801|L': 2, 'A10520C|40': 1 }, extras: [] };
+    expect(compararRecepcion(r.checklist, rec).ok).toBe(true);
+  });
+});

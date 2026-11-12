@@ -416,24 +416,31 @@ export function leerTextoRemito(texto: string, opciones: { codigoSinNumeros?: bo
     const mNum = /^remito\b\s*(?:n[°ºo.]*)?\s*:?\s*([0-9][0-9 -]*)$/i.exec(linea);
     if (mNum) { numero = mNum[1].replace(/\s+/g, ''); return; }
     if (/^fecha\b/i.test(linea)) { fecha = fechaDeCelda(linea) || fecha; return; }
-    const tokens = linea.replace(/\s*([/×:=])\s*/g, '$1').replace(/\s+x\s+/gi, 'x').split(/[\s,;]+/).filter(Boolean);
+    // «L/3-1» o «L/3 -1»: llegaron 3 y salió 1 para órdenes (marca a mano del depósito).
+    const tokens = linea.replace(/[−–]/g, '-').replace(/\s*([/×:=])\s*/g, '$1').replace(/\s+x\s+/gi, 'x').replace(/(\d)\s+-\s*(\d)/g, '$1-$2').split(/[\s,;]+/).filter(Boolean);
     const codigo = tokens[0].toUpperCase();
     // Family usa códigos sin números (SHBSPEC); los demás proveedores siempre traen alguno.
     if (!RE_COD_REMITO.test(codigo) || (!opciones.codigoSinNumeros && !/\d/.test(codigo))) { errores.push(`Línea ${i + 1}: no reconozco el código «${tokens[0]}».`); return; }
     const resto = tokens.slice(1);
-    const r = porCodigo.get(codigo) ?? { codigo, cantidad: 0, talles: [] };
-    if (resto.length === 1 && /^\d+$/.test(resto[0])) {
-      r.cantidad += Number(resto[0]);
+    const r: RenglonRemito = porCodigo.get(codigo) ?? { codigo, cantidad: 0, talles: [] };
+    const mTotal = resto.length === 1 ? /^(\d+)(?:-(\d+))?$/.exec(resto[0]) : null;
+    if (mTotal) {
+      const cant = Number(mTotal[1]), ret = Number(mTotal[2] || 0);
+      if (ret > cant) { errores.push(`Línea ${i + 1}: ${codigo} no pueden salir ${ret} para órdenes si llegaron ${cant}.`); return; }
+      r.cantidad += cant;
+      if (ret) r.retirado = (r.retirado ?? 0) + ret;
     } else if (!resto.length) {
       errores.push(`Línea ${i + 1}: ${codigo} no tiene cantidades.`); return;
     } else {
       for (const t of resto) {
-        const m = /^([A-Z0-9.]+?)[/×:=x](\d+)$/i.exec(t);
-        if (!m) { errores.push(`Línea ${i + 1}: no entiendo «${t}» (escribí talle/cantidad, por ejemplo 7.5/2).`); continue; }
+        const m = /^([A-Z0-9.]+?)[/×:=x](\d+)(?:-(\d+))?$/i.exec(t);
+        if (!m) { errores.push(`Línea ${i + 1}: no entiendo «${t}» (escribí talle/cantidad, por ejemplo 7.5/2; si salió uno para órdenes, 7.5/2-1).`); continue; }
         const talle = m[1].toUpperCase();
         const cant = Number(m[2]);
+        const ret = Number(m[3] || 0);
+        if (ret > cant) { errores.push(`Línea ${i + 1}: ${codigo} talle ${talle}: no pueden salir ${ret} para órdenes si llegaron ${cant}.`); continue; }
         const ya = r.talles.find((x) => x.talle === talle);
-        if (ya) ya.cantidad += cant; else r.talles.push({ talle, cantidad: cant });
+        if (ya) { ya.cantidad += cant; if (ret) ya.retirado = (ya.retirado ?? 0) + ret; } else r.talles.push(ret ? { talle, cantidad: cant, retirado: ret } : { talle, cantidad: cant });
         r.cantidad += cant;
       }
     }
@@ -449,7 +456,8 @@ export function textoRemito(r: Pick<Remito, 'numero' | 'fecha' | 'renglones'>): 
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(r.fecha || '');
   if (m) lineas.push(`Fecha ${m[3]}/${m[2]}/${m[1]}`);
   for (const x of r.renglones) {
-    lineas.push(x.talles.length ? `${x.codigo} ${x.talles.map((t) => `${t.talle}/${t.cantidad}`).join(' ')}` : `${x.codigo} ${x.cantidad}`);
+    const menos = (n?: number) => (n ? `-${n}` : '');
+    lineas.push(x.talles.length ? `${x.codigo} ${x.talles.map((t) => `${t.talle}/${t.cantidad}${menos(t.retirado)}`).join(' ')}` : `${x.codigo} ${x.cantidad}${menos(x.retirado)}`);
   }
   return lineas.join('\n');
 }
