@@ -66,3 +66,19 @@ describe('órdenes de iD que ya pueden salir', () => {
     expect(renderToStaticMarkup(<OrdenesQueSalen ordenes={[]} />)).toBe('');
   });
 });
+
+describe('vista previa de la carga: cantidades a mano (gax, 12-nov-2026)', () => {
+  const conTalles = { ...plan, items: [{ ...plan.items[0], talles: [{ talle: 'M', cantidad: 2, original: 1 }, { talle: 'L', cantidad: 3, original: 3 }] }] } as unknown as PlanCarga;
+  const html = (onCantidad?: () => void) => renderToStaticMarkup(
+    <PanelCarga plan={conTalles} ocupado={false} onConfirmar={() => undefined} onCancelar={() => undefined} sucursal="DEPOSITO MARTINEZ" explicacion="" sinTildar onCantidad={onCantidad} />);
+  it('muestra un casillero por talle con lo que vino, y marca lo cambiado', () => {
+    const h = html(() => undefined);
+    expect(h).toMatch(/Llegó para cargar/);
+    expect(h).toMatch(/aria-label="Cantidad talle M"[^>]*value="2"|value="2"[^>]*aria-label="Cantidad talle M"/);
+    expect(h).toMatch(/\(remito 1\)/);
+    expect(h).not.toMatch(/\(remito 3\)/);
+  });
+  it('sin la función (Family) no se puede escribir', () => {
+    expect(html()).not.toMatch(/Llegó para cargar/);
+  });
+});

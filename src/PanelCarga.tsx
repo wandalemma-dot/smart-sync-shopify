@@ -18,13 +18,15 @@ const COLOR_ITEM = { listo: 'inherit', elegir: '#fbbf24', bloqueado: '#f87171', 
 const VERDE = '#34d399', AMARILLO = '#fbbf24', ROJO = '#f87171', VIOLETA = '#a78bfa';
 type Eleccion = EleccionesCarga[string];
 
-export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, explicacion, onModoVenta, sinTildar }: {
+export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, explicacion, onModoVenta, onCantidad, sinTildar }: {
   plan: PlanCarga; ocupado: boolean; onConfirmar: (e: EleccionesCarga) => void; onCancelar: () => void;
   sucursal: string; explicacion: string;
   /** iD: lo vendido en iD se separa; «cargarlo igual» lo suma (si ya se separó antes); «pasar» lo suma y mueve la venta a Martínez. */
   onModoVenta?: (codigo: string, modo: ModoVenta) => void;
   /** iD (12-nov-2026, gax: «yo los voy seleccionando, así los voy controlando»): empiezan destildados. */
   sinTildar?: boolean;
+  /** iD (12-nov-2026, gax): la cantidad de cada talle viene sola y se puede escribir a mano. */
+  onCantidad?: (codigo: string, talle: string, n: number) => void;
 }) {
   const [elecciones, setElecciones] = useState<EleccionesCarga>(() =>
     Object.fromEntries(plan.items.filter((it) => it.opciones.length).map((it) => [it.codigo, { clave: sinTildar && esCasilla(it) ? 'no' : it.opciones[0].clave }])));
@@ -46,7 +48,7 @@ export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, e
           ¿Algo no llegó todavía? Destildalo: queda pendiente y lo cargás otro día con el mismo botón.
         </div>)}
       {plan.items.map((it) => <FilaCarga key={it.codigo} it={it} eleccion={elecciones[it.codigo]} onElegir={(c) => elegir(it.codigo, c)} sinTildar={sinTildar}
-        onModoVenta={onModoVenta && ((m) => onModoVenta(it.codigo, m))} ocupado={ocupado} />)}
+        onModoVenta={onModoVenta && ((m) => onModoVenta(it.codigo, m))} onCantidad={onCantidad && ((t, n) => onCantidad(it.codigo, t, n))} ocupado={ocupado} />)}
       <OrdenesQueSalen ordenes={ordenesQueSalen(plan, elecciones)} />
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
         <button style={{ ...botonPrincipal, opacity: res.lineas.length && !ocupado ? 1 : 0.5, cursor: res.lineas.length && !ocupado ? 'pointer' : 'not-allowed' }}
@@ -92,8 +94,9 @@ export function OrdenesQueSalen({ ordenes, titulo }: { ordenes: OrdenQueSale[]; 
 /** Con una sola cosa para hacer, una casilla deja dejarlo para otro día (lo que no llegó todavía). */
 const esCasilla = (it: ItemCarga) => it.estado === 'listo' && it.opciones.length === 1;
 
-function FilaCarga({ it, eleccion, onElegir, onModoVenta, ocupado, sinTildar }: {
-  it: ItemCarga; eleccion?: Eleccion; onElegir: (c: Partial<Eleccion>) => void; onModoVenta?: (m: ModoVenta) => void; ocupado: boolean; sinTildar?: boolean;
+function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, ocupado, sinTildar }: {
+  it: ItemCarga; eleccion?: Eleccion; onElegir: (c: Partial<Eleccion>) => void; onModoVenta?: (m: ModoVenta) => void;
+  onCantidad?: (talle: string, n: number) => void; ocupado: boolean; sinTildar?: boolean;
 }) {
   const op = it.opciones.find((o) => o.clave === (eleccion?.clave ?? it.opciones[0]?.clave));
   const a = op?.accion;
@@ -116,6 +119,10 @@ function FilaCarga({ it, eleccion, onElegir, onModoVenta, ocupado, sinTildar }: 
           {it.opciones.map((o) => <option key={o.clave} value={o.clave} disabled={!!o.bloqueo}>{o.etiqueta}{o.bloqueo ? ' (no se puede)' : ''}</option>)}
         </select>}
       </div>
+      {onCantidad && it.talles?.length ? <div style={{ marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span style={{ opacity: 0.8 }}>✏️ Llegó para cargar:</span>
+        {it.talles.map((t) => <CantidadTalle key={t.talle} talle={t.talle} cantidad={t.cantidad} original={t.original} disabled={ocupado} onCambio={(n) => onCantidad(t.talle, n)} />)}
+      </div> : null}
       {sep?.separar?.length ? <Separar op={sep} onModoVenta={onModoVenta} ocupado={ocupado} /> : null}
       {it.motivo && <div style={{ color: COLOR_ITEM[it.estado], marginTop: 2 }}>{it.estado === 'bloqueado' ? '⛔ ' : ''}{it.motivo}</div>}
       {it.opciones.filter((o) => o.bloqueo && it.opciones.length > 1).map((o) => <div key={o.clave} style={{ opacity: 0.75 }}>· {o.etiqueta}: {o.bloqueo}</div>)}
@@ -131,6 +138,29 @@ function FilaCarga({ it, eleccion, onElegir, onModoVenta, ocupado, sinTildar }: 
       {a?.tipo === 'reposicion' && a.ajuste && <Ajuste a={a.ajuste} precio={eleccion?.precio} onPrecio={(precio) => onElegir({ precio })} />}
       {op?.avisos.map((x, i) => <div key={i} style={{ color: AMARILLO, marginTop: 6, fontSize: '0.8rem' }}>⚠️ {x}</div>)}
     </div>
+  );
+}
+
+/** Un talle con su cantidad: se escribe y se aplica al salir del casillero o con Enter. */
+function CantidadTalle({ talle, cantidad, original, disabled, onCambio }: {
+  talle: string; cantidad: number; original: number; disabled: boolean; onCambio: (n: number) => void;
+}) {
+  const [texto, setTexto] = useState(String(cantidad));
+  const [antes, setAntes] = useState(cantidad);
+  if (antes !== cantidad) { setAntes(cantidad); setTexto(String(cantidad)); }
+  const aplicar = () => {
+    const n = Number(texto.trim());
+    if (Number.isInteger(n) && n >= 0 && n <= 9999) { if (n !== cantidad) onCambio(n); } else setTexto(String(cantidad));
+  };
+  const cambiado = cantidad !== original;
+  return (
+    <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }} title={cambiado ? `El remito dice ${original}` : 'Lo que dice el remito: cambialo si llegó otra cantidad'}>
+      <strong>{talle}</strong>
+      <input type="number" min={0} max={9999} step={1} inputMode="numeric" value={texto} disabled={disabled} aria-label={`Cantidad talle ${talle}`}
+        onChange={(ev) => setTexto(ev.target.value)} onBlur={aplicar} onKeyDown={(ev) => { if (ev.key === 'Enter') aplicar(); }}
+        style={{ ...inputSt, width: 56, padding: '2px 4px', borderColor: cambiado ? AMARILLO : undefined }} />
+      {cambiado && <span style={{ fontSize: '0.75rem', color: AMARILLO }}>(remito {original})</span>}
+    </label>
   );
 }
 

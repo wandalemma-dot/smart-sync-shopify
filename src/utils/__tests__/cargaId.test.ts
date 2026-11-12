@@ -185,6 +185,25 @@ describe('iD: vista previa de la carga', () => {
     expect(planCargaId(r, estado(), { 'F-otra|CTO0325003': marca }).items[0]).toMatchObject({ estado: 'bloqueado', motivo: expect.stringMatching(/otra entrega/) });
     expect(estadoCargaFactura(r, { 'F-0011-00139953|CTO0325003': marca })).toEqual({ cargados: 1, total: 1, completa: true });
   });
+  it('la cantidad de cada talle viene del remito y se puede escribir a mano (gax, 12-nov-2026)', () => {
+    const r = resultado([fila([{ talle: 'S', cantidad: 2 }, { talle: 'XL', cantidad: 2, retirado: 1 }], { retirado: 1 })]);
+    expect(planCargaId(r, estado(), {}).items[0].talles).toEqual([{ talle: 'S', cantidad: 2, original: 2 }, { talle: 'XL', cantidad: 2, original: 2 }]);
+    const plan = planCargaId(r, estado(), {}, new Map(), new Map([['CTO0325003', { XL: 3 }]]));
+    const [it] = plan.items;
+    expect(it.talles).toEqual([{ talle: 'S', cantidad: 2, original: 2 }, { talle: 'XL', cantidad: 3, original: 2 }]);
+    expect(it.unidades).toBe(5);
+    const a = it.opciones[0].accion!;
+    if (a.tipo !== 'reposicion') throw new Error('esperaba reposición');
+    expect(a.lineas.map((l) => [l.talle, l.suma])).toEqual([['S', 2], ['XL', 3]]);
+    const avisos = it.opciones[0].avisos.join(' ');
+    expect(avisos).toMatch(/Cantidad escrita a mano: XL 2→3/);
+    expect(avisos).not.toMatch(/Salieron 1 para órdenes/);
+    // La firma sigue siendo la del remito: la misma mercadería no se carga dos veces aunque se cambie la cantidad.
+    expect(it.firma).toBe(firmaCargaId('2026-11-10', '0013-00125274', r.checklist[0]));
+    const cero = planCargaId(r, estado(), {}, new Map(), new Map([['CTO0325003', { S: 0, XL: 0 }]])).items[0];
+    expect(cero).toMatchObject({ estado: 'bloqueado', motivo: expect.stringMatching(/Pusiste 0/) });
+    expect(cero.talles).toHaveLength(2);
+  });
   it('sin precio que llegue al 50% el artículo no entra en la carga; con el precio, sí', () => {
     const plan = planCargaId(resultado([fila([{ talle: 'S', cantidad: 2 }])], [renglon(30000)]), estado(), {});
     expect(accionesElegidas(plan, {})).toEqual([]);
