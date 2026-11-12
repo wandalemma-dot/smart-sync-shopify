@@ -12,7 +12,8 @@ import { leerPrecio, precioAEscribir, resumenCarga, type AjustePrecio, type Elec
 import { margenPct } from './utils/margen';
 import { botonChico, botonPrincipal, inputSt } from './utils/entregasUi';
 
-const COLOR_ITEM = { listo: '#34d399', elegir: '#fbbf24', bloqueado: '#f87171', cargado: '#94a3b8' } as const;
+// Lo listo va en el color normal: solo resalta lo que necesita atención (12-nov-2026, gax: «hay mucho color»).
+const COLOR_ITEM = { listo: 'inherit', elegir: '#fbbf24', bloqueado: '#f87171', cargado: '#94a3b8' } as const;
 const VERDE = '#34d399', AMARILLO = '#fbbf24', ROJO = '#f87171';
 type Eleccion = EleccionesCarga[string];
 
@@ -53,7 +54,7 @@ function FilaCarga({ it, eleccion, onElegir }: { it: ItemCarga; eleccion?: Elecc
   const casilla = it.estado === 'listo' && it.opciones.length === 1;
   const fuera = casilla && !a;
   return (
-    <div style={{ borderTop: '1px solid rgba(255,255,255,0.08)', padding: '7px 0', fontSize: '0.84rem' }}>
+    <div style={{ borderTop: '2px solid rgba(255,255,255,0.2)', padding: '14px 0 12px', fontSize: '0.84rem', lineHeight: 1.55 }}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         {casilla && <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', cursor: 'pointer' }} title="Destildalo si todavía no llegó: queda pendiente">
           <input type="checkbox" checked={!fuera} onChange={(ev) => onElegir({ clave: ev.target.checked ? it.opciones[0].clave : 'no' })} />
@@ -73,11 +74,11 @@ function FilaCarga({ it, eleccion, onElegir }: { it: ItemCarga; eleccion?: Elecc
           Tipo {a.productType} · precio {fmt(a.precio)} · costo {fmt(a.costo)} · {a.variantes.map((v) => `${v.talle}:${v.cantidad}`).join(' ')} · SKU {a.variantes[0]?.sku}… · etiquetas {a.etiquetas.join(', ')}
         </div>
       </div>}
-      {a?.tipo === 'reposicion' && <div style={{ marginTop: 4 }}>
+      {a?.tipo === 'reposicion' && <div style={{ marginTop: 6 }}>
         🔁 Sumar en «{a.titulo}»: {a.lineas.map((l) => (l.actual === null ? `${l.talle} alta con ${l.suma}` : `${l.talle} ${l.actual}→${l.actual + l.suma}`)).join(' · ')}
       </div>}
       {a?.tipo === 'reposicion' && a.ajuste && <Ajuste a={a.ajuste} precio={eleccion?.precio} onPrecio={(precio) => onElegir({ precio })} />}
-      {op?.avisos.map((x, i) => <div key={i} style={{ color: AMARILLO }}>⚠️ {x}</div>)}
+      {op?.avisos.map((x, i) => <div key={i} style={{ color: AMARILLO, marginTop: 6, fontSize: '0.8rem' }}>⚠️ {x}</div>)}
     </div>
   );
 }
@@ -93,14 +94,14 @@ function Ajuste({ a, precio, onPrecio }: { a: AjustePrecio; precio?: number; onP
   const cambiar = (s: string) => { setTexto(s); onPrecio(leerPrecio(s)); };
   const color = a.precioActual !== null && a.ok ? VERDE : AMARILLO;
   return (
-    <div style={{ marginTop: 4, padding: '6px 8px', borderRadius: 6, background: 'rgba(0,0,0,0.18)' }}>
-      <div style={{ color }}>
+    <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 6, background: 'rgba(0,0,0,0.14)' }}>
+      <div>
         {a.precioActual === null
-          ? `⚠️ Los talles tienen precios distintos (${a.precios.map(fmt).join(', ') || 'sin precio'}): poné un precio para toda la curva.`
-          : `${a.ok ? '✅' : '⚠️'} Margen con el costo nuevo (${fmt(a.costoNuevo)}) y el precio actual (${fmt(a.precioActual)}): ${pct(a.margen)}${a.ok ? '' : ' — no llega al 50%'}.`}
+          ? <span style={{ color }}>⚠️ Los talles tienen precios distintos ({a.precios.map(fmt).join(', ') || 'sin precio'}): poné un precio para toda la curva.</span>
+          : <>{a.ok ? '✅' : '⚠️'} Margen con el costo nuevo ({fmt(a.costoNuevo)}) y el precio actual ({fmt(a.precioActual)}): <strong style={{ color }}>{pct(a.margen)}</strong>{a.ok ? '' : <span style={{ color }}> — no llega al 50%</span>}.</>}
         {a.basico && !a.ok && a.precioActual !== null && ' Es un básico (precio impuesto): podés dejar el precio como está.'}
       </div>
-      {(obliga || a.basico || precio !== undefined) && <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 4 }}>
+      {(obliga || a.basico || precio !== undefined) && <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 6 }}>
         <span>{obliga ? 'Precio nuevo para toda la curva (obligatorio):' : 'Precio nuevo para toda la curva (opcional):'}</span>
         <input value={texto} onChange={(ev) => cambiar(ev.target.value)} placeholder={a.precioActual !== null ? String(a.precioActual) : ''} inputMode="numeric"
           style={{ ...inputSt, width: 110, borderColor: falta && texto ? ROJO : undefined }} />
@@ -113,14 +114,14 @@ function Ajuste({ a, precio, onPrecio }: { a: AjustePrecio; precio?: number; onP
           : precio !== undefined && precio !== a.precioActual ? 'Escribí el precio en pesos, sin centavos: este artículo no se carga hasta que lo corrijas.'
           : 'Este artículo no se carga hasta que pongas el precio nuevo.'}
       </div>}
-      {!falta && escribir !== null && <div style={{ color: VERDE, marginTop: 2 }}>Se cambia el precio de todos los talles ({a.variantes.length}) a {fmt(escribir)}.</div>}
-      {a.costos.length > 0 && <div style={{ opacity: 0.85, marginTop: 2 }}>
+      {!falta && escribir !== null && <div style={{ marginTop: 4 }}>Se cambia el precio de todos los talles ({a.variantes.length}) a {fmt(escribir)}.</div>}
+      {a.costos.length > 0 && <div style={{ opacity: 0.7, marginTop: 6, fontSize: '0.8rem' }}>
         Costo nuevo {fmt(a.costoNuevo)} en {a.costos.map((c) => `${c.talle}${c.actual !== null ? ` (antes ${fmt(c.actual)})` : ''}`).join(', ')}.
       </div>}
-      {a.ponderados.length > 0 && <div style={{ opacity: 0.85, marginTop: 2 }}>
+      {a.ponderados.length > 0 && <div style={{ opacity: 0.7, marginTop: 2, fontSize: '0.8rem' }}>
         Costo promedio (ya tenían stock en Martínez): {a.ponderados.map((c) => `${c.talle} ${c.stock} a ${fmt(c.actual)} + ${c.suma} a ${fmt(a.costoNuevo)} → ${fmt(c.costo)}`).join(' · ')}.
       </div>}
-      {a.conservan.some((c) => !c.motivo) && <div style={{ opacity: 0.75, marginTop: 2 }}>
+      {a.conservan.some((c) => !c.motivo) && <div style={{ opacity: 0.6, marginTop: 2, fontSize: '0.8rem' }}>
         Conservan su costo (tienen stock en Martínez y no llegan ahora): {a.conservan.filter((c) => !c.motivo).map((c) => `${c.talle} (${c.stock} u.${c.costo !== null ? `, ${fmt(c.costo)}` : ''})`).join(', ')}.
       </div>}
     </div>
