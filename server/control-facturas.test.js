@@ -452,3 +452,24 @@ describe('nota con lo marcado en verde y sus copias en Trello (12-nov-2026)', ()
     expect(() => limpiarPedido({ id: 'x', lineas: [{ sku: 'a', entregado: 1, entregadoDesde: 'ayer' }] })).toThrow(/Fecha/);
   });
 });
+
+describe('mails del aviso de cambio de precio (12-nov-2026)', () => {
+  it('se guardan en la base, para todos los proveedores, sin repetir ni pisar las cargas', async () => {
+    const { fn } = memoria();
+    expect((await leerTodo(fn, 'id')).mailsAviso).toEqual({ para: [], copia: [] });
+    await aplicar(fn, { accion: 'guardarMailsAviso', para: [' Deposito@Example.com ', 'deposito@example.com'], copia: ['jefa@example.com.ar', 'deposito@example.com'] });
+    expect((await leerTodo(fn, 'id')).mailsAviso).toEqual({ para: ['deposito@example.com'], copia: ['jefa@example.com.ar'] });
+    expect((await leerTodo(fn, 'family')).mailsAviso.para).toEqual(['deposito@example.com']);
+    await aplicar(fn, { proveedor: 'id', accion: 'reservarCarga', entregaId: 'E-1', codigo: 'X1', firma: 'f' });
+    expect(Object.keys((await leerTodo(fn, 'id')).cargas)).toEqual(['E-1|X1']);
+    await aplicar(fn, { accion: 'guardarMailsAviso', para: [], copia: [] });
+    expect((await leerTodo(fn, 'id')).mailsAviso).toEqual({ para: [], copia: [] });
+  });
+  it('rechaza direcciones inválidas o un mail sin destinatario', async () => {
+    const { fn } = memoria();
+    await expect(aplicar(fn, { accion: 'guardarMailsAviso', para: ['no es mail'], copia: [] })).rejects.toThrow(/no es una dirección/);
+    await expect(aplicar(fn, { accion: 'guardarMailsAviso', para: ['a@b.com,c@d.com'], copia: [] })).rejects.toThrow(/no es una dirección/);
+    await expect(aplicar(fn, { accion: 'guardarMailsAviso', para: [], copia: ['a@b.com'] })).rejects.toThrow(/Para/);
+    await expect(aplicar(fn, { accion: 'guardarMailsAviso', para: Array(6).fill('a@b.com'), copia: [] })).rejects.toThrow(/Hasta/);
+  });
+});
