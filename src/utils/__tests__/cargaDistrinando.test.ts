@@ -172,6 +172,33 @@ describe('carga de Distrinando', () => {
     expect(a.quitarEtiquetas ?? []).toEqual([]);
   });
 
+  it('talles corridos: el 44 tiene el SKU del US 11 y en realidad es el US 12 (gax, Nano Classic)', () => {
+    const remito: Remito = { ...REMITO, renglones: REMITO.renglones.map((x) => (x.codigo === 'RBK110S236046' ? { ...x, talles: [{ talle: '11', cantidad: 3 }, { talle: '12', cantidad: 1 }] } : x)) };
+    const r = analizarFacturas([NOTA], [FACTURA], {}, { [FACTURA.id]: remito }).facturas[0];
+    const e = estado();
+    const p = e.productos['gid://shopify/Product/46'];
+    p.variantes = [vari('44', 'RBK110S236046-11', 1)];
+    const aMano = new Map([['RBK110S236046', { 'US 11': '43', 'US 12': '44' }]]);
+    // Sin escribir el 44: el SKU -11 está en el 44 y no lo puede crear en el 43.
+    let it = item(planCargaDistrinando(r, e, {}, [NOTA], new Map(), new Map(), new Map([['RBK110S236046', { 'US 11': '43' }]])), 'RBK110S236046');
+    expect(it.estado).toBe('bloqueado');
+    expect(it.motivo).toMatch(/el SKU RBK110S236046-11 ya está en el talle 44/);
+    // Escribiendo los dos: crea el 43 con -11, suma en el 44 y le corrige el SKU a -12. La tabla 2 coincide.
+    it = item(planCargaDistrinando(r, e, {}, [NOTA], new Map(), new Map(), aMano), 'RBK110S236046');
+    expect(it.estado).toBe('listo');
+    expect(it.tabla?.avisos ?? []).toEqual([]);
+    expect(it.tabla?.elegida).toBe('2');
+    expect(it.talles).toEqual([
+      expect.objectContaining({ talle: 'US 11', destino: '43', sku: 'RBK110S236046-11', nuevo: true }),
+      expect.objectContaining({ talle: 'US 12', destino: '44', sku: 'RBK110S236046-12' }),
+    ]);
+    const a = it.opciones[0].accion as ReposicionFamily;
+    expect(a.crear).toEqual([{ talle: '43', sku: 'RBK110S236046-11', suma: 3 }]);
+    expect(a.lineas.map((l) => `${l.talle}:${l.suma}`)).toEqual(['44:1']);
+    expect(a.cambiarSku).toEqual([expect.objectContaining({ talle: '44', antes: 'RBK110S236046-11', sku: 'RBK110S236046-12' })]);
+    expect(it.opciones[0].avisos.join(' ')).toMatch(/tenía el SKU del US 11: pasa a RBK110S236046-12/);
+  });
+
   it('un talle que no está en el remito se agrega (gax: «me entró en otro talle, en 13 americano») y sale en el mail', () => {
     const r = resultado();
     const sinCambios = planCargaDistrinando(r, estado(), {}, [NOTA]);

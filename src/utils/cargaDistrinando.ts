@@ -70,19 +70,37 @@ export type DestinosDis = ReadonlyMap<string, Readonly<Record<string, string>>>;
 /** Un talle de calzado de Shopify escrito a mano: «44», «38.5», «38,5». */
 export const leerDestino = (s: string) => { const t = String(s ?? '').trim().replace(',', '.'); return /^\d{2}(\.5)?$/.test(t) && Number(t) >= 15 && Number(t) <= 55 ? String(Number(t)) : null; };
 
-/** Dónde entra un US: lo escrito a mano manda; si no, SKU del proveedor, nota y tabla. */
-function ubicar(codigo: string, l: Llega, variantes: VarianteTalle[], pedidos: Pedido[], tabla: ReturnType<typeof tablaReebok>): ReturnType<typeof ubicarTalleDistrinando> {
+/**
+ * El SKU que pasa a llevar un talle elegido a mano que hoy tiene el SKU del proveedor de OTRO US
+ * (13-nov-2026, gax: el 44 tenía «-11» y en realidad es el US 12): el del US que entra ahí. null = no cambia.
+ */
+function skuCorregido(codigo: string, l: Llega, v: VarianteTalle | undefined, variantes: VarianteTalle[], todos: Llega[]): string | null {
+  if (!l.destino || !v) return null;
+  const otro = usDelSku(v.sku ?? '', codigo);
+  if (!otro || otro === talleUS(l.us)) return null;
+  const sku = skuProveedor(codigo, l.us);
+  // Si otro talle ya tiene ese SKU (y no recibe otro US en esta carga), no se adivina: queda el aviso.
+  const tiene = variantes.find((x) => x !== v && norm(x.sku) === sku);
+  if (tiene && !todos.some((o) => o !== l && o.cantidad > 0 && o.destino && mismoTalle(o.destino, tiene.talle))) return null;
+  return sku;
+}
+
+/** Dónde entra un US: lo escrito a mano manda; si no, SKU del proveedor, nota y tabla. `todos`: los US de esta carga. */
+function ubicar(codigo: string, l: Llega, variantes: VarianteTalle[], pedidos: Pedido[], tabla: ReturnType<typeof tablaReebok>, todos: Llega[] = []): ReturnType<typeof ubicarTalleDistrinando> {
   if (!l.destino) return ubicarTalleDistrinando({ codigo, talle: l.us, variantes, pedidos, tabla });
   const sku = skuProveedor(codigo, l.us);
   const vs = variantes.filter((v) => mismoTalle(v.talle, l.destino!));
   if (vs.length > 1) return { error: `hay dos variantes del talle ${l.destino}` };
   if (!vs.length) {
     const conSku = variantes.find((v) => norm(v.sku) === sku);
-    if (conSku) return { error: `el SKU ${sku} ya está en el talle ${conSku.talle}: para pasarlo al ${l.destino} corregí ese talle en Shopify` };
+    // Si ese talle recibe otro US en esta misma carga, su SKU se corrige y este queda libre.
+    const seLibera = conSku && todos.some((o) => o !== l && o.cantidad > 0 && o.destino && mismoTalle(o.destino, conSku.talle) && talleUS(o.us) !== talleUS(l.us));
+    if (conSku && !seLibera) return { error: `el SKU ${sku} ya está en el talle ${conSku.talle}: para pasarlo al ${l.destino} corregí ese talle en Shopify (o escribí en el ${conSku.talle} el US que entra ahí)` };
     return { error: `no existe el talle ${l.destino}`, falta: { talle: l.destino, skuProveedor: sku, fuente: 'manual' } };
   }
-  const otro = usDelSku(vs[0].sku, codigo);
-  const avisos = [`US ${l.us} → talle ${vs[0].talle}: lo elegiste a mano${otro && otro !== talleUS(l.us) ? ` (ojo: ese talle tiene el SKU del US ${otro})` : ''}.`];
+  const otro = usDelSku(vs[0].sku ?? '', codigo);
+  const corrige = skuCorregido(codigo, l, vs[0], variantes, todos);
+  const avisos = [`US ${l.us} → talle ${vs[0].talle}: lo elegiste a mano${corrige && !l.sku ? ` (tenía el SKU del US ${otro}: pasa a ${corrige})` : otro && otro !== talleUS(l.us) && !l.sku ? ` (ojo: ese talle tiene el SKU del US ${otro})` : ''}.`];
   return { varianteId: vs[0].id, talle: vs[0].talle, fuente: 'manual', skuProveedor: sku, avisos };
 }
 
@@ -176,29 +194,40 @@ function opcionReposicion(codigo: string, p: ProductoId | undefined, llegan: Lle
   const crear: NonNullable<ReposicionFamily['crear']> = [];
   const cambiarSku: NonNullable<ReposicionFamily['cambiarSku']> = [];
   const problemas: string[] = [];
+  // SKU que cambia en esta carga (escaneado a mano, o corregido porque el talle recibe otro US).
+  const nuevoSku = new Map<string, string>();
+  for (const l of llegan) {
+    if (!(l.cantidad > 0) || !l.destino) continue;
+    const v = p.variantes.filter((x) => mismoTalle(x.talle, l.destino!));
+    if (v.length !== 1) continue;
+    const s = l.sku ?? skuCorregido(codigo, l, v[0], p.variantes, llegan);
+    if (s && norm(s) !== norm(v[0].sku)) nuevoSku.set(v[0].id, s);
+  }
+  const skuDe = (x: VarianteTalle & { id: string }) => nuevoSku.get(x.id) ?? x.sku;
   // SKU escaneado a mano: no puede estar en otro talle del producto ni repetido en esta carga.
   const skuOcupado = (sku: string, salvo?: string) => {
-    const v = p.variantes.find((x) => x.id !== salvo && norm(x.sku) === norm(sku));
+    const v = p.variantes.find((x) => x.id !== salvo && norm(skuDe(x)) === norm(sku));
     if (v) return `el SKU ${sku} ya lo tiene el talle ${v.talle}`;
     return llegan.filter((x) => x.cantidad > 0 && x.sku && norm(x.sku) === norm(sku)).length > 1 ? `el SKU ${sku} está escrito en dos talles` : '';
   };
   for (const l of llegan) {
     if (!(l.cantidad > 0)) continue;
-    const u = ubicar(codigo, l, p.variantes, pedidos, t);
+    const u = ubicar(codigo, l, p.variantes, pedidos, t, llegan);
     if ('error' in u) {
       if (!u.falta) { problemas.push(`US ${l.us}: ${u.error}`); continue; }
       if (crear.some((c) => mismoTalle(c.talle, u.falta!.talle))) { problemas.push(`US ${l.us}: dos US van al talle ${u.falta.talle}`); continue; }
       const manual = l.sku && norm(l.sku) !== norm(u.falta.skuProveedor) ? l.sku : undefined;
-      if (manual) { const o = skuOcupado(manual); if (o) { problemas.push(`US ${l.us}: ${o}`); continue; } }
+      { const o = skuOcupado(manual ?? u.falta.skuProveedor); if (o) { problemas.push(`US ${l.us}: ${o}`); continue; } }
       crear.push({ talle: u.falta.talle, sku: u.falta.skuProveedor, suma: l.cantidad, ...(manual ? { skuShopify: manual, ...(esEan(manual) ? { barcode: manual } : {}) } : {}) });
       continue;
     }
     avisos.push(...u.avisos);
     const v = p.variantes.find((x) => x.id === u.varianteId)!;
-    if (l.sku && norm(l.sku) !== norm(v.sku)) {
-      const o = skuOcupado(l.sku, v.id);
+    const skuNuevo = l.sku ?? skuCorregido(codigo, l, v, p.variantes, llegan);
+    if (skuNuevo && norm(skuNuevo) !== norm(v.sku)) {
+      const o = skuOcupado(skuNuevo, v.id);
       if (o) { problemas.push(`US ${l.us}: ${o}`); continue; }
-      cambiarSku.push({ id: v.id, talle: v.talle, antes: v.sku ?? '', sku: l.sku, ...(esEan(l.sku) ? { barcode: l.sku } : {}) });
+      cambiarSku.push({ id: v.id, talle: v.talle, antes: v.sku ?? '', sku: skuNuevo, ...(esEan(skuNuevo) ? { barcode: skuNuevo } : {}) });
     }
     if (!v.seguimiento || !v.inventoryItemId) { problemas.push(`el talle ${v.talle} no lleva control de stock`); continue; }
     const ya = lineas.find((x) => x.inventoryItemId === v.inventoryItemId);
@@ -330,11 +359,11 @@ export function planCargaDistrinando(r: ResultadoFactura, estado: EstadoCargaId,
     // En qué talle de Shopify entra cada US (del primer producto; si no existe, el que se crearía).
     const tElegida = tabla.elegida ? tablaReebok(tabla.elegida) : null;
     const talles = llegan.map((l) => {
-      const u = ubicar(c.codigo, l, productos[0]?.variantes ?? [], pedidos, tElegida);
+      const u = ubicar(c.codigo, l, productos[0]?.variantes ?? [], pedidos, tElegida, llegan);
       const destino = 'error' in u ? u.falta?.talle ?? '' : u.talle;
       // SKU que tiene hoy ese talle en Shopify (gax: «para escanearlo o saber qué SKU tiene»); si se crea, el que va a llevar.
       const vDestino = 'error' in u ? (destino ? productos[0]?.variantes.find((v) => mismoTalle(v.talle, destino)) : undefined) : productos[0]?.variantes.find((v) => v.id === u.varianteId);
-      const auto = 'error' in u && u.falta ? u.falta.skuProveedor : vDestino ? vDestino.sku ?? '' : undefined;
+      const auto = 'error' in u && u.falta ? u.falta.skuProveedor : vDestino ? skuCorregido(c.codigo, l, vDestino, productos[0]?.variantes ?? [], llegan) ?? vDestino.sku ?? '' : undefined;
       const sku = auto !== undefined && l.sku ? l.sku : auto;
       return {
         talle: etiquetaUS(l.us), cantidad: l.cantidad, original: l.original, destino, ...(sku !== undefined ? { sku } : {}),
