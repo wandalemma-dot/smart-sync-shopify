@@ -24,7 +24,8 @@
 //   · Packs (13-nov-2026, gax: «la factura dice por 6, es porque son 6 bandas»): iD factura y manda el pack entero y
 //     la tienda vende por unidad. Con «X6» en el nombre de la factura o en el título de Shopify (la misma regla que
 //     Sincronización), cada pack del remito se carga como 6 unidades y el costo es por unidad: lista ÷ 6 − bonificación.
-//     Si dicen cantidades distintas, no se adivina; las unidades por pack se pueden escribir a mano.
+//     Si ninguno lo dice, la lista de packs de la plantilla de iD (`packsId.ts`, por código). Si dicen cantidades
+//     distintas, o el código de Le Coq termina en P y nadie dice cuántas trae, no se adivina; se escribe a mano.
 // La ejecución, la marca «una sola vez» y la vista previa son las mismas de Family.
 // ============================================================================
 import { claveCodigo, fmt, type FilaChecklist, type RenglonFactura, type ResultadoFactura } from './controlFacturas';
@@ -33,7 +34,7 @@ import {
 } from './cargaFamily';
 import { esPrecioSugerido } from './conversePreciosFijos';
 import { margenPct } from './margen';
-import { unidadesPorPackId } from './packsId';
+import { packConocidoId, pareceCodigoPackId, unidadesPorPackId } from './packsId';
 import { converseTablaInfo, LOC_MARTINEZ_NOMBRE, precioId, redondear2, talleShopifyLeCoq } from './syncLogic';
 import { mismaSucursal } from './shopify';
 
@@ -306,21 +307,36 @@ function igualTalle(a: string, b: string): boolean {
 // ---------------------------------------------------------------------------
 /**
  * Cuántas unidades trae cada pack: el «X6» del nombre en la factura o del título del producto en Shopify, con la misma
- * regla que Sincronización (`unidadesPorPackId`: «X6», «X 6», con separadores). Si dicen cantidades distintas, no se
- * adivina. Lo escrito a mano manda (1 = no viene en pack).
+ * regla que Sincronización (`unidadesPorPackId`: «X6», «X 6», con separadores), o la lista de packs de la plantilla de
+ * iD (`packConocidoId`, por código). Si dicen cantidades distintas, no se adivina. Un código de Le Coq terminado en P
+ * es un pack: si nadie dice cuántas trae, tampoco se adivina. Lo escrito a mano manda (1 = no viene en pack).
  */
-export function packDeCarga(descripcion: string, titulos: string[], manual?: number): Pick<PackCarga, 'unidades' | 'fuente' | 'manual' | 'error'> {
+export function packDeCarga(descripcion: string, titulos: string[], manual?: number, codigo = ''): Pick<PackCarga, 'unidades' | 'fuente' | 'manual' | 'error'> {
   if (manual !== undefined && Number.isInteger(manual) && manual >= 1) return { unidades: manual, fuente: 'lo escribiste a mano', manual: true };
   const deFactura = unidadesPorPackId(String(descripcion ?? ''));
   const deShopify = [...new Set(titulos.map((t) => unidadesPorPackId(String(t ?? ''))).filter((n) => n > 1))];
-  const todos = [...new Set([deFactura, ...deShopify].filter((n) => n > 1))];
+  const dePlantilla = packConocidoId(codigo) ?? 1;
+  const todos = [...new Set([deFactura, ...deShopify, dePlantilla].filter((n) => n > 1))];
   if (todos.length > 1) {
-    const dicen = [deFactura > 1 ? `la factura dice packs de ${deFactura}` : '', deShopify.length ? `el nombre en Shopify dice ${deShopify.join(' y ')}` : ''].filter(Boolean).join(' y ');
+    const dicen = enumerar([
+      deFactura > 1 ? `la factura dice packs de ${deFactura}` : '',
+      deShopify.length ? `el nombre en Shopify dice ${deShopify.join(' y ')}` : '',
+      dePlantilla > 1 ? `la plantilla de iD dice ${dePlantilla}` : '',
+    ]);
     return { unidades: 1, fuente: '', error: `No sé cuántas unidades trae cada pack: ${dicen}.` };
   }
-  if (!todos.length) return { unidades: 1, fuente: '' };
-  const fuentes = [deFactura > 1 ? 'la factura' : '', deShopify.length ? 'el nombre en Shopify' : ''].filter(Boolean);
-  return { unidades: todos[0], fuente: `lo dice ${fuentes.join(' y ')}` };
+  if (!todos.length) {
+    return pareceCodigoPackId(codigo)
+      ? { unidades: 1, fuente: '', error: 'El código termina en P (en iD es un pack), pero ni la factura ni el nombre en Shopify dicen cuántas unidades trae.' }
+      : { unidades: 1, fuente: '' };
+  }
+  const fuentes = enumerar([deFactura > 1 ? 'la factura' : '', deShopify.length ? 'el nombre en Shopify' : '', dePlantilla > 1 ? 'la plantilla de iD' : '']);
+  return { unidades: todos[0], fuente: `lo dice ${fuentes}` };
+}
+/** «a», «a y b», «a, b y c» (sin los vacíos). */
+function enumerar(partes: string[]): string {
+  const p = partes.filter(Boolean);
+  return p.length > 1 ? `${p.slice(0, -1).join(', ')} y ${p[p.length - 1]}` : (p[0] ?? '');
 }
 
 // ---------------------------------------------------------------------------
@@ -489,7 +505,7 @@ export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: 
     const ids = estado.porCodigo[orig.codigo.toUpperCase()] ?? [];
     // Pack (13-nov-2026, gax): el remito cuenta packs y se cargan unidades. Lo marcado «-1» son unidades que salieron
     // para órdenes (las ventas son por unidad): de un pack de 6 con «-1» se cargan 5.
-    const pk = packDeCarga(descripcion, ids.map((id) => estado.productos[id]?.titulo ?? ''), packs.get(orig.codigo));
+    const pk = packDeCarga(descripcion, ids.map((id) => estado.productos[id]?.titulo ?? ''), packs.get(orig.codigo), orig.codigo);
     const n = pk.error ? 1 : pk.unidades;
     const enUnidades: FilaChecklist = n > 1 && orig.talles
       ? { ...orig, talles: orig.talles.map((t) => ({ ...t, cantidad: Math.max(0, (t.cantidad + (t.retirado ?? 0)) * n - (t.retirado ?? 0)) })) }

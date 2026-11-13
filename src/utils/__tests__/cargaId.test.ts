@@ -6,6 +6,7 @@ import {
   type EstadoCargaId, type OrdenPendienteId, type ProductoId, type VarianteId,
 } from '../cargaId';
 import { diferenciasDeTalles, netosDeCarga, textoAvisoTalles } from '../avisoTalles';
+import { PACKS_ID, packConocidoId, pareceCodigoPackId } from '../packsId';
 import type { FilaChecklist, RenglonFactura, ResultadoFactura } from '../controlFacturas';
 
 const LOC = 'gid://shopify/Location/9';
@@ -598,7 +599,7 @@ describe('iD: packs (13-nov-2026, gax: «la factura dice por 6, es porque son 6 
     return a;
   };
 
-  it('cuántas unidades trae: el «X6» de la factura o del nombre en Shopify (la regla de Sincronización); nunca del código', () => {
+  it('cuántas unidades trae: el «X6» de la factura o del nombre en Shopify (la regla de Sincronización); el «X6» nunca se lee del código', () => {
     expect(packDeCarga('LCS SHORT SPORTY WRISTBAND X 6 BLUE', ['Muñequeras Le Coq Sportif Wristband Azul'])).toEqual({ unidades: 6, fuente: 'lo dice la factura' });
     expect(packDeCarga('LCS SHORT SPORTY WRISTBAND BLA', ['Muñequeras Le Coq Sportif Lcs Short Sp Wristband X6 Blanco'])).toEqual({ unidades: 6, fuente: 'lo dice el nombre en Shopify' });
     expect(packDeCarga('PUMAS SOCKS X 6 CON ANTIDES', ['Medias Le Coq Sportif Pumas Socks X6 Negro'])).toEqual({ unidades: 6, fuente: 'lo dice la factura y el nombre en Shopify' });
@@ -617,7 +618,7 @@ describe('iD: packs (13-nov-2026, gax: «la factura dice por 6, es porque son 6 
     expect(it.estado).toBe('listo');
     expect(it.unidades).toBe(6);
     expect(it.talles).toEqual([{ talle: 'TU', cantidad: 6, original: 6 }]);
-    expect(it.pack).toEqual({ unidades: 6, fuente: 'lo dice el nombre en Shopify', lista: 28877, bonificacion: 10, costo: 4331.55 });
+    expect(it.pack).toEqual({ unidades: 6, fuente: 'lo dice el nombre en Shopify y la plantilla de iD', lista: 28877, bonificacion: 10, costo: 4331.55 });
     const a = repo(it);
     expect(a.lineas).toEqual([{ talle: 'TU', inventoryItemId: 'gid://shopify/InventoryItem/TU', actual: 0, suma: 6 }]);
     expect(a.pack).toBe(6);
@@ -633,7 +634,7 @@ describe('iD: packs (13-nov-2026, gax: «la factura dice por 6, es porque son 6 
 
   it('LAN0125034P: si lo dice la factura («X 6») alcanza; el costo nuevo por unidad va a los talles sin stock', () => {
     const it = planCargaId(pack('LCS SHORT SPORTY WRISTBAND X 6 BLUE'), estado(munequera('Muñequeras Le Coq Sportif Wristband Azul', 0, { costo: 4000 }), COD), {}).items[0];
-    expect(it.pack).toMatchObject({ unidades: 6, fuente: 'lo dice la factura' });
+    expect(it.pack).toMatchObject({ unidades: 6, fuente: 'lo dice la factura y la plantilla de iD' });
     const a = repo(it);
     expect(a.ajuste!.costoNuevo).toBe(4331.55);
     expect(a.ajuste!.costos).toEqual([{ id: VTU, talle: 'TU', actual: 4000 }]);
@@ -667,7 +668,7 @@ describe('iD: packs (13-nov-2026, gax: «la factura dice por 6, es porque son 6 
     const r = pack('LCS SOCKS X 6 BLA');
     const e = estado(munequera('Medias Le Coq Sportif Socks X3 Blanco'), COD);
     const it = planCargaId(r, e, {}).items[0];
-    expect(it).toMatchObject({ estado: 'bloqueado', motivo: expect.stringMatching(/la factura dice packs de 6 y el nombre en Shopify dice 3\. Escribí cuántas unidades/) });
+    expect(it).toMatchObject({ estado: 'bloqueado', motivo: expect.stringMatching(/la factura dice packs de 6, el nombre en Shopify dice 3 y la plantilla de iD dice 6\. Escribí cuántas unidades/) });
     expect(it.pack).toMatchObject({ unidades: 1, error: expect.any(String) });
     expect(it.talles).toEqual([{ talle: 'TU', cantidad: 1, original: 1 }]);
     const manual = planCargaId(r, e, {}, new Map(), new Map(), new Map([[COD, 6]])).items[0];
@@ -682,8 +683,12 @@ describe('iD: packs (13-nov-2026, gax: «la factura dice por 6, es porque son 6 
     expect(a.ajuste!.costoNuevo).toBe(25989.3);
     expect(a.pack).toBeUndefined();
     expect(it.opciones[0].avisos.join(' ')).toMatch(/deja el margen en negativo\. ¿Viene en pack\?/);
-    // Sin «X6» en ningún lado: no se inventa el pack, pero se pregunta.
-    const sinX = planCargaId(pack(), estado(munequera('Muñequeras Le Coq Sportif Wristband Blanco'), COD), {}).items[0];
+    // Sin «X6» en ningún lado y con un código que no es de pack (no está en la plantilla ni termina en P): no se inventa
+    // el pack, pero se pregunta.
+    const SUELTO = 'LAN0122026';
+    const sinX = planCargaId(
+      resultado([fila([{ talle: 'TU', cantidad: 1 }], { codigo: SUELTO, descripcion: 'LCS SHORT SPORTY WRISTBAND BLA', cantidad: 1 })], [{ ...renPack(), codigo: SUELTO }]),
+      estado({ ...munequera('Muñequeras Le Coq Sportif Wristband Blanco'), etiquetas: [SUELTO] }, SUELTO), {}).items[0];
     expect(sinX.pack).toBeUndefined();
     expect(sinX.unidades).toBe(1);
     expect(sinX.opciones[0].avisos.join(' ')).toMatch(/¿Viene en pack\?/);
@@ -700,5 +705,64 @@ describe('iD: packs (13-nov-2026, gax: «la factura dice por 6, es porque son 6 
     const { cuerpo } = textoAvisoTalles(difs, { proveedor: 'iD', factura: '0011-00140008', remito: '0013-00125300' });
     expect(cuerpo).toMatch(/Según el remito: TU ×6 \(en unidades: viene en packs de 6\)\. Llegó: TU ×5\./);
     expect(cuerpo).toMatch(/Falta 1 unidad \(\$ 4\.331,55 neto a precio de factura\)\./);
+  });
+
+  // PlantillaPedido 12 de Le Coq (gax, 13-nov-2026): 39 artículos con «X6» / «X 6», todos con el código terminado en P.
+  it('la plantilla de iD: 39 códigos de Le Coq vienen de a 6 (el mismo código sin la P es la unidad suelta)', () => {
+    expect(PACKS_ID.size).toBe(39);
+    for (const [codigo, n] of PACKS_ID) {
+      expect(n).toBe(6);
+      expect(pareceCodigoPackId(codigo)).toBe(true);
+    }
+    expect(packConocidoId(' lan0122012p ')).toBe(6);
+    expect(packConocidoId('LAN0122018')).toBeUndefined();
+    expect(packConocidoId('')).toBeUndefined();
+    // Ni la factura (cortada) ni Shopify dicen «X6»: alcanza con la plantilla.
+    expect(packDeCarga('TRIPACK ALGODON MEL', ['Medias Le Coq Sportif Tripack Algodon'], undefined, 'LAN0122012P')).toEqual({ unidades: 6, fuente: 'lo dice la plantilla de iD' });
+    expect(packDeCarga('PUMAS HOME SOCKS X 6 CON ANTIDES', ['Medias Le Coq Sportif Pumas Home Socks X 6 Con Antides Blanco'], undefined, 'LAN0226035P'))
+      .toEqual({ unidades: 6, fuente: 'lo dice la factura, el nombre en Shopify y la plantilla de iD' });
+    // Si otra fuente dice otra cantidad no se adivina, y lo escrito a mano sigue mandando.
+    expect(packDeCarga('TRIPACK ALGODON MEL', ['Medias Tripack Algodon X12'], undefined, 'LAN0122012P').error)
+      .toBe('No sé cuántas unidades trae cada pack: el nombre en Shopify dice 12 y la plantilla de iD dice 6.');
+    expect(packDeCarga('TRIPACK ALGODON MEL', [], 1, 'LAN0122012P')).toEqual({ unidades: 1, fuente: 'lo escribiste a mano', manual: true });
+  });
+
+  it('caso real sin «X6» en ningún lado: Tripack Algodón LAN0122012P, 2 packs (talles 1 y 2) = 12 unidades a $6.208,56', () => {
+    const T = 'LAN0122012P';
+    const v = (talle: string) => variante(talle, 0, { id: `gid://shopify/ProductVariant/T${talle}`, inventoryItemId: `gid://shopify/InventoryItem/T${talle}`, sku: `77904465645${talle}`, precio: 15999, costo: 6209 });
+    const tripack: ProductoId = { id: 'gid://shopify/Product/88', titulo: 'Medias Le Coq Sportif Tripack Algodon', vendor: 'Le Coq Sportif', estado: 'ACTIVE', etiquetas: ['lan0122012p'], variantes: [v('1'), v('2')] };
+    const ren: RenglonFactura = { codigo: T, descripcion: 'TRIPACK ALGODON MEL', precioUnitario: 41390.3743, bonificacion: 10, cantidad: 2, total: 74502.67 };
+    const r = resultado([fila([{ talle: '1', cantidad: 1 }, { talle: '2', cantidad: 1 }], { codigo: T, descripcion: 'TRIPACK ALGODON MEL', cantidad: 2 })], [ren]);
+    const it = planCargaId(r, estado(tripack, T), {}).items[0];
+    expect(it.estado).toBe('listo');
+    expect(it.unidades).toBe(12);
+    expect(it.talles).toEqual([{ talle: '1', cantidad: 6, original: 6 }, { talle: '2', cantidad: 6, original: 6 }]);
+    // 41.390,3743 ÷ 6 − 10% = 6.208,56 (en Shopify ya está a $6.209 por unidad); sin la lista daba $37.251,34 por par.
+    expect(it.pack).toEqual({ unidades: 6, fuente: 'lo dice la plantilla de iD', lista: 41390.3743, bonificacion: 10, costo: 6208.56 });
+    const a = repo(it);
+    expect(a.lineas.map((l) => [l.talle, l.suma])).toEqual([['1', 6], ['2', 6]]);
+    expect(a.ajuste).toMatchObject({ costoNuevo: 6208.56, precioActual: 15999, ok: true });
+    expect(a.ajuste!.margen).toBeCloseTo(53.04, 1);
+    expect(it.opciones[0].avisos.join(' ')).not.toMatch(/¿Viene en pack\?/);
+  });
+
+  it('un código de Le Coq terminado en P que no está en la plantilla: si nadie dice cuántas trae, se pide escribirlo', () => {
+    expect(pareceCodigoPackId('LAN0127001P')).toBe(true);
+    expect(pareceCodigoPackId('lan0127001p')).toBe(true);
+    expect(pareceCodigoPackId('LAN0122018')).toBe(false);
+    expect(pareceCodigoPackId('A10520C')).toBe(false);
+    expect(pareceCodigoPackId('CTO0325003')).toBe(false);
+    expect(pareceCodigoPackId('2020713')).toBe(false);
+    expect(packDeCarga('CARC MEDIAS NUEVAS', ['Medias Le Coq Sportif Carc Nuevas Azul'], undefined, 'LAN0127001P'))
+      .toEqual({ unidades: 1, fuente: '', error: 'El código termina en P (en iD es un pack), pero ni la factura ni el nombre en Shopify dicen cuántas unidades trae.' });
+    expect(packDeCarga('CARC MEDIAS NUEVAS X 6', [], undefined, 'LAN0127001P')).toEqual({ unidades: 6, fuente: 'lo dice la factura' });
+    expect(packDeCarga('TEE STAR CHEVRON BLACK', ['Remera Converse Star Chevron Negro'], undefined, 'CTO0325003')).toEqual({ unidades: 1, fuente: '' });
+    // En la carga: bloqueado, con el casillero para escribir cuántas trae; escrito, se carga.
+    const N = 'LAN0127001P';
+    const r = resultado([fila([{ talle: 'TU', cantidad: 1 }], { codigo: N, descripcion: 'CARC MEDIAS NUEVAS', cantidad: 1 })], [{ ...renPack('CARC MEDIAS NUEVAS'), codigo: N }]);
+    const e = estado({ ...munequera('Medias Le Coq Sportif Carc Nuevas Azul'), etiquetas: [N] }, N);
+    const it = planCargaId(r, e, {}).items[0];
+    expect(it).toMatchObject({ estado: 'bloqueado', motivo: expect.stringMatching(/termina en P .*Escribí cuántas unidades trae cada pack\./), pack: { unidades: 1, error: expect.any(String) } });
+    expect(planCargaId(r, e, {}, new Map(), new Map(), new Map([[N, 6]])).items[0]).toMatchObject({ estado: 'listo', unidades: 6, pack: { unidades: 6, manual: true, costo: 4331.55 } });
   });
 });
