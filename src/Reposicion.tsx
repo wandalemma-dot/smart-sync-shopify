@@ -144,7 +144,7 @@ export default function Reposicion() {
                       <td style={{ ...td, fontWeight: 'bold', fontSize: '1rem' }}>{m.vendidos3}</td>
                       <td style={{ ...td, fontWeight: 'bold' }}>{m.martinez}</td>
                       <td style={{ ...td, fontWeight: 'bold', color: '#34d399' }}>{m.idStock}</td>
-                      <td style={{ ...td, fontWeight: 'bold', color: '#7dd3fc' }}>{(() => { const e = entranteModelo(m); return e.seguro || e.dudoso ? `${e.seguro}${e.dudoso ? ` (+${e.dudoso}?)` : ''}` : ''; })()}</td>
+                      <td style={{ ...td, fontWeight: 'bold' }}>{(() => { const e = entranteModelo(m); return e.seguro || e.dudoso ? `${e.seguro}${e.dudoso ? ` (+${e.dudoso}?)` : ''}` : ''; })()}</td>
                     </tr>
                     {m.variantes.map(v => { const en = entranteVar(m, v); return (
                       <tr key={v.id} style={{ borderTop: '1px solid rgba(255,255,255,0.06)', opacity: v.vendidos15 || (v.idStock ?? 0) > 0 ? 1 : 0.55 }}>
@@ -156,7 +156,7 @@ export default function Reposicion() {
                         <td style={{ ...td, fontWeight: v.vendidos3 ? 'bold' : undefined }}>{v.vendidos3 || ''}</td>
                         <td style={{ ...td, color: v.martinez !== null && v.martinez <= 0 ? '#fca5a5' : undefined }}>{stock(v.martinez)}</td>
                         <td style={{ ...td, color: (v.idStock ?? 0) > 0 ? '#34d399' : undefined }}>{stock(v.idStock)}</td>
-                        <td style={{ ...td, color: '#7dd3fc', fontWeight: en ? 'bold' : undefined }}
+                        <td style={td}
                           title={en ? en.notas.map(n => `${n.nombre} (${fechaAr(n.fecha)}): ${n.cantidad ?? `hasta ${n.hasta}`}`).join('\n') : undefined}>
                           {en ? textoEntrante(en) : ''}</td>
                       </tr>
