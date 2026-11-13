@@ -1,14 +1,8 @@
 import { allowedOrigin, identity, makeSession, noStore, roleForKey, sessionCookie, validSecret } from '../server/access.js';
 
-const ROLES = ['user', 'deposito'];
-
 export default function handler(req, res) {
   noStore(res);
-  if (req.method === 'GET') {
-    const rol = identity(req);
-    const ok = ROLES.includes(rol);
-    return res.status(200).json({ authenticated: ok, ...(ok ? { rol } : {}), readOnly: true });
-  }
+  if (req.method === 'GET') return res.status(200).json({ authenticated: identity(req) === 'user', readOnly: true });
   if (!['POST', 'DELETE'].includes(req.method)) return res.status(405).json({ error: 'Method Not Allowed' });
   if (!allowedOrigin(req)) return res.status(403).json({ error: 'Origen no permitido.' });
   if (req.method === 'DELETE') {
@@ -24,8 +18,9 @@ export default function handler(req, res) {
         : 'La clave guardada en Vercel tiene menos de 32 caracteres. Guardá una clave más larga y actualizá el despliegue.',
     });
   }
+  // Clave principal o clave del depósito (misma app; la del depósito se puede cambiar aparte).
   const rol = roleForKey(req.body?.key);
   if (!rol) return res.status(401).json({ error: 'Clave de acceso incorrecta.' });
   res.setHeader('Set-Cookie', sessionCookie(makeSession(Date.now(), rol)));
-  return res.status(200).json({ authenticated: true, rol, readOnly: true });
+  return res.status(200).json({ authenticated: true, readOnly: true });
 }

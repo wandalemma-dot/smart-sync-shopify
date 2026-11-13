@@ -1,6 +1,6 @@
 // Trello para el control de facturas: lista las tarjetas del tablero de compras y
 // baja sus Excel. Solo sesión humana; solo lectura. No toca Shopify.
-import { esPersona, identity, noStore } from '../server/access.js';
+import { identity, noStore } from '../server/access.js';
 import { bajarAdjunto, listarTarjetas, trelloConfigurado } from '../server/trello.js';
 import { mensajeSeguro } from '../server/secretos.js';
 
@@ -8,7 +8,7 @@ export const maxDuration = 60; // un Excel grande de iD (con fotos) se baja y se
 
 export default async function handler(req, res) {
   noStore(res);
-  if (!esPersona(identity(req))) return res.status(401).json({ error: 'Iniciá sesión en la app.' });
+  if (identity(req) !== 'user') return res.status(401).json({ error: 'Iniciá sesión en la app.' });
   if (req.method !== 'GET') return res.status(405).json({ error: 'Method Not Allowed' });
   if (!trelloConfigurado()) return res.status(503).json({ error: 'Faltan TRELLO_KEY y TRELLO_TOKEN en Vercel.', sinTrello: true });
   try {

@@ -1,11 +1,11 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
-import Raiz from './Raiz.tsx'
+import App from './App.tsx'
 import AccessGate from './AccessGate.tsx'
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <AccessGate><Raiz /></AccessGate>
+    <AccessGate><App /></AccessGate>
   </StrictMode>,
 )

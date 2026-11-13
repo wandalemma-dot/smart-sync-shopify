@@ -12,9 +12,9 @@ export function sameSecret(a, b) {
   return left.length === right.length && timingSafeEqual(left, right);
 }
 // Clave del depósito (13-nov-2026, pedido de gax): una segunda clave, aparte de la de Wanda/gax,
-// que solo abre «Carga y control de entregas» (ver ROLES_DEPOSITO en los handlers). Su sesión se
-// firma con SU clave: si se cambia o se borra APP_ACCESS_KEY_DEPOSITO en Vercel, el depósito queda
-// afuera sin tocar la clave principal. Si fuera igual a la principal, no cuenta (manda la principal).
+// con los MISMOS permisos (toda la app; gax lo eligió). Sirve para poder sacársela sin tocar la
+// principal: su sesión se firma con SU clave, así que si se cambia o se borra APP_ACCESS_KEY_DEPOSITO
+// en Vercel el depósito queda afuera. Si fuera igual a la principal, no cuenta (manda la principal).
 function claveDeRol(rol) {
   if (rol === 'deposito') {
     const k = process.env.APP_ACCESS_KEY_DEPOSITO;
@@ -66,7 +66,8 @@ export function identity(req) {
   }
   const cookies = String(req.headers?.cookie || '').split(';').map(c => c.trim());
   const matching = cookies.filter(c => c.startsWith(`${COOKIE}=`));
-  return matching.length === 1 ? sessionRole(matching[0].slice(COOKIE.length + 1)) : null;
+  // La sesión del depósito tiene los mismos permisos que la principal.
+  return matching.length === 1 && sessionRole(matching[0].slice(COOKIE.length + 1)) ? 'user' : null;
 }
 export function sessionCookie(value, clear = false) {
   return `${COOKIE}=${value}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=${clear ? 0 : TTL}`;
@@ -74,8 +75,4 @@ export function sessionCookie(value, clear = false) {
 export function noStore(res) {
   res.setHeader('Cache-Control', 'no-store');
   res.setHeader('X-Content-Type-Options', 'nosniff');
-}
-// Personas que pueden usar «Carga y control de entregas» (facturas, notas de Trello, foto del remito).
-export function esPersona(rol) {
-  return rol === 'user' || rol === 'deposito';
 }

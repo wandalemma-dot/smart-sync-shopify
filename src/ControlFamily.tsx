@@ -26,7 +26,6 @@ import {
 } from './utils/cargaFamily';
 import { leerTextoRemito, textoRemito } from './utils/lectoresFacturas';
 import { shopifyGraphQL } from './utils/shopify';
-import { useRol } from './rol';
 import {
   apiControl, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, slug, td, th,
 } from './utils/entregasUi';
@@ -326,7 +325,6 @@ function TarjetaFamily({ r, abierta, ocupado, cargas, plan, onArmar, onConfirmar
   onGuardarRemito: (r: Remito) => Promise<boolean>; onBorrarRemito: () => void; onGuardarEntrega: (e: EntregaFamily) => Promise<boolean>;
   onFecha: (f: string) => void; onConsultar: () => void; onBorrar: () => void;
 }) {
-  const deposito = useRol() === 'deposito'; // el depósito no carga en Shopify (13-nov-2026)
   const e = r.entrega;
   const s = SEMAFORO[r.semaforo];
   const [editando, setEditando] = useState<'remito' | 'planilla' | null>(null);
@@ -383,7 +381,7 @@ function TarjetaFamily({ r, abierta, ocupado, cargas, plan, onArmar, onConfirmar
           <button style={botonChico} onClick={() => abrir('remito')}>{r.remito ? '✏️ Ver o corregir' : '✏️ Escribirlo'}</button>
         </Parte>
         <Parte ok={enShopify.completa} titulo="Shopify" detalle={cargados ? `${cargados} de ${enShopify.total} cargados` : 'sin cargar'}>
-          {!deposito && !enShopify.completa && !plan && <button style={{ ...botonChico, opacity: puedeCargar && !ocupado ? 1 : 0.5 }} disabled={ocupado}
+          {!enShopify.completa && !plan && <button style={{ ...botonChico, opacity: puedeCargar && !ocupado ? 1 : 0.5 }} disabled={ocupado}
             title={puedeCargar ? 'Crea los nuevos y suma la reposición, con vista previa y confirmación' : 'Primero la planilla tiene que coincidir con el remito'}
             onClick={onArmar}>⬆️ Cargar en Shopify</button>}
         </Parte>
@@ -439,7 +437,7 @@ function TarjetaFamily({ r, abierta, ocupado, cargas, plan, onArmar, onConfirmar
             <button style={botonChico} disabled={ocupado} onClick={onConsultar}>🔄 Consultar Shopify de nuevo</button>
             <label>fecha de la planilla <input type="date" value={e.fecha} style={inputSt} onChange={(ev) => ev.target.value && onFecha(ev.target.value)} /></label>
             {e.shopify?.fecha && <span style={{ opacity: 0.65 }}>Shopify consultado el {fechaAr(e.shopify.fecha)}</span>}
-            {!deposito && !enShopify.completa && !plan && <button style={botonChico} disabled={ocupado} onClick={onArmar}>⬆️ Cargar en Shopify</button>}
+            {!enShopify.completa && !plan && <button style={botonChico} disabled={ocupado} onClick={onArmar}>⬆️ Cargar en Shopify</button>}
             {Object.entries(cargas).filter(([, c]) => c.estado === 'cargada').map(([codigo, c]) => (
               <button key={codigo} style={{ ...botonChico, background: 'transparent', opacity: 0.7 }} disabled={ocupado} title={textoCarga(c)} onClick={() => onLiberar(codigo, c)}>🔓 {codigo}</button>
             ))}

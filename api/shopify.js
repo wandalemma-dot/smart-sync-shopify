@@ -12,20 +12,15 @@ export default async function handler(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
   const who = identity(req);
   if (!who) return res.status(401).json({ error: 'Autenticación requerida.' });
-  if ((who === 'user' || who === 'deposito') && !allowedOrigin(req)) return res.status(403).json({ error: 'Origen no permitido.' });
+  if (who === 'user' && !allowedOrigin(req)) return res.status(403).json({ error: 'Origen no permitido.' });
   if (!String(req.headers?.['content-type'] || '').toLowerCase().startsWith('application/json')) {
     return res.status(415).json({ error: 'Se requiere JSON.' });
   }
   const { query, variables } = req.body || {};
   if (variables != null && (typeof variables !== 'object' || Array.isArray(variables))) return res.status(400).json({ error: 'Variables inválidas.' });
   let policy;
-  // Depósito (13-nov-2026): solo lecturas; no escribe stock, precios ni productos.
-  try { policy = who === 'user' ? inspectUserQuery(query) : inspectReadQuery(query, who === 'automation'); }
-  catch {
-    return res.status(403).json({ error: who === 'user' ? 'La operación no pertenece a las funciones de esta app.'
-      : who === 'deposito' ? 'Con la clave del depósito no se pueden hacer cambios en Shopify.'
-        : 'El acceso del bot permite únicamente consultas autorizadas.' });
-  }
+  try { policy = who === 'user' ? inspectUserQuery(query) : inspectReadQuery(query, true); }
+  catch { return res.status(403).json({ error: who === 'user' ? 'La operación no pertenece a las funciones de esta app.' : 'El acceso del bot permite únicamente consultas autorizadas.' }); }
   try {
     const token = await obtenerToken();
     const version = policy.reports || policy.write ? API_VERSION_INFORMES : API_VERSION;
