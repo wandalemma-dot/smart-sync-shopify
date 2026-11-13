@@ -157,6 +157,21 @@ describe('carga de Distrinando', () => {
     expect((it.opciones[0].accion as AltaFamily).tabla).toBeUndefined();
   });
 
+  it('el talle escrito a mano cuenta al revisar la tabla (gax: «le pongo el 44 y ahí sí coincide con la tabla 2»)', () => {
+    const r = resultado();
+    // La nota dice US 11 = 44 y la tabla 2 dice 43: avisa.
+    let it = item(planCargaDistrinando(r, estado(), {}, [NOTA]), 'RBK110S236046');
+    expect(it.tabla?.avisos.join(' ')).toMatch(/etiqueta dice TABLA DE TALLE REEBOK 2.*US 11 = 44, la tabla dice 43/);
+    // Escribe el 43: ahora coincide con la tabla 2, deja de avisar y la tabla 1 queda bloqueada por lo escrito.
+    it = item(planCargaDistrinando(r, estado(), {}, [NOTA], new Map(), new Map(), new Map([['RBK110S236046', { 'US 11': '43' }]])), 'RBK110S236046');
+    expect(it.tabla?.avisos ?? []).toEqual([]);
+    expect(it.tabla?.elegida).toBe('2');
+    expect(it.tabla?.opciones.find((o) => o.clave === '1')?.bloqueo).toMatch(/no coincide con el talle que escribiste a mano: US 11 = 43/);
+    const a = it.opciones[0].accion as ReposicionFamily;
+    expect(a.lineas.map((l) => `${l.talle}:${l.suma}`)).toEqual(['43:4']);
+    expect(a.quitarEtiquetas ?? []).toEqual([]);
+  });
+
   it('un talle que no está en el remito se agrega (gax: «me entró en otro talle, en 13 americano») y sale en el mail', () => {
     const r = resultado();
     const sinCambios = planCargaDistrinando(r, estado(), {}, [NOTA]);

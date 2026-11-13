@@ -131,7 +131,14 @@ const NO_CARGAR: OpcionCarga = { clave: 'no', etiqueta: 'No cargar este artícul
 /** Las opciones de tabla de talle del modelo y la que viene elegida. */
 function tablaDelItem(codigo: string, pedidos: Pedido[], productos: ProductoId[], llegan: Llega[], elegida: string | undefined): { tabla: TablaItem; avisos: string[] } {
   const variantes: VarianteTalle[] = productos.flatMap((p) => p.variantes);
-  const pares = paresConocidos(codigo, pedidos, variantes);
+  // El talle escrito a mano manda sobre la nota y los SKU para ese US (13-nov-2026, gax: «yo le pongo el
+  // 44 y ahí sí coincide con la tabla 2, pero no lo toma»): es donde realmente entra.
+  const aMano = llegan.filter((l) => l.destino && /^\d+(\.\d+)?$/.test(l.destino.replace(',', '.')));
+  const mismoUS = (a: string, b: string) => Number(a) === Number(b);
+  const pares = [
+    ...paresConocidos(codigo, pedidos, variantes).filter((p) => !aMano.some((l) => mismoUS(l.us, p.us))),
+    ...aMano.map((l) => ({ us: l.us, ar: String(Number(l.destino!.replace(',', '.'))), de: 'el talle que escribiste a mano' })),
+  ];
   // Talles que solo se ubican con la tabla: sin SKU del proveedor en Shopify y sin AR en la nota.
   const necesarios = llegan.filter((l) => !l.destino && !variantes.some((v) => norm(v.sku) === skuProveedor(codigo, l.us)) && !arDeNotas(pedidos, skuProveedor(codigo, l.us), l.us).ar).map((l) => l.us);
   const posibles = tablasDelModelo(pares, necesarios);
