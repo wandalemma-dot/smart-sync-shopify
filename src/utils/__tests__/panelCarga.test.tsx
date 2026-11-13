@@ -133,6 +133,21 @@ describe('vista previa de la carga: Distrinando (13-nov-2026)', () => {
     expect(h).not.toMatch(/🔁|✏️|🆕|✅ Margen/);
     expect(h).toMatch(/＋ Agregar talle/);
   });
+  it('el SKU se puede escribir o escanear, el talle agregado se puede quitar y el artículo sacarse de la carga', () => {
+    const conExtra = { ...dis, items: [{ ...dis.items[0], talles: [...(dis.items[0].talles ?? []), { talle: 'US 6', cantidad: 1, original: 0, destino: '37', sku: '4066700000000', skuManual: true }] }] } as unknown as PlanCarga;
+    const h = renderToStaticMarkup(<PanelCarga plan={conExtra} ocupado={false} onConfirmar={() => undefined} onCancelar={() => undefined} sucursal="DEPOSITO MARTINEZ" explicacion=""
+      sinTildar onCantidad={() => undefined} onTabla={() => undefined} onDestino={() => undefined} onSku={() => undefined} onQuitarTalle={() => undefined} onQuitar={() => undefined} />);
+    expect(h).toMatch(/aria-label="SKU de US 5"[^>]*value="RBK1100231713-5"|value="RBK1100231713-5"[^>]*aria-label="SKU de US 5"/);
+    expect(h).toMatch(/\(nuevo SKU\)/);
+    expect(h.match(/>Quitar<\/button>/g)).toHaveLength(1);
+    expect(h).toMatch(/Sacar de la carga \(no llegó\)/);
+    const sacado = renderToStaticMarkup(<PanelCarga plan={{ ...conExtra, quitados: [dis.items[0].codigo] } as PlanCarga} ocupado={false} onConfirmar={() => undefined} onCancelar={() => undefined}
+      sucursal="DEPOSITO MARTINEZ" explicacion="" sinTildar onCantidad={() => undefined} onDestino={() => undefined} onQuitar={() => undefined} onMailSolo={() => undefined} />);
+    expect(sacado).toMatch(/sacado de la carga: no llegó/);
+    expect(sacado).toMatch(/Volver a agregarlo/);
+    expect(sacado).toMatch(/Armar el mail de lo que no llegó/);
+    expect(sacado).not.toMatch(/Talle que llegó/);
+  });
   it('se puede agregar un talle que no está en el remito', () => {
     expect(html).toMatch(/＋ Agregar talle/);
   });

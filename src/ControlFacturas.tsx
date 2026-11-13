@@ -205,6 +205,8 @@ export default function ControlFacturas() {
   const baseCarga = useRef<{
     prov: Prov; r: ResultadoFactura; estado: EstadoCargaId; cargas: Record<string, CargaFamily>; modos: Map<string, ModoVenta>; cantidades: Map<string, Record<string, number>>;
     pedidos: Pedido[]; tablas: Map<string, string>; destinos: Map<string, Record<string, string>>;
+    /** Distrinando: SKU escaneado a mano y artículos sacados de la carga (no llegaron). */
+    skus: Map<string, Record<string, string>>; quitados: Set<string>;
   } | null>(null);
   const listasRevisadas = useRef(new Set<Prov>());
   // Proveedor elegido ahora: una búsqueda o carga que termina después de cambiarlo no toca la pantalla.
@@ -671,7 +673,7 @@ export default function ControlFacturas() {
       const estado = await leerEstadoCargaId(r.checklist.map((c) => c.codigo), shopifyGraphQL, dis ? { ventasId: false, pos: true } : {});
       if (!sigue(p)) return;
       setDatos({ ...VACIO, ...d });
-      baseCarga.current = { prov: p, r, estado, cargas: d.cargas ?? {}, modos: new Map(), cantidades: new Map(), pedidos: d.pedidos ?? [], tablas: new Map(), destinos: new Map() };
+      baseCarga.current = { prov: p, r, estado, cargas: d.cargas ?? {}, modos: new Map(), cantidades: new Map(), pedidos: d.pedidos ?? [], tablas: new Map(), destinos: new Map(), skus: new Map(), quitados: new Set() };
       rearmar();
     } catch (e) { if (sigue(p)) setAvisos([`No pude armar la carga: ${mensaje(e)} No se cargó nada.`]); }
     finally { setOcupado(''); }
@@ -682,7 +684,7 @@ export default function ControlFacturas() {
     const b = baseCarga.current;
     if (!b) return;
     setPlanCarga(b.prov === 'distrinando'
-      ? planCargaDistrinando(b.r, b.estado, b.cargas, b.pedidos, new Map(b.tablas), new Map(b.cantidades), new Map(b.destinos))
+      ? { ...planCargaDistrinando(b.r, b.estado, b.cargas, b.pedidos, new Map(b.tablas), new Map(b.cantidades), new Map(b.destinos), new Map(b.skus)), quitados: [...b.quitados] }
       : planCargaId(b.r, b.estado, b.cargas, new Map(b.modos), new Map(b.cantidades)));
   }
 
@@ -720,6 +722,48 @@ export default function ControlFacturas() {
     rearmar();
   }
 
+  /** Distrinando: SKU escrito o escaneado a mano para un talle ('' = el que tiene). */
+  function skuCarga(codigo: string, talle: string, sku: string) {
+    const b = baseCarga.current;
+    if (!b) return;
+    const x = { ...(b.skus.get(codigo) ?? {}) };
+    if (sku) x[talle] = sku; else delete x[talle];
+    b.skus.set(codigo, x);
+    rearmar();
+  }
+
+  /** Distrinando: quitar un talle agregado a mano (no está en el remito). */
+  function quitarTalle(codigo: string, talle: string) {
+    const b = baseCarga.current;
+    if (!b) return;
+    for (const m of [b.cantidades, b.destinos, b.skus] as Map<string, Record<string, unknown>>[]) {
+      const x = { ...(m.get(codigo) ?? {}) };
+      delete x[talle];
+      m.set(codigo, x);
+    }
+    rearmar();
+  }
+
+  /** Distrinando: sacar un artículo de la carga porque no llegó (entra en el mail), o volver a agregarlo. */
+  function quitarArticulo(codigo: string, quitar: boolean) {
+    const b = baseCarga.current;
+    if (!b) return;
+    if (quitar) b.quitados.add(codigo); else b.quitados.delete(codigo);
+    rearmar();
+  }
+
+  /** El mail de diferencias con el remito (talles distintos y lo que no llegó). */
+  function armarMailTalles(r: ResultadoFactura, plan: PlanCarga, resultados: Parameters<typeof diferenciasDeTalles>[1], p: Prov) {
+    const netos = Object.fromEntries(plan.items.map((it) => {
+      const ren = r.factura.renglones.find((x) => claveCodigo(x.codigo) === claveCodigo(it.codigo));
+      return [it.codigo, ren ? Math.round((Number(ren.precioUnitario) || 0) * (1 - (Number(ren.bonificacion) || 0) / 100) * 100) / 100 : 0];
+    }));
+    const difs = diferenciasDeTalles(plan.items, resultados, netos, new Set(plan.quitados ?? []));
+    const fecha = hoyAr().split('-').reverse().join('/');
+    const proveedor = PROVS.find((x) => x.id === p)?.nombre ?? p;
+    setAvisoTalles(difs.length ? textoAvisoTalles(difs, { proveedor, factura: r.factura.numero, remito: r.remito?.numero, fecha }) : null);
+  }
+
   async function confirmarCarga(r: ResultadoFactura, plan: PlanCarga, elecciones: EleccionesCarga) {
     const res = resumenCarga(plan, elecciones);
     if (!res.lineas.length) return;
@@ -750,12 +794,7 @@ export default function ControlFacturas() {
         const fecha = hoyAr().split('-').reverse().join('/');
         const proveedor = PROVS.find((x) => x.id === p)?.nombre ?? p;
         if (cambios.length) setAvisoPrecio({ cambios, ...textoAvisoPrecio(cambios, { proveedor, factura, remito: r.remito?.numero, fecha }) });
-        const netos = Object.fromEntries(plan.items.map((it) => {
-          const ren = r.factura.renglones.find((x) => claveCodigo(x.codigo) === claveCodigo(it.codigo));
-          return [it.codigo, ren ? Math.round((Number(ren.precioUnitario) || 0) * (1 - (Number(ren.bonificacion) || 0) / 100) * 100) / 100 : 0];
-        }));
-        const difs = diferenciasDeTalles(plan.items, resultados, netos);
-        if (difs.length) setAvisoTalles(textoAvisoTalles(difs, { proveedor, factura, remito: r.remito?.numero, fecha }));
+        armarMailTalles(r, plan, resultados, p);
       }
       setPlanCarga(null);
     } catch (e) { if (sigue(p)) setAvisos([`La carga se cortó: ${mensaje(e)} Revisá en Shopify qué quedó cargado antes de volver a intentar.`]); }
@@ -931,7 +970,10 @@ export default function ControlFacturas() {
               cargas: datos.cargas ?? {}, plan: planCarga?.entregaId === r.factura.id ? planCarga : null,
               onArmar: () => armarCarga(r), onConfirmar: (e) => planCarga && confirmarCarga(r, planCarga, e),
               onCancelar: () => setPlanCarga(null), onLiberar: (codigo, c) => liberarCarga(r.factura.id, codigo, c), onCantidad: cantidadCarga,
-              ...(prov === 'id' ? { onModoVenta: modoVenta, explicacion: EXPLICA_ID } : { onTabla: tablaCarga, onDestino: destinoCarga, explicacion: EXPLICA_DISTRINANDO }),
+              ...(prov === 'id' ? { onModoVenta: modoVenta, explicacion: EXPLICA_ID } : {
+                onTabla: tablaCarga, onDestino: destinoCarga, onSku: skuCarga, onQuitarTalle: quitarTalle, onQuitar: quitarArticulo,
+                onMailSolo: () => planCarga && armarMailTalles(r, planCarga, [], prov), explicacion: EXPLICA_DISTRINANDO,
+              }),
             } : undefined} />)}
 
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 16, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
@@ -1041,6 +1083,9 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
     onModoVenta?: (codigo: string, modo: ModoVenta) => void;
     /** Distrinando: tabla de talle y talle de destino. */
     onTabla?: (codigo: string, tabla: string) => void; onDestino?: (codigo: string, talle: string, destino: string) => void;
+    /** Distrinando: SKU a mano, quitar un talle agregado, sacar un artículo que no llegó y armar el mail sin cargar. */
+    onSku?: (codigo: string, talle: string, sku: string) => void; onQuitarTalle?: (codigo: string, talle: string) => void;
+    onQuitar?: (codigo: string, quitar: boolean) => void; onMailSolo?: () => void;
   };
 }) {
   const f = r.factura;
@@ -1131,6 +1176,7 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
       </div>}
       {carga?.plan && <PanelCarga plan={carga.plan} ocupado={ocupado} onConfirmar={carga.onConfirmar} onCancelar={carga.onCancelar} sucursal={SUCURSAL_CARGA_ID}
         onModoVenta={carga.onModoVenta} onCantidad={carga.onCantidad} onTabla={carga.onTabla} onDestino={carga.onDestino} sinTildar
+        onSku={carga.onSku} onQuitarTalle={carga.onQuitarTalle} onQuitar={carga.onQuitar} onMailSolo={carga.onMailSolo}
         explicacion={carga.explicacion} />}
       <TarjetasTrello ids={r.pedidosCubiertos} pedidos={pedidos} />
       {r.semaforo !== 'incompleta' && r.pedidosCubiertos.length > 0 && <PlanillasMarcadas r={r} res={res} pedidos={todas} nombrePedido={nombrePedido} ocupado={ocupado} consejos={consejos} />}

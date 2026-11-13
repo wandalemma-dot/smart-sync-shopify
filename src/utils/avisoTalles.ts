@@ -13,13 +13,23 @@ export interface DiferenciaTalles {
   talles: { talle: string; remito: number; llego: number }[];
   /** Precio de lista unitario de la factura menos la bonificación (0 si no se sabe). */
   neto: number;
+  /** Se sacó de la carga: no llegó nada. */
+  noLlego?: boolean;
 }
 
-/** Los artículos cargados cuyo talle o cantidad no coincide con el remito. */
-export function diferenciasDeTalles(items: ItemCarga[], resultados: ResultadoCarga[], netos: Record<string, number>): DiferenciaTalles[] {
+/**
+ * Los artículos cargados cuyo talle o cantidad no coincide con el remito, y los que se sacaron de la carga
+ * porque no llegaron (13-nov-2026, gax: «que se pueda eliminar… y cómo impacta en el mail»).
+ */
+export function diferenciasDeTalles(items: ItemCarga[], resultados: ResultadoCarga[], netos: Record<string, number>, quitados: ReadonlySet<string> = new Set()): DiferenciaTalles[] {
   const estado = new Map(resultados.map((r) => [r.codigo, r.estado]));
   const out: DiferenciaTalles[] = [];
   for (const it of items) {
+    if (quitados.has(it.codigo)) {
+      const talles = (it.talles ?? []).filter((t) => t.original > 0).map((t) => ({ talle: t.talle, remito: t.original, llego: 0 }));
+      out.push({ codigo: it.codigo, descripcion: it.descripcion, talles: talles.length ? talles : [{ talle: 'sin talle', remito: it.unidades, llego: 0 }], neto: netos[it.codigo] ?? 0, noLlego: true });
+      continue;
+    }
     const e = estado.get(it.codigo);
     if (e !== 'cargada' && e !== 'parcial' && e !== 'dudosa') continue;
     const talles = (it.talles ?? []).filter((t) => t.cantidad !== t.original).map((t) => ({ talle: t.talle, remito: t.original, llego: t.cantidad }));
@@ -40,7 +50,7 @@ export function textoAvisoTalles(difs: DiferenciaTalles[], ctx: { proveedor: str
     lineas.push(`• ${d.codigo} — ${d.descripcion}`);
     const remito = d.talles.filter((t) => t.remito > 0).map((t) => `${t.talle} ×${t.remito}`);
     const llego = d.talles.filter((t) => t.llego > 0).map((t) => `${t.talle} ×${t.llego}`);
-    lineas.push(`   Según el remito: ${remito.join(', ') || 'nada'}. Llegó: ${llego.join(', ') || 'nada'}.`);
+    lineas.push(d.noLlego ? `   Según el remito: ${remito.join(', ') || 'nada'}. No llegó.` : `   Según el remito: ${remito.join(', ') || 'nada'}. Llegó: ${llego.join(', ') || 'nada'}.`);
     const dif = d.talles.reduce((s, t) => s + t.llego - t.remito, 0);
     if (!dif) lineas.push(`   Misma cantidad de pares: ${d.neto > 0 ? 'mismo modelo y mismo precio, el importe se compensa' : 'el importe se compensa'}.`);
     else {
@@ -50,7 +60,7 @@ export function textoAvisoTalles(difs: DiferenciaTalles[], ctx: { proveedor: str
   }
   const cuerpo = [
     'Hola,', '',
-    `En la entrega de ${ctx.proveedor}${doc ? ` (${doc})` : ''}${ctx.fecha ? ` que cargamos el ${ctx.fecha}` : ''} los talles no coinciden con el remito:`, '',
+    `En la entrega de ${ctx.proveedor}${doc ? ` (${doc})` : ''}${ctx.fecha ? ` que cargamos el ${ctx.fecha}` : ''} hay diferencias con el remito:`, '',
     ...lineas, '',
     'Por favor, tenerlo en cuenta para corregir el remito o la factura.',
     'Gracias.',

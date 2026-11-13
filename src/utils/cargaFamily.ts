@@ -256,7 +256,8 @@ export interface AltaFamily {
   gramos: number;
   precio: number;
   costo: number;
-  variantes: { talle: string; sku: string; cantidad: number }[];
+  /** Distrinando: `barcode` cuando el SKU es un EAN (escaneado a mano). */
+  variantes: { talle: string; sku: string; cantidad: number; barcode?: string }[];
   /** Distrinando: vendor del producto (Family por defecto). */
   vendor?: string;
   /** Distrinando: tabla de talle elegida, se guarda en custom.size_conversion. */
@@ -292,7 +293,12 @@ export interface ReposicionFamily {
    * Distrinando (13-nov-2026, gax): talles que no existen en el producto y se crean con su stock,
    * el precio de la curva y el costo de la factura. `sku` = SKU del proveedor.
    */
-  crear?: { talle: string; sku: string; suma: number }[];
+  crear?: { talle: string; sku: string; suma: number; /** SKU escaneado a mano (va en vez del del proveedor). */ skuShopify?: string; barcode?: string }[];
+  /**
+   * Distrinando (13-nov-2026, gax: «que yo pueda escanear uno nuevo»): SKU nuevo de talles que ya existen.
+   * Se cambia después de sumar el stock; si es un EAN, también el código de barras.
+   */
+  cambiarSku?: { id: string; talle: string; antes: string; sku: string; barcode?: string }[];
   /** Distrinando: etiquetas que se agregan (código, tabla de talle elegida, SKU del proveedor de los talles nuevos). */
   etiquetas?: string[];
   /** Distrinando: etiquetas de tabla que se reemplazan por la elegida. */
@@ -392,12 +398,16 @@ export interface ItemCarga {
     destino?: string; destinoManual?: boolean; nuevo?: boolean;
     /** Distrinando: SKU que tiene hoy ese talle en Shopify ('' = sin SKU); si se crea, el que va a llevar. */
     sku?: string;
+    /** Distrinando: el SKU se escribió (o escaneó) a mano. */
+    skuManual?: boolean;
   }[];
   /** Distrinando: tabla de talle del modelo. */
   tabla?: TablaItem;
 }
 export interface PlanCarga {
   entregaId: string; locationId: string; posId: string | null; items: ItemCarga[]; avisos: string[]; /** Para los mensajes (iD carga en Martínez). */ sucursal?: string;
+  /** Distrinando: artículos que se sacaron de la carga porque no llegaron (no se cargan; entran en el mail). */
+  quitados?: string[];
   /** iD: todo lo que esperan de iD las órdenes que se llevan algo de esta entrega. */
   ordenesId?: Record<string, LineaOrdenId[]>;
   /** iD: la sucursal del proveedor (para que pasar una venta a Martínez no libere stock ahí). */
@@ -590,6 +600,9 @@ const LEER_TALLES = `query TallesCarga($id: ID!) { product(id: $id) { id options
 const CREAR_TALLES = `mutation CrearTallesCarga($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
   productVariantsBulkCreate(productId: $productId, variants: $variants) { productVariants { id title } userErrors { field message } }
 }`;
+const CAMBIAR_SKU = `mutation CambiarSkuCarga($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+  productVariantsBulkUpdate(productId: $productId, variants: $variants) { productVariants { id } userErrors { field message } }
+}`;
 const ORDENAR_TALLES = `mutation OrdenarTallesCarga($productId: ID!, $options: [OptionReorderInput!]!) {
   productOptionsReorder(productId: $productId, options: $options) { userErrors { field message } }
 }`;
@@ -643,6 +656,7 @@ async function crearAlta(codigo: string, a: AltaFamily, plan: PlanCarga, deps: D
       optionValues: [{ optionName: 'Talle', name: v.talle }],
       price: String(a.precio),
       inventoryItem: { sku: v.sku, cost: String(a.costo), tracked: true, measurement: { weight: { value: a.gramos, unit: 'GRAMS' } } },
+      ...(v.barcode ? { barcode: v.barcode } : {}),
       inventoryQuantities: [{ locationId: plan.locationId, name: 'available', quantity: v.cantidad }],
     })),
   };
@@ -739,12 +753,30 @@ async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga
       if (!t?.tagsAdd?.node?.id || t.tagsAdd.userErrors?.length) etiqueta = ` No pude agregarle la etiqueta ${codigo}: agregala a mano.`;
     } catch { etiqueta = ` No pude agregarle la etiqueta ${codigo}: agregala a mano.`; }
   }
+  // SKU escaneado a mano: solo si se sumó algo (si no, se arma la carga de nuevo con todo).
+  if (rep.cambiarSku?.length && (hechas.length || dudas.length)) etiqueta += await cambiarSkus(rep, deps);
   const comun = { productoId: rep.productoId, titulo: rep.titulo, unidades, talles: talles(enviadas) };
   if (!hechas.length && !dudas.length) return { estado: 'error', mensaje: `Shopify no dio de alta el stock en «${rep.titulo}»: ${fallas.join(', ')}. No se sumó nada.${etiqueta}` };
   const resumen = hechas.length ? `Sumado en «${rep.titulo}»: ${hechas.join(', ')}.` : '';
   if (dudas.length) return { ...comun, estado: 'dudosa', mensaje: `${resumen} No sé si se dio de alta el talle ${dudas.join(', ')}: ${NO_SE_SABE}.${fallas.length ? ` Falló: ${fallas.join(', ')}.` : ''}${etiqueta}`.trim() };
   if (fallas.length) return { ...comun, estado: 'parcial', mensaje: `${resumen} No se pudo dar de alta: ${fallas.join(', ')}; cargalo a mano.${etiqueta}`.trim() };
   return { ...comun, estado: 'cargada', mensaje: `${resumen}${etiqueta}` };
+}
+
+/** Distrinando: el SKU nuevo de los talles que ya existían (y el código de barras si es un EAN). Devuelve el texto para el mensaje. */
+async function cambiarSkus(rep: ReposicionFamily, deps: DepsCarga): Promise<string> {
+  const xs = rep.cambiarSku ?? [];
+  const lista = xs.map((x) => `${x.talle} ${x.sku}`).join(', ');
+  const variants = xs.map((x) => ({ id: x.id, inventoryItem: { sku: x.sku }, ...(x.barcode ? { barcode: x.barcode } : {}) }));
+  try {
+    const d = (await deps.gql(CAMBIAR_SKU, { productId: rep.productoId, variants })) as { productVariantsBulkUpdate?: { productVariants?: unknown[] | null; userErrors?: { message?: string }[] } } | null;
+    const ue = d?.productVariantsBulkUpdate?.userErrors;
+    if (!Array.isArray(ue)) return ` No sé si se cambió el SKU (${lista}): revisalo en Shopify.`;
+    if (ue.length) return ` No se cambió el SKU (${lista}): ${errores(ue)}. Cambialo a mano.`;
+    return ` SKU cambiado: ${xs.map((x) => `${x.talle} ${x.antes || 'sin SKU'} → ${x.sku}${x.barcode ? ' (también código de barras)' : ''}`).join(', ')}.`;
+  } catch (e) {
+    return noSeEjecuto(e) ? ` No se cambió el SKU (${lista}): ${motivo(e)}. Cambialo a mano.` : ` No sé si se cambió el SKU (${lista}): revisalo en Shopify.`;
+  }
 }
 
 /** Distrinando: agrega las etiquetas (y saca las de otra tabla). ok:false = no se pudieron agregar. */
@@ -785,12 +817,13 @@ async function crearTalles(rep: ReposicionFamily, plan: PlanCarga, deps: DepsCar
   } catch (e) { return todos(`no pude releer el producto: ${motivo(e)}`); }
   if (live.length + crear.length > 100) return todos('el producto llegaría a más de 100 talles');
   const igual = (a: string, b: string) => { const A = a.trim().replace(',', '.'), B = b.trim().replace(',', '.'); return A.toUpperCase() === B.toUpperCase() || (/^\d+(\.\d+)?$/.test(A) && /^\d+(\.\d+)?$/.test(B) && Number(A) === Number(B)); };
-  const ya = crear.filter((x) => live.some((v) => igual(v.title, x.talle) || (!!v.sku && v.sku.trim().toUpperCase() === x.sku.toUpperCase())));
+  const ya = crear.filter((x) => live.some((v) => igual(v.title, x.talle) || (!!v.sku && [x.sku, x.skuShopify ?? x.sku].some((k) => v.sku!.trim().toUpperCase() === k.toUpperCase()))));
   if (ya.length) return todos(`ya existe ${ya.map((x) => x.talle).join(', ')} en Shopify: armá la carga de nuevo`);
   const variants = crear.map((x) => ({
     optionValues: [{ optionName: opcion, name: x.talle }],
     price: String(precio),
-    inventoryItem: { sku: x.sku, cost: rep.ajuste!.costoNuevo.toFixed(2), tracked: true },
+    inventoryItem: { sku: x.skuShopify ?? x.sku, cost: rep.ajuste!.costoNuevo.toFixed(2), tracked: true },
+    ...(x.barcode ? { barcode: x.barcode } : {}),
     inventoryQuantities: [{ locationId: plan.locationId, availableQuantity: x.suma }],
   }));
   const lineas = crear.map((x) => ({ talle: x.talle, inventoryItemId: '', actual: null, suma: x.suma }));
