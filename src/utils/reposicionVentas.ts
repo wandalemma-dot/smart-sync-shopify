@@ -374,11 +374,11 @@ export async function consultarReposicion(
 }
 
 // ---------- 5) Exportar ----------
-export function descargarReposicion(modelos: ModeloReposicion[], marca: MarcaId) {
+export function descargarReposicion(modelos: ModeloReposicion[], marca: MarcaId, porEntrar?: (m: ModeloReposicion, v: VarianteReposicion) => string) {
   const n = (x: number | null) => x === null ? 'sin alta' : x;
-  const header = ['Producto', 'Código', 'Talle tienda', 'Talle iD', 'Escala', `Vendidos ${DIAS_LARGO} días`, `Vendidos ${DIAS_CORTO} días`, 'Stock Martínez', 'Stock iD', 'Estado', 'Revisar'];
+  const header = ['Producto', 'Código', 'Talle tienda', 'Talle iD', 'Escala', `Vendidos ${DIAS_LARGO} días`, `Vendidos ${DIAS_CORTO} días`, 'Stock Martínez', 'Stock iD', 'Por entrar', 'Estado', 'Revisar'];
   const rows = modelos.flatMap(m => m.variantes.map(v => [
-    m.titulo, m.codigo, v.talle, v.tallePedido, v.escala, v.vendidos15, v.vendidos3, n(v.martinez), n(v.idStock), m.estado, v.motivo,
+    m.titulo, m.codigo, v.talle, v.tallePedido, v.escala, v.vendidos15, v.vendidos3, n(v.martinez), n(v.idStock), porEntrar?.(m, v) ?? '', m.estado, v.motivo,
   ]));
   triggerDownload([header, ...rows].map(r => r.map(escapeCSV).join(',')).join('\n'), `reposicion-${marca}-${todayStamp()}.csv`);
 }

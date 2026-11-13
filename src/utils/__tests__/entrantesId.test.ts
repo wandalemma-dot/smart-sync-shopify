@@ -74,3 +74,17 @@ describe('entrantes del armado de pedido iD', () => {
     expect(excelSinLeer(tarjetas, new Set(['L1']), pedidos, { x3: {} })).toEqual([]);
   });
 });
+
+describe('entrantes en Reposición: talle de pedido → columna de la nota', () => {
+  it('Converse US × 10, Le Coq EU tal cual, letras sin cambio, sin talle → null', async () => {
+    const { talleNotaDe } = await import('../entrantesId');
+    expect(talleNotaDe('converse', '4.5')).toBe('45');
+    expect(talleNotaDe('converse', '10')).toBe('100');
+    expect(talleNotaDe('lecoq', '40')).toBe('40');
+    expect(talleNotaDe('converse', 'XL')).toBe('XL');
+    expect(talleNotaDe('converse', null)).toBeNull();
+    const m = entrantesPorTalle(datos([{ id: 'A', nombre: 'A', fecha: '2026-11-01', lineas: [linea('A08258C', '055', 2), linea('LFO1', '040', 1)] }]), HOY);
+    expect(entranteDe(m, 'A08258C', talleNotaDe('converse', '5.5')!)!.cantidad).toBe(2);
+    expect(entranteDe(m, 'LFO1', talleNotaDe('lecoq', '40')!)!.cantidad).toBe(1);
+  });
+});
