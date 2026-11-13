@@ -107,4 +107,7 @@ describe('vista previa de la carga: Distrinando (13-nov-2026)', () => {
     expect(html).toMatch(/\(a mano\)/);
     expect(html).toMatch(/aria-label="Talle de Shopify para US 4"[^>]*value=""/);
   });
+  it('se puede agregar un talle que no está en el remito', () => {
+    expect(html).toMatch(/＋ Agregar talle/);
+  });
 });

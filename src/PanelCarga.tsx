@@ -12,6 +12,7 @@ import { leerPrecio, precioAEscribir, resumenCarga, textoSeparar, type AjustePre
 import { margenPct } from './utils/margen';
 import { ordenesQueSalen, type OrdenQueSale } from './utils/cargaId';
 import { botonChico, botonPrincipal, inputSt } from './utils/entregasUi';
+import { esTalleUS, talleUS } from './utils/talleDistrinando';
 
 // Lo listo va en el color normal: solo resalta lo que necesita atención (12-nov-2026, gax: «hay mucho color»).
 const COLOR_ITEM = { listo: 'inherit', elegir: '#fbbf24', bloqueado: '#f87171', cargado: '#94a3b8' } as const;
@@ -135,6 +136,7 @@ function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, onTabla, o
           <CantidadTalle talle={t.talle} cantidad={t.cantidad} original={t.original} disabled={ocupado} onCambio={(n) => onCantidad(t.talle, n)} />
           {onDestino && t.destino !== undefined && <DestinoTalle talle={t.talle} destino={t.destino} manual={!!t.destinoManual} nuevo={!!t.nuevo} disabled={ocupado} onCambio={(d) => onDestino(t.talle, d)} />}
         </span>)}
+        {onDestino && <AgregarTalle disabled={ocupado} existentes={it.talles.map((t) => t.talle)} onAgregar={(t, n) => onCantidad(t, n)} />}
       </div> : null}
       {it.tabla && <TablaTalle t={it.tabla} onTabla={onTabla} ocupado={ocupado} />}
       {sep?.separar?.length ? <Separar op={sep} onModoVenta={onModoVenta} ocupado={ocupado} /> : null}
@@ -205,6 +207,39 @@ function DestinoTalle({ talle, destino, manual, nuevo, disabled, onCambio }: {
       {nuevo && destino && <span style={{ fontSize: '0.72rem', color: AMARILLO }}>🆕</span>}
       {manual && <span style={{ fontSize: '0.72rem', color: AMARILLO }}>(a mano)</span>}
     </label>
+  );
+}
+
+/**
+ * Distrinando (13-nov-2026, gax: «no me llegó el producto, me entró directamente en otro talle, en 13 americano»):
+ * agregar un talle US que no figura en el remito. Queda en amarillo «(remito 0)» y entra en el mail del final.
+ */
+function AgregarTalle({ existentes, disabled, onAgregar }: { existentes: string[]; disabled: boolean; onAgregar: (talle: string, n: number) => void }) {
+  const [abierto, setAbierto] = useState(false);
+  const [us, setUs] = useState('');
+  const [n, setN] = useState('1');
+  const [error, setError] = useState('');
+  if (!abierto) return <button style={{ ...botonChico, padding: '1px 8px' }} disabled={disabled} onClick={() => setAbierto(true)}>＋ Agregar talle</button>;
+  const agregar = () => {
+    const t = talleUS(us);
+    const c = Number(n.trim());
+    if (!esTalleUS(t)) { setError('Escribí el talle americano (US), por ejemplo 13 o 8.5.'); return; }
+    if (existentes.includes(`US ${t}`)) { setError(`El US ${t} ya está: cambiá su cantidad.`); return; }
+    if (!Number.isInteger(c) || c <= 0 || c > 9999) { setError('Escribí cuántos pares llegaron.'); return; }
+    onAgregar(`US ${t}`, c);
+    setAbierto(false); setUs(''); setN('1'); setError('');
+  };
+  return (
+    <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+      <span style={{ opacity: 0.8 }}>Talle que no está en el remito: US</span>
+      <input value={us} onChange={(ev) => setUs(ev.target.value)} inputMode="decimal" placeholder="13" aria-label="Talle US a agregar" style={{ ...inputSt, width: 48, padding: '2px 4px' }} />
+      <span style={{ opacity: 0.8 }}>pares</span>
+      <input value={n} onChange={(ev) => setN(ev.target.value)} inputMode="numeric" aria-label="Pares del talle agregado" style={{ ...inputSt, width: 48, padding: '2px 4px' }}
+        onKeyDown={(ev) => { if (ev.key === 'Enter') agregar(); }} />
+      <button style={{ ...botonChico, padding: '1px 8px' }} disabled={disabled} onClick={agregar}>Agregar</button>
+      <button style={{ ...botonChico, padding: '1px 8px' }} onClick={() => { setAbierto(false); setError(''); }}>Cancelar</button>
+      {error && <span style={{ color: ROJO, fontSize: '0.78rem' }}>{error}</span>}
+    </span>
   );
 }
 

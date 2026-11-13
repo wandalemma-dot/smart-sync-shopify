@@ -5,6 +5,7 @@ import { analizarFacturas, type Factura, type LineaPedido, type Pedido, type Rem
 import { planCargaDistrinando, tituloDistrinando } from '../cargaDistrinando';
 import { accionesElegidas, ejecutarCargaFamily, type ReposicionFamily, type AltaFamily } from '../cargaFamily';
 import type { EstadoCargaId, ProductoId, VarianteId } from '../cargaId';
+import { diferenciasDeTalles, textoAvisoTalles } from '../avisoTalles';
 
 const linea = (sku: string, descripcion: string, cantidad: number, precio = 63982.4, udm = 1): LineaPedido => ({
   sku, codigo: sku.includes('---') ? sku.split('---')[0] : sku.replace(/-[^-]*$/, ''), descripcion, talle: udm > 1 ? `Pack x${udm} (${descripcion.replace(/^.* - (M12)/, '$1')})` : descripcion.replace(/^.*(?:\s-\s|\s)((?:AR|UK)\s?)?(\d+(?:\.\d)?)$/, (_m, p, n) => `${p ? p.trim() + ' ' : ''}${n}`),
@@ -154,6 +155,33 @@ describe('carga de Distrinando', () => {
     expect(it.estado).toBe('listo');
     expect((it.opciones[0].accion as AltaFamily).variantes.map((v) => v.talle)).toEqual(['35', '36', '37', '38', '38.5']);
     expect((it.opciones[0].accion as AltaFamily).tabla).toBeUndefined();
+  });
+
+  it('un talle que no está en el remito se agrega (gax: «me entró en otro talle, en 13 americano») y sale en el mail', () => {
+    const r = resultado();
+    const sinCambios = planCargaDistrinando(r, estado(), {}, [NOTA]);
+    const plan = planCargaDistrinando(r, estado(), {}, [NOTA], new Map(), new Map([['RBK110S236074', { 'US 12': 14, 'US 13': 1, 'US ZZ': 3 }]]));
+    const it74 = item(plan, 'RBK110S236074');
+    expect(it74.estado).toBe('listo');
+    expect(it74.talles?.map((t) => `${t.talle}:${t.cantidad}/${t.original}`)).toEqual(['US 11:15/15', 'US 12:14/15', 'US 13:1/0']);
+    expect(it74.talles?.[2]).toMatchObject({ destino: '45.5' });
+    const a = it74.opciones[0].accion as ReposicionFamily;
+    expect(a.lineas.map((l) => `${l.talle}:${l.suma}`)).toEqual(['43:15', '44:14', '45.5:1']);
+    expect(it74.opciones[0].avisos.join(' ')).toMatch(/US 12 15→14 · US 13 \+1 \(no está en el remito\)/);
+    // La marca «una sola vez» sigue siendo la del remito.
+    expect(it74.firma).toBe(item(sinCambios, 'RBK110S236074').firma);
+    // El mail del final: solo lo cargado y distinto del remito.
+    const difs = diferenciasDeTalles(plan.items, [{ codigo: 'RBK110S236074', estado: 'cargada', mensaje: '' }, { codigo: 'RBK110S236046', estado: 'cargada', mensaje: '' }], { RBK110S236074: 38389.44 });
+    expect(difs).toHaveLength(1);
+    const { asunto, cuerpo } = textoAvisoTalles(difs, { proveedor: 'Distrinando', factura: '0039-00283124', remito: '0085-00206200', fecha: '13/11/2026' });
+    expect(asunto).toBe('Diferencia de talles — Distrinando remito 0085-00206200');
+    expect(cuerpo).toMatch(/Según el remito: US 12 ×15\. Llegó: US 12 ×14, US 13 ×1\./);
+    expect(cuerpo).toMatch(/Misma cantidad de pares: mismo modelo y mismo precio, el importe se compensa/);
+    // Si faltan pares, dice cuántos y cuánto es.
+    const falta = textoAvisoTalles([{ ...difs[0], talles: [{ talle: 'US 12', remito: 15, llego: 14 }] }], { proveedor: 'Distrinando' }).cuerpo;
+    expect(falta).toMatch(/Falta 1 par \(\$ 38\.389,44 neto a precio de factura\)/);
+    // Sin cargar (error o sin tildar) no entra al mail.
+    expect(diferenciasDeTalles(plan.items, [{ codigo: 'RBK110S236074', estado: 'error', mensaje: '' }], {})).toEqual([]);
   });
 
   it('ejecución: etiquetas, stock y talle nuevo; relee el producto antes de crear', async () => {

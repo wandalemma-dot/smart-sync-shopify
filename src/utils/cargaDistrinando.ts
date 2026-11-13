@@ -268,7 +268,12 @@ export function planCargaDistrinando(r: ResultadoFactura, estado: EstadoCargaId,
     // Cantidades escritas a mano (por US).
     const escritas = cantidades.get(c.codigo) ?? {};
     const aMano = destinos.get(c.codigo) ?? {};
-    const llegan = llegada.llegan.map((l) => {
+    // Talles agregados a mano que no están en el remito (13-nov-2026, gax: «me entró en otro talle, en 13 americano»).
+    const agregados: Llega[] = Object.keys(escritas)
+      .filter((k) => /^US /.test(k) && esTalleUS(k.slice(3)) && !llegada.llegan.some((l) => etiquetaUS(l.us) === etiquetaUS(talleUS(k.slice(3)))))
+      .map((k) => ({ us: talleUS(k.slice(3)), cantidad: 0, original: 0 }))
+      .filter((l, i, xs) => xs.findIndex((x) => x.us === l.us) === i);
+    const llegan = [...llegada.llegan, ...agregados].map((l) => {
       const x = escritas[etiquetaUS(l.us)] !== undefined ? { ...l, cantidad: escritas[etiquetaUS(l.us)] } : { ...l };
       const d = aMano[etiquetaUS(l.us)] ? leerDestino(aMano[etiquetaUS(l.us)]) : null;
       return d ? { ...x, destino: d } : x;
@@ -296,7 +301,7 @@ export function planCargaDistrinando(r: ResultadoFactura, estado: EstadoCargaId,
       : [opcionAlta(c.codigo, llegan, pedidos, tabla.elegida, lista, bonif, notas.find((l) => (l.unidadesPorUdm || 1) <= 1)?.descripcion || notas[0]?.descripcion || descripcion)];
     for (const o of opciones) {
       if (llegada.avisos.length) o.avisos.push(...llegada.avisos);
-      if (cambiadas.length) o.avisos.push(`Cantidad escrita a mano: ${cambiadas.map((l) => `US ${l.us} ${l.original}→${l.cantidad}`).join(' · ')} (el remito dice otra cosa).`);
+      if (cambiadas.length) o.avisos.push(`Distinto del remito: ${cambiadas.map((l) => (l.original ? `US ${l.us} ${l.original}→${l.cantidad}` : `US ${l.us} +${l.cantidad} (no está en el remito)`)).join(' · ')}. Al terminar te armo el mail para avisar.`);
     }
     const conTabla = { ...base, talles, tabla };
     if (tabla.hace && !tabla.elegida) return { ...conTabla, estado: 'bloqueado', motivo: 'Elegí la tabla de talle: hay talles que el proveedor no informa en la nota.', opciones: [] };
