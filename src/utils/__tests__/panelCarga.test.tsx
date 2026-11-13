@@ -108,7 +108,30 @@ describe('vista previa de la carga: Distrinando (13-nov-2026)', () => {
     expect(html).toMatch(/aria-label="Talle de Shopify para US 4"[^>]*value=""/);
   });
   it('al lado del talle se ve el SKU (el que tiene o el que va a llevar)', () => {
-    expect(html).toMatch(/🆕 <!-- -->SKU <!-- -->RBK1100231713-5|🆕 SKU RBK1100231713-5/);
+    expect(html).toMatch(/>RBK1100231713-5<\/span>/);
+    expect(html).toMatch(/se crea/);
+  });
+  it('los talles van en filas: uno por renglón, con pares, talle de Shopify, SKU y stock de Martínez (gax, 13-nov)', () => {
+    const repo = {
+      ...dis, items: [{
+        ...dis.items[0], estado: 'listo', motivo: '', tabla: undefined,
+        talles: [{ talle: 'US 11', cantidad: 10, original: 10, destino: '44', sku: '4066749645052' }, { talle: 'US 12', cantidad: 6, original: 6, destino: '46', sku: 'RBK1100033511-12', nuevo: true }],
+        opciones: [{ clave: 'repo:1', etiqueta: 'Sumar', avisos: [], accion: {
+          tipo: 'reposicion', productoId: 'gid://shopify/Product/1', titulo: 'Zapatillas Reebok Nano X3', etiquetar: false,
+          lineas: [{ talle: '44', inventoryItemId: 'gid://shopify/InventoryItem/1', actual: 1, suma: 10 }],
+          crear: [{ talle: '46', sku: 'RBK1100033511-12', suma: 6 }],
+        } }],
+      }],
+    } as unknown as PlanCarga;
+    const h = renderToStaticMarkup(<PanelCarga plan={repo} ocupado={false} onConfirmar={() => undefined} onCancelar={() => undefined} sucursal="DEPOSITO MARTINEZ" explicacion=""
+      onCantidad={() => undefined} onTabla={() => undefined} onDestino={() => undefined} />);
+    expect(h.match(/<tr>/g)?.length).toBe(3);
+    expect(h).toMatch(/Stock en Martínez/);
+    expect(h).toMatch(/<strong>US 11<\/strong><\/td>.*?1 → 11<\/td>/);
+    expect(h).toMatch(/<strong>US 12<\/strong><\/td>.*?talle nuevo con <!-- -->6<\/td>|<strong>US 12<\/strong><\/td>.*?talle nuevo con 6<\/td>/);
+    expect(h).toMatch(/Se suma en «Zapatillas Reebok Nano X3»\./);
+    expect(h).not.toMatch(/🔁|✏️|🆕|✅ Margen/);
+    expect(h).toMatch(/＋ Agregar talle/);
   });
   it('se puede agregar un talle que no está en el remito', () => {
     expect(html).toMatch(/＋ Agregar talle/);
