@@ -21,14 +21,19 @@
 //     vivo (fulfillment orders abiertas de iD); lo que el depósito ya marcó «-1» en el remito cuenta
 //     como separado. Órdenes canceladas, sin pagar o con la etiqueta «solucionar» no se descuentan:
 //     se avisan. Si ya se separó antes, «cargarlo igual» suma todo.
+//   · Packs (13-nov-2026, gax: «la factura dice por 6, es porque son 6 bandas»): iD factura y manda el pack entero y
+//     la tienda vende por unidad. Con «X6» en el nombre de la factura o en el título de Shopify (la misma regla que
+//     Sincronización), cada pack del remito se carga como 6 unidades y el costo es por unidad: lista ÷ 6 − bonificación.
+//     Si dicen cantidades distintas, no se adivina; las unidades por pack se pueden escribir a mano.
 // La ejecución, la marca «una sola vez» y la vista previa son las mismas de Family.
 // ============================================================================
 import { claveCodigo, fmt, type FilaChecklist, type RenglonFactura, type ResultadoFactura } from './controlFacturas';
 import {
-  llegaAl50, textoCarga, type AjustePrecio, type CubiertaOrden, type EleccionesCarga, type LineaFOId, type LineaOrdenId, type ModoVenta, type MoverVenta, type SepararId, type CargaFamily, type ItemCarga, type LineaReposicion, type OpcionCarga, type PlanCarga, type ReposicionFamily,
+  llegaAl50, textoCarga, type AjustePrecio, type CubiertaOrden, type EleccionesCarga, type LineaFOId, type LineaOrdenId, type ModoVenta, type MoverVenta, type SepararId, type CargaFamily, type ItemCarga, type LineaReposicion, type OpcionCarga, type PackCarga, type PlanCarga, type ReposicionFamily,
 } from './cargaFamily';
 import { esPrecioSugerido } from './conversePreciosFijos';
 import { margenPct } from './margen';
+import { unidadesPorPackId } from './packsId';
 import { converseTablaInfo, LOC_MARTINEZ_NOMBRE, precioId, redondear2, talleShopifyLeCoq } from './syncLogic';
 import { mismaSucursal } from './shopify';
 
@@ -297,6 +302,28 @@ function igualTalle(a: string, b: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// PACKS (13-nov-2026, gax)
+// ---------------------------------------------------------------------------
+/**
+ * Cuántas unidades trae cada pack: el «X6» del nombre en la factura o del título del producto en Shopify, con la misma
+ * regla que Sincronización (`unidadesPorPackId`: «X6», «X 6», con separadores). Si dicen cantidades distintas, no se
+ * adivina. Lo escrito a mano manda (1 = no viene en pack).
+ */
+export function packDeCarga(descripcion: string, titulos: string[], manual?: number): Pick<PackCarga, 'unidades' | 'fuente' | 'manual' | 'error'> {
+  if (manual !== undefined && Number.isInteger(manual) && manual >= 1) return { unidades: manual, fuente: 'lo escribiste a mano', manual: true };
+  const deFactura = unidadesPorPackId(String(descripcion ?? ''));
+  const deShopify = [...new Set(titulos.map((t) => unidadesPorPackId(String(t ?? ''))).filter((n) => n > 1))];
+  const todos = [...new Set([deFactura, ...deShopify].filter((n) => n > 1))];
+  if (todos.length > 1) {
+    const dicen = [deFactura > 1 ? `la factura dice packs de ${deFactura}` : '', deShopify.length ? `el nombre en Shopify dice ${deShopify.join(' y ')}` : ''].filter(Boolean).join(' y ');
+    return { unidades: 1, fuente: '', error: `No sé cuántas unidades trae cada pack: ${dicen}.` };
+  }
+  if (!todos.length) return { unidades: 1, fuente: '' };
+  const fuentes = [deFactura > 1 ? 'la factura' : '', deShopify.length ? 'el nombre en Shopify' : ''].filter(Boolean);
+  return { unidades: todos[0], fuente: `lo dice ${fuentes.join(' y ')}` };
+}
+
+// ---------------------------------------------------------------------------
 // PLAN (vista previa)
 // ---------------------------------------------------------------------------
 /** Lo que identifica la mercadería cargada: fecha, código, unidades, talles y remito. */
@@ -350,7 +377,7 @@ export function costoPromedio(stock: number, costo: number, suma: number, costoN
 }
 
 function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefined, ren: RenglonFactura | undefined,
-  pendientes: Record<string, OrdenPendienteId[]> | undefined, modo: ModoVenta): OpcionCarga {
+  pendientes: Record<string, OrdenPendienteId[]> | undefined, modo: ModoVenta, pack = 1): OpcionCarga {
   if (!p) return { clave: 'falta', etiqueta: 'Producto que no pude leer', accion: null, bloqueo: 'No pude leer ese producto en Shopify.', avisos: [] };
   const avisos: string[] = [];
   const base = { clave: `repo:${p.id}`, etiqueta: `Sumar el stock en «${p.titulo}»`, avisos };
@@ -418,7 +445,8 @@ function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefi
   const vendidoTodo = !lineas.length;
   for (const l of lineas) if (l.actual === null) avisos.push(`Talle ${l.talle}: no está dado de alta en ${SUCURSAL_CARGA_ID}; se da de alta con ${l.suma}.`);
   if (p.estado !== 'ACTIVE') avisos.push(`El producto está ${p.estado === 'DRAFT' ? 'en borrador' : 'archivado'} en Shopify: se le suma igual el stock.`);
-  const ajuste = ren ? ajusteDe(p, ren, lineas) : null;
+  // Pack: la factura trae el precio del pack entero; el costo y el margen van por unidad.
+  const ajuste = ren ? ajusteDe(p, pack > 1 ? { ...ren, precioUnitario: (Number(ren.precioUnitario) || 0) / pack } : ren, lineas) : null;
   if (vendidoTodo && (!ajuste || (ajuste.ok && !ajuste.costos.length && !ajuste.ponderados.length))) {
     return { ...base, ...sep, accion: null, bloqueo: 'Todo lo que llegó ya está vendido en iD: separalo para esas órdenes. No queda nada para sumar en Martínez ni precio o costo para cambiar.' };
   }
@@ -426,8 +454,12 @@ function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefi
   if (!ajuste) avisos.push('La factura no trae el precio de lista de este artículo: no reviso el margen ni el costo.');
   else {
     for (const c of ajuste.conservan) if (c.motivo) avisos.push(`Talle ${c.talle}: ya tenía ${c.stock} en Martínez y ${c.motivo}. Conserva su costo: revisalo a mano.`);
+    // Un costo que deja el margen en negativo casi siempre es un pack que no dice «X6» en ningún lado.
+    if (pack === 1 && ajuste.margen !== null && ajuste.margen < 0) {
+      avisos.push(`El costo de la factura (${fmt(ajuste.costoNuevo)}) deja el margen en negativo. ¿Viene en pack? Si trae varias unidades, tocá «¿Viene en pack?» y escribí cuántas.`);
+    }
   }
-  return { ...base, ...sep, accion: { tipo: 'reposicion', productoId: p.id, titulo: p.titulo, lineas, etiquetar: false, ...(ajuste ? { ajuste } : {}), ...sepAccion, ...(mover.length ? { mover } : {}) } };
+  return { ...base, ...sep, accion: { tipo: 'reposicion', productoId: p.id, titulo: p.titulo, lineas, etiquetar: false, ...(ajuste ? { ajuste } : {}), ...sepAccion, ...(mover.length ? { mover } : {}), ...(pack > 1 ? { pack } : {}) } };
 }
 
 const NO_CARGAR: OpcionCarga = { clave: 'no', etiqueta: 'No cargar este artículo', accion: null, avisos: [] };
@@ -440,7 +472,7 @@ const NO_CARGAR: OpcionCarga = { clave: 'no', etiqueta: 'No cargar este artícul
 export type CantidadesCarga = ReadonlyMap<string, Readonly<Record<string, number>>>;
 
 export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: Record<string, CargaFamily>, modos: ReadonlyMap<string, ModoVenta> = new Map(),
-  cantidades: CantidadesCarga = new Map()): PlanCarga {
+  cantidades: CantidadesCarga = new Map(), packs: ReadonlyMap<string, number> = new Map()): PlanCarga {
   const f = r.factura;
   const avisos: string[] = [];
   const remito = r.remito?.numero || f.remito || '';
@@ -454,14 +486,28 @@ export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: 
     const descripcion = ren?.descripcion || orig.descripcion;
     // La firma es la del remito, no la de lo escrito a mano: así la misma mercadería nunca se carga dos veces.
     const firma = firmaCargaId(f.fecha, remito, orig);
-    const escritas = cantidades.get(orig.codigo);
-    const c = orig.talles && escritas
-      ? { ...orig, talles: orig.talles.map((t) => (escritas[t.talle] !== undefined ? { ...t, cantidad: escritas[t.talle] } : t)) }
+    const ids = estado.porCodigo[orig.codigo.toUpperCase()] ?? [];
+    // Pack (13-nov-2026, gax): el remito cuenta packs y se cargan unidades. Lo marcado «-1» son unidades que salieron
+    // para órdenes (las ventas son por unidad): de un pack de 6 con «-1» se cargan 5.
+    const pk = packDeCarga(descripcion, ids.map((id) => estado.productos[id]?.titulo ?? ''), packs.get(orig.codigo));
+    const n = pk.error ? 1 : pk.unidades;
+    const enUnidades: FilaChecklist = n > 1 && orig.talles
+      ? { ...orig, talles: orig.talles.map((t) => ({ ...t, cantidad: Math.max(0, (t.cantidad + (t.retirado ?? 0)) * n - (t.retirado ?? 0)) })) }
       : orig;
+    const escritas = cantidades.get(orig.codigo);
+    const c = enUnidades.talles && escritas
+      ? { ...enUnidades, talles: enUnidades.talles.map((t) => (escritas[t.talle] !== undefined ? { ...t, cantidad: escritas[t.talle] } : t)) }
+      : enUnidades;
     const unidades = (c.talles ?? []).reduce((s, t) => s + t.cantidad, 0);
-    const talles = c.talles?.map((t, i) => ({ talle: t.talle, cantidad: t.cantidad, original: orig.talles![i].cantidad }));
+    const talles = c.talles?.map((t, i) => ({ talle: t.talle, cantidad: t.cantidad, original: enUnidades.talles![i].cantidad }));
     const cambiadas = (talles ?? []).filter((t) => t.cantidad !== t.original);
-    const base = { codigo: c.codigo, descripcion, unidades, firma, ...(talles ? { talles } : {}) };
+    const lista = Number(ren?.precioUnitario) || 0, bonificacion = Number(ren?.bonificacion) || 0;
+    const pack: PackCarga | undefined = n > 1 || pk.manual || pk.error ? {
+      ...pk, unidades: n,
+      // El mismo cálculo que ajusteDe con la lista por unidad (sin redondear la división).
+      ...(n > 1 && lista > 0 ? { lista, bonificacion, costo: redondear2((lista / n) * (1 - bonificacion / 100)) } : {}),
+    } : undefined;
+    const base = { codigo: c.codigo, descripcion, unidades, firma, ...(talles ? { talles } : {}), ...(pack ? { pack } : {}) };
     const bloqueado = (motivo: string): ItemCarga => ({ ...base, estado: 'bloqueado', motivo, opciones: [] });
     const carga = cargas[`${f.id}|${c.codigo}`];
     if (carga) return { codigo: c.codigo, descripcion, unidades, firma, estado: 'cargado', motivo: textoCarga(carga), opciones: [], carga };
@@ -470,10 +516,14 @@ export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: 
     if (!c.talles) return bloqueado('No sé qué talles llegaron: escribí el remito con los talles («✏️ Ver o corregir») y armá la carga de nuevo.');
     if (!unidades) return bloqueado(cambiadas.length ? 'Pusiste 0 en todos los talles: no hay nada para cargar.' : c.retirado ? 'Todo lo que llegó salió para órdenes: no hay nada para cargar.' : 'No tiene cantidades.');
     if (!buscable(c.codigo.toUpperCase())) return bloqueado('El código tiene caracteres que no puedo buscar en Shopify: cargalo a mano.');
-    const ids = estado.porCodigo[c.codigo.toUpperCase()] ?? [];
     if (!ids.length) return bloqueado('No está en Shopify: crealo desde Sincronización (con el archivo de iD) y armá la carga de nuevo.');
-    const opciones = ids.map((id) => opcion(c, descripcion, estado.productos[id], ren, estado.pendientesId, modos.get(c.codigo) ?? 'separar'));
-    if (c.retirado && !cambiadas.length) for (const o of opciones) o.avisos.push(`Salieron ${c.retirado} para órdenes (marca a mano en el remito): no se suman.`);
+    if (pk.error) return bloqueado(`${pk.error} Escribí cuántas unidades trae cada pack.`);
+    const opciones = ids.map((id) => opcion(c, descripcion, estado.productos[id], ren, estado.pendientesId, modos.get(c.codigo) ?? 'separar', n));
+    if (c.retirado && !cambiadas.length) {
+      for (const o of opciones) o.avisos.push(n > 1
+        ? `Salieron ${c.retirado} para órdenes (marca a mano en el remito): las cuento como unidades sueltas del pack y no se suman. Si salió el pack entero, corregí la cantidad.`
+        : `Salieron ${c.retirado} para órdenes (marca a mano en el remito): no se suman.`);
+    }
     if (cambiadas.length) for (const o of opciones) o.avisos.push(`Cantidad escrita a mano: ${cambiadas.map((t) => `${t.talle} ${t.original}→${t.cantidad}`).join(' · ')} (el remito dice otra cosa).`);
     // Todo vendido en iD: queda bloqueado pero con la opción, para mostrar qué separar y «cargarlo igual».
     if (ids.length === 1) return opciones[0].bloqueo ? { ...bloqueado(opciones[0].bloqueo), opciones: opciones[0].separar ? opciones : [] } : { ...base, estado: 'listo', motivo: '', opciones };

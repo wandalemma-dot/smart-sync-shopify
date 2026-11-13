@@ -309,6 +309,8 @@ export interface ReposicionFamily {
   etiquetas?: string[];
   /** Distrinando: etiquetas de tabla que se reemplazan por la elegida. */
   quitarEtiquetas?: string[];
+  /** iD (13-nov-2026): el proveedor factura packs de estas unidades; `lineas` y el costo ya van por unidad. */
+  pack?: number;
 }
 /**
  * iD (12-nov-2026): antes de sumar el stock en Martínez, el costo nuevo de la factura y, si el
@@ -413,6 +415,23 @@ export interface ItemCarga {
   }[];
   /** Distrinando: tabla de talle del modelo. */
   tabla?: TablaItem;
+  /**
+   * iD (13-nov-2026, gax: «la factura dice por 6, es porque son 6 bandas»): el proveedor factura el pack entero y la
+   * tienda vende por unidad. Las cantidades de `talles` ya están en unidades.
+   */
+  pack?: PackCarga;
+}
+/** iD: cuántas unidades trae cada pack de un artículo y de dónde salió el dato. */
+export interface PackCarga {
+  /** Unidades por pack (1 = no viene en pack). */
+  unidades: number;
+  /** De dónde salió: la factura, el nombre en Shopify o lo escrito a mano. */
+  fuente: string;
+  manual?: boolean;
+  /** Precio de lista del pack en la factura, su bonificación y el costo por unidad que resulta. */
+  lista?: number; bonificacion?: number; costo?: number;
+  /** No se sabe cuántas unidades trae (los datos no coinciden): hay que escribirlo. */
+  error?: string;
 }
 export interface PlanCarga {
   entregaId: string; locationId: string; posId: string | null; items: ItemCarga[]; avisos: string[]; /** Para los mensajes (iD carga en Martínez). */ sucursal?: string;
@@ -1119,7 +1138,8 @@ export function resumenCarga(plan: PlanCarga, elecciones: EleccionesCarga): { al
       if (accion.etiquetas?.length) extra.push(`etiquetas ${accion.etiquetas.join(', ')}${accion.quitarEtiquetas?.length ? ` (saco ${accion.quitarEtiquetas.join(', ')})` : ''}`);
       if (accion.separar?.length && accion.separarAplicado) extra.push(`separar para órdenes de iD ${textoSeparar(accion.separar)} (no se suman)`);
       if (accion.mover?.length) extra.push(`después pasar la venta de iD a ${plan.sucursal ?? 'Martínez'}: ${accion.mover.map((m) => `${m.talle} ×${m.cantidad} (${m.orden})`).join(', ')}`);
-      lineas.push(`• ${codigo}: ${u ? `sumar ${u} u. en` : 'no se suma stock (vendido en iD), solo precio y costo de'} «${accion.titulo}»${extra.length ? ` · ${extra.join(' · ')}` : ''}`);
+      const pack = accion.pack && accion.pack > 1 ? ` (vienen en packs de ${accion.pack})` : '';
+      lineas.push(`• ${codigo}: ${u ? `sumar ${u} u.${pack} en` : 'no se suma stock (vendido en iD), solo precio y costo de'} «${accion.titulo}»${extra.length ? ` · ${extra.join(' · ')}` : ''}`);
     }
   }
   return { altas, reposiciones, unidades, lineas };
