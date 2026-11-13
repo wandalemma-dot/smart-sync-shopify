@@ -13,6 +13,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import Asistente from './Asistente';
+import { useRol } from './rol';
 import {
   analizarFacturas, claveCodigo, notaDisponible, claveRecepcion, huellaPedido, compararRecepcion, fmt, mensajePagos, reporteReclamo, resumenPedidos,
   type ControlRenglon, type CopiaPlanilla, type Factura, type Pedido, type Recepcion, type Remito, type ResultadoFactura, type ResultadoGeneral,
@@ -169,6 +170,7 @@ const sinListas = (elegidas: string[]) => elegidas.length
 
 
 export default function ControlFacturas() {
+  const deposito = useRol() === 'deposito';
   const [prov, setProv] = useState<Prov>('id');
   const [vista, setVista] = useState<Vista>('entregas');
   // Registro de cargas en Shopify (todos los proveedores). Las pantallas de abajo quedan montadas
@@ -885,7 +887,7 @@ export default function ControlFacturas() {
             onNota={(f) => subirPedidos(f, r.factura.fecha, r.factura.id)}
             onTrello={() => buscarEnTrelloParaFactura(r.factura)} res={res} todas={pedidosControl} consejos={consejos}
             informe={informe?.prov === prov && informe.facturaId === r.factura.id ? informe : null} onRecargarBorrada={recargarBorrada}
-            carga={prov === 'id' ? {
+            carga={prov === 'id' && !deposito ? {
               cargas: datos.cargas ?? {}, plan: planCarga?.entregaId === r.factura.id ? planCarga : null,
               onArmar: () => armarCarga(r), onConfirmar: (e) => planCarga && confirmarCarga(r, planCarga, e),
               onCancelar: () => setPlanCarga(null), onLiberar: (codigo, c) => liberarCarga(r.factura.id, codigo, c), onModoVenta: modoVenta, onCantidad: cantidadCarga,
@@ -896,10 +898,10 @@ export default function ControlFacturas() {
             <button style={enlace} onClick={() => setVista('deposito')}>📦 Checklist del depósito</button>
             <button style={enlace} onClick={() => setVista('reportes')}>💬 Mensajes de control y pendientes</button>
           </div>
-          <details style={{ marginTop: 14 }}>
+          {!deposito && <details style={{ marginTop: 14 }}>
             <summary style={{ cursor: 'pointer', fontSize: '0.88rem', opacity: 0.85 }}>🤖 ¿Otra consulta? Preguntale al asistente (órdenes pendientes, costo ponderado, un código)</summary>
             <div style={{ marginTop: 10 }}><Asistente /></div>
-          </details>
+          </details>}
         </div>
       )}
 

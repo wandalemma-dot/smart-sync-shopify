@@ -1069,6 +1069,7 @@ Solo lectura. No escribe en Shopify ni carga la web externa.
   `productVariantsBulkUpdate`. **No agregues mutaciones sin pensarlo.**
 - `api/remito.js` (fotos con IA) se BORRÓ el 25-oct-2026: era un endpoint público que gastaba la cuenta de Anthropic.
   Desde el 11-nov-2026 la foto del remito se lee con `api/leer-remito.js`: SOLO sesión humana y mismo origen (el bot no entra), no guarda la foto ni toca Shopify. No volver a abrirlo al público.
+- **Clave del depósito (13-nov-2026, pedido de gax).** La app no tiene usuarios: hay UNA clave principal (`APP_ACCESS_KEY`, Vercel) y, aparte, `APP_ACCESS_KEY_DEPOSITO` (32+ caracteres, distinta de la principal). Con la del depósito solo se ve «Control de entregas» (`src/Raiz.tsx`, rol en `src/rol.ts`): puede usar facturas, notas, Trello y la foto del remito, y LEER Shopify; no puede escribir en Shopify, ni usar `/api/prices`, `/api/id-stock` ni el asistente (se esconden «⬆️ Cargar en Shopify» y el asistente). Lo impide el servidor (`identity()` devuelve `'deposito'`, `esPersona()` en los handlers del control), no la pantalla. Su sesión se firma con SU clave: cambiarla o borrarla en Vercel (y volver a desplegar) deja afuera al depósito sin tocar la principal. Tests al final de `server/access.test.js`.
 - Antecedente: hubo un token y un client secret hardcodeados en el repo público.
   Se rotaron. **Nunca vuelvas a poner un secreto en el código.**
 - 11-nov-2026: `TRELLO_TOKEN` estaba guardado en Vercel con un salto de línea al final. Node

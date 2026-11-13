@@ -141,3 +141,65 @@ describe('session entry', () => {
     expect(a.statusCode).toBe(401); expect(b.statusCode).toBe(403);
   });
 });
+
+describe('clave del depósito (solo Control de entregas, sin escrituras)', () => {
+  const depKey = 'dep-test-only-'.padEnd(48, 'd');
+  const login = key => { const res = response(); session({ method: 'POST', headers: { origin }, body: { key } }, res); return res; };
+  const cookieDe = res => res.headers['Set-Cookie'].split(';')[0];
+  beforeEach(() => { vi.stubEnv('APP_ACCESS_KEY_DEPOSITO', depKey); });
+
+  it('entra con su propia clave y queda como depósito; la principal sigue igual', () => {
+    const dep = login(depKey);
+    expect(dep.statusCode).toBe(200); expect(dep.body.rol).toBe('deposito');
+    expect(JSON.stringify(dep)).not.toContain(depKey);
+    const yo = login(appKey);
+    expect(yo.body.rol).toBe('user');
+    const g = response(); session({ method: 'GET', headers: { cookie: cookieDe(dep) } }, g);
+    expect(g.body).toMatchObject({ authenticated: true, rol: 'deposito' });
+  });
+  it('sin la variable, o igual a la principal, no abre nada como depósito', () => {
+    vi.stubEnv('APP_ACCESS_KEY_DEPOSITO', '');
+    expect(login(depKey).statusCode).toBe(401);
+    vi.stubEnv('APP_ACCESS_KEY_DEPOSITO', appKey);
+    expect(login(appKey).body.rol).toBe('user');
+  });
+  it('lee Shopify pero nunca escribe', async () => {
+    const cookie = `${COOKIE}=${makeSession(Date.now(), 'deposito')}`;
+    const ok = response(); await handler(request('{ shop { name } }', { origin, cookie }), ok);
+    expect(ok.statusCode).toBe(200);
+    vi.mocked(fetch).mockClear();
+    for (const root of ['inventorySetQuantities', 'productVariantsBulkUpdate', 'fulfillmentOrderMove']) {
+      const res = response(); await handler(request(`mutation { ${root}(input: {}) { userErrors { message } } }`, { origin, cookie }), res);
+      expect(res.statusCode).toBe(403);
+    }
+    const otro = response(); await handler(request('{ shop { name } }', { origin: 'https://example.invalid', cookie }), otro);
+    expect(otro.statusCode).toBe(403);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+  it('cambiar la clave del depósito lo deja afuera sin tocar la sesión principal', async () => {
+    const dep = `${COOKIE}=${makeSession(Date.now(), 'deposito')}`;
+    const yo = `${COOKIE}=${makeSession()}`;
+    vi.stubEnv('APP_ACCESS_KEY_DEPOSITO', 'otra-clave-'.padEnd(48, 'x'));
+    const a = response(); await handler(request('{ shop { name } }', { origin, cookie: dep }), a);
+    const b = response(); await handler(request('{ shop { name } }', { origin, cookie: yo }), b);
+    expect(a.statusCode).toBe(401); expect(b.statusCode).toBe(200);
+  });
+  it('una sesión del depósito no puede hacerse pasar por la principal', async () => {
+    const [payload] = makeSession(Date.now(), 'deposito').split('.');
+    const sinRol = Buffer.from(JSON.stringify({ exp: Math.floor(Date.now() / 1000) + 3600 })).toString('base64url');
+    const firma = makeSession(Date.now(), 'deposito').split('.')[1];
+    for (const token of [`${sinRol}.${firma}`, `${payload}.${makeSession().split('.')[1]}`]) {
+      const res = response(); await handler(request('{ shop { name } }', { origin, cookie: `${COOKIE}=${token}` }), res);
+      expect(res.statusCode).toBe(401);
+    }
+  });
+  it('no entra a precios ni al asistente', async () => {
+    const cookie = `${COOKIE}=${makeSession(Date.now(), 'deposito')}`;
+    const { default: precios } = await import('../api/prices.js');
+    const { default: asistente } = await import('../api/asistente.js');
+    for (const h of [precios, asistente]) {
+      const res = response(); await h({ method: 'POST', headers: { origin, cookie, 'content-type': 'application/json' }, body: {} }, res);
+      expect(res.statusCode).toBe(401);
+    }
+  });
+});

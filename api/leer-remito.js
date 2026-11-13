@@ -1,6 +1,6 @@
 // Lee la foto del remito (o la planilla de entrega de Family) con IA (11-nov-2026). Solo sesión humana y mismo origen; nunca el bot.
 // Necesita ANTHROPIC_API_KEY en Vercel (se paga por uso). No guarda la foto ni toca Shopify.
-import { allowedOrigin, identity, noStore } from '../server/access.js';
+import { allowedOrigin, esPersona, identity, noStore } from '../server/access.js';
 import { leerRemito } from '../server/remito.js';
 import { claveEnv } from '../server/secretos.js';
 
@@ -8,7 +8,7 @@ export const maxDuration = 120;
 
 export default async function handler(req, res) {
   noStore(res);
-  if (identity(req) !== 'user') return res.status(401).json({ error: 'Iniciá sesión en la app.' });
+  if (!esPersona(identity(req))) return res.status(401).json({ error: 'Iniciá sesión en la app.' });
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
   if (!allowedOrigin(req)) return res.status(403).json({ error: 'Origen no permitido.' });
   if (!String(req.headers?.['content-type'] || '').toLowerCase().startsWith('application/json')) {
