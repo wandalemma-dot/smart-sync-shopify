@@ -55,7 +55,7 @@ describe('human manual functions and separate bot scope', () => {
     expect(res.statusCode).toBe(403); expect(fetch).not.toHaveBeenCalled();
   });
   const manualRoots = ['inventorySetQuantities', 'inventoryActivate', 'productSet', 'productVariantsBulkUpdate',
-    'productVariantsBulkCreate', 'productOptionsReorder', 'tagsAdd', 'metafieldsSet', 'publishablePublish', 'fulfillmentOrderMove'];
+    'productVariantsBulkCreate', 'productOptionsReorder', 'tagsAdd', 'tagsRemove', 'metafieldsSet', 'publishablePublish', 'fulfillmentOrderMove'];
   it.each(manualRoots)('allows the human app function %s, never a bot or anonymous caller', async root => {
     const query = `mutation { action: ${root}(input: {}) { userErrors { message } } }`;
     const cookie = `${COOKIE}=${makeSession()}`;

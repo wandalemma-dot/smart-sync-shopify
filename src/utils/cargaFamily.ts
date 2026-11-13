@@ -24,6 +24,7 @@ import {
   type FilaFamily, type RenglonFamily, type ResultadoFamily,
 } from './controlFamily';
 import { mismaSucursal } from './shopify';
+import { ordenarTalles } from './ordenTalles.js';
 
 export const SUCURSAL_FAMILY = 'FAMILYARG';
 export const VENDOR_FAMILY = 'Familyarg';
@@ -256,6 +257,10 @@ export interface AltaFamily {
   precio: number;
   costo: number;
   variantes: { talle: string; sku: string; cantidad: number }[];
+  /** Distrinando: vendor del producto (Family por defecto). */
+  vendor?: string;
+  /** Distrinando: tabla de talle elegida, se guarda en custom.size_conversion. */
+  tabla?: { nombre: string; json: unknown };
 }
 export interface LineaReposicion { talle: string; inventoryItemId: string; actual: number | null; suma: number }
 /**
@@ -283,6 +288,15 @@ export interface ReposicionFamily {
   separar?: SepararId[]; separarAplicado?: boolean;
   /** iD, modo «pasar»: ventas que se mueven de iD a Martínez después de sumar el stock. */
   mover?: MoverVenta[];
+  /**
+   * Distrinando (13-nov-2026, gax): talles que no existen en el producto y se crean con su stock,
+   * el precio de la curva y el costo de la factura. `sku` = SKU del proveedor.
+   */
+  crear?: { talle: string; sku: string; suma: number }[];
+  /** Distrinando: etiquetas que se agregan (código, tabla de talle elegida, SKU del proveedor de los talles nuevos). */
+  etiquetas?: string[];
+  /** Distrinando: etiquetas de tabla que se reemplazan por la elegida. */
+  quitarEtiquetas?: string[];
 }
 /**
  * iD (12-nov-2026): antes de sumar el stock en Martínez, el costo nuevo de la factura y, si el
@@ -311,6 +325,18 @@ export interface AjustePrecio {
   conservan: { talle: string; stock: number; costo: number | null; motivo?: string }[];
   /** Precio elegido por la usuaria (si hace falta cambiarlo). */
   precio?: number;
+}
+/** Distrinando: la tabla de talle del modelo (se elige en la vista previa y va a las etiquetas). */
+export interface TablaItem {
+  /** '' = ninguna. */
+  elegida: string;
+  opciones: { clave: string; etiqueta: string; bloqueo?: string }[];
+  /** La que tiene hoy el producto en las etiquetas (null = ninguna con nombre). */
+  actual: string | null;
+  /** Hay talles que solo se pueden ubicar con la tabla. */
+  hace: boolean;
+  /** Avisos de la tabla (el producto no tiene, o su etiqueta no coincide con sus talles). */
+  avisos: string[];
 }
 /** El precio da 50% o más de margen con este costo (en centavos, como precioExistente). */
 export const llegaAl50 = (precio: number, costo: number) => precio > 0 && costo > 0 && Math.round(costo * 100) * 242 <= Math.round(precio * 100) * 100;
@@ -360,7 +386,13 @@ export interface ItemCarga {
    * iD (12-nov-2026, gax: «que se coloque automáticamente pero que yo pueda escribir»): lo que llega por talle,
    * editable antes de confirmar. `original` es lo del remito (menos las marcas «-1»).
    */
-  talles?: { talle: string; cantidad: number; original: number }[];
+  talles?: {
+    talle: string; cantidad: number; original: number;
+    /** Distrinando: talle de Shopify donde entra ('' = no se sabe), si se escribió a mano y si se crea. */
+    destino?: string; destinoManual?: boolean; nuevo?: boolean;
+  }[];
+  /** Distrinando: tabla de talle del modelo. */
+  tabla?: TablaItem;
 }
 export interface PlanCarga {
   entregaId: string; locationId: string; posId: string | null; items: ItemCarga[]; avisos: string[]; /** Para los mensajes (iD carga en Martínez). */ sucursal?: string;
@@ -544,6 +576,21 @@ const PASAR_VENTA = `mutation PasarVentaId($id: ID!, $loc: ID!, $items: [Fulfill
 const ETIQUETAR = `mutation EtiquetarFamily($id: ID!, $tags: [String!]!) {
   tagsAdd(id: $id, tags: $tags) { node { id } userErrors { message } }
 }`;
+// Distrinando (13-nov-2026): la tabla elegida reemplaza a la anterior («SIN IDENTIFICAR», «REEBOK 2»…).
+const QUITAR_ETIQUETAS = `mutation QuitarTabla($id: ID!, $tags: [String!]!) {
+  tagsRemove(id: $id, tags: $tags) { node { id } userErrors { message } }
+}`;
+const TABLA_JSON = `mutation GuardarTablaCarga($metafields: [MetafieldsSetInput!]!) {
+  metafieldsSet(metafields: $metafields) { metafields { key } userErrors { field message } }
+}`;
+// Distrinando: talles que faltan en un producto que ya existe. Se relee el producto antes.
+const LEER_TALLES = `query TallesCarga($id: ID!) { product(id: $id) { id options { name values } variants(first: 100) { nodes { title sku } } } }`;
+const CREAR_TALLES = `mutation CrearTallesCarga($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+  productVariantsBulkCreate(productId: $productId, variants: $variants) { productVariants { id title } userErrors { field message } }
+}`;
+const ORDENAR_TALLES = `mutation OrdenarTallesCarga($productId: ID!, $options: [OptionReorderInput!]!) {
+  productOptionsReorder(productId: $productId, options: $options) { userErrors { field message } }
+}`;
 
 export interface DepsCarga {
   gql: Gql;
@@ -585,7 +632,7 @@ async function crearAlta(codigo: string, a: AltaFamily, plan: PlanCarga, deps: D
   }
   const input = {
     title: a.titulo,
-    vendor: VENDOR_FAMILY,
+    vendor: a.vendor ?? VENDOR_FAMILY,
     status: 'ACTIVE',
     productType: a.productType,
     tags: a.etiquetas,
@@ -618,12 +665,23 @@ async function crearAlta(codigo: string, a: AltaFamily, plan: PlanCarga, deps: D
       if (!Array.isArray(pe) || pe.length) publicado = ' No pude publicarlo en Point of Sale: publicalo a mano.';
     } catch { publicado = ' No pude publicarlo en Point of Sale: publicalo a mano.'; }
   }
-  return { estado: 'cargada', productoId: pid, titulo: a.titulo, unidades, talles, mensaje: `Creado «${a.titulo}» con ${unidades} u. en ${SUCURSAL_FAMILY} (${a.variantes.map((v) => `${v.talle}:${v.cantidad}`).join(' ')}).${publicado}` };
+  let tabla = '';
+  if (a.tabla) {
+    try {
+      const m = (await deps.gql(TABLA_JSON, { metafields: [{ ownerId: pid, namespace: 'custom', key: 'size_conversion', type: 'json', value: JSON.stringify(a.tabla.json) }] })) as
+        { metafieldsSet?: { userErrors?: { message?: string }[] } } | null;
+      const me = m?.metafieldsSet?.userErrors;
+      if (!Array.isArray(me) || me.length) tabla = ` No pude guardar la tabla ${a.tabla.nombre} en «Size Conversion»: completala a mano (no lo vuelvas a crear).`;
+    } catch { tabla = ` No pude guardar la tabla ${a.tabla.nombre} en «Size Conversion»: completala a mano (no lo vuelvas a crear).`; }
+  }
+  return { estado: 'cargada', productoId: pid, titulo: a.titulo, unidades, talles, mensaje: `Creado «${a.titulo}» con ${unidades} u. en ${plan.sucursal ?? SUCURSAL_FAMILY} (${a.variantes.map((v) => `${v.talle}:${v.cantidad}`).join(' ')}).${publicado}${tabla}` };
 }
 
 async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga, deps: DepsCarga): Promise<Paso> {
   // iD: todo lo que llegó estaba vendido en iD; solo se cambiaron precio y costo (antes de este paso).
-  if (!rep.lineas.length) return { estado: 'cargada', mensaje: 'No se sumó stock: todo lo que llegó está vendido en iD.', productoId: rep.productoId, titulo: rep.titulo, unidades: 0, talles: [] };
+  if (!rep.lineas.length && !rep.crear?.length) return { estado: 'cargada', mensaje: 'No se sumó stock: todo lo que llegó está vendido en iD.', productoId: rep.productoId, titulo: rep.titulo, unidades: 0, talles: [] };
+  // Distrinando: primero las etiquetas (código, tabla, SKU de los talles nuevos). Sin ellas no se crean talles.
+  const etiquetas = await etiquetasDistrinando(rep, deps);
   const activas = rep.lineas.filter((l) => l.actual !== null);
   const sinAlta = rep.lineas.filter((l) => l.actual === null);
   const hechas: string[] = [];
@@ -655,6 +713,13 @@ async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga
   }
   const fallas: string[] = [], dudas: string[] = [];
   const enviadas: LineaReposicion[] = [...activas];
+  if (rep.crear?.length) {
+    if (etiquetas.ok) {
+      const c = await crearTalles(rep, plan, deps);
+      hechas.push(...c.hechas); fallas.push(...c.fallas); dudas.push(...c.dudas); unidades += c.unidades;
+      enviadas.push(...c.enviadas);
+    } else fallas.push(...rep.crear.map((x) => `${x.talle} (no se creó: sin las etiquetas del proveedor)`));
+  }
   for (const l of sinAlta) {
     try {
       const d = (await deps.gql(ACTIVAR, { inventoryItemId: l.inventoryItemId, locationId: plan.locationId, available: l.suma, key: deps.clave() })) as
@@ -665,7 +730,7 @@ async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga
       else { hechas.push(`${l.talle} alta con ${l.suma}`); unidades += l.suma; enviadas.push(l); }
     } catch (e) { if (noSeEjecuto(e)) fallas.push(`${l.talle} (${motivo(e)})`); else { dudas.push(l.talle); enviadas.push(l); } }
   }
-  let etiqueta = '';
+  let etiqueta = etiquetas.mensaje;
   if (rep.etiquetar && hechas.length) {
     try {
       const t = (await deps.gql(ETIQUETAR, { id: rep.productoId, tags: [codigo] })) as { tagsAdd?: { node?: { id?: string } | null; userErrors?: { message?: string }[] } } | null;
@@ -673,11 +738,82 @@ async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga
     } catch { etiqueta = ` No pude agregarle la etiqueta ${codigo}: agregala a mano.`; }
   }
   const comun = { productoId: rep.productoId, titulo: rep.titulo, unidades, talles: talles(enviadas) };
-  if (!hechas.length && !dudas.length) return { estado: 'error', mensaje: `Shopify no dio de alta el stock en «${rep.titulo}»: ${fallas.join(', ')}. No se sumó nada.` };
+  if (!hechas.length && !dudas.length) return { estado: 'error', mensaje: `Shopify no dio de alta el stock en «${rep.titulo}»: ${fallas.join(', ')}. No se sumó nada.${etiqueta}` };
   const resumen = hechas.length ? `Sumado en «${rep.titulo}»: ${hechas.join(', ')}.` : '';
   if (dudas.length) return { ...comun, estado: 'dudosa', mensaje: `${resumen} No sé si se dio de alta el talle ${dudas.join(', ')}: ${NO_SE_SABE}.${fallas.length ? ` Falló: ${fallas.join(', ')}.` : ''}${etiqueta}`.trim() };
   if (fallas.length) return { ...comun, estado: 'parcial', mensaje: `${resumen} No se pudo dar de alta: ${fallas.join(', ')}; cargalo a mano.${etiqueta}`.trim() };
   return { ...comun, estado: 'cargada', mensaje: `${resumen}${etiqueta}` };
+}
+
+/** Distrinando: agrega las etiquetas (y saca las de otra tabla). ok:false = no se pudieron agregar. */
+async function etiquetasDistrinando(rep: ReposicionFamily, deps: DepsCarga): Promise<{ ok: boolean; mensaje: string }> {
+  if (!rep.etiquetas?.length) return { ok: true, mensaje: '' };
+  try {
+    const t = (await deps.gql(ETIQUETAR, { id: rep.productoId, tags: rep.etiquetas })) as { tagsAdd?: { node?: { id?: string } | null; userErrors?: { message?: string }[] } } | null;
+    if (!t?.tagsAdd?.node?.id || t.tagsAdd.userErrors?.length) return { ok: false, mensaje: ` No pude agregarle las etiquetas ${rep.etiquetas.join(', ')}: agregalas a mano.` };
+  } catch { return { ok: false, mensaje: ` No pude agregarle las etiquetas ${rep.etiquetas.join(', ')}: agregalas a mano.` }; }
+  let mensaje = ` Etiquetas agregadas: ${rep.etiquetas.join(', ')}.`;
+  if (rep.quitarEtiquetas?.length) {
+    try {
+      const q = (await deps.gql(QUITAR_ETIQUETAS, { id: rep.productoId, tags: rep.quitarEtiquetas })) as { tagsRemove?: { node?: { id?: string } | null; userErrors?: { message?: string }[] } } | null;
+      if (!q?.tagsRemove?.node?.id || q.tagsRemove.userErrors?.length) mensaje += ` No pude sacarle ${rep.quitarEtiquetas.join(', ')}: sacala a mano.`;
+      else mensaje += ` Saqué ${rep.quitarEtiquetas.join(', ')}.`;
+    } catch { mensaje += ` No pude sacarle ${rep.quitarEtiquetas.join(', ')}: sacala a mano.`; }
+  }
+  return { ok: true, mensaje };
+}
+
+/**
+ * Distrinando: crea los talles que faltan, con su stock en la sucursal, el precio de la curva y el costo de
+ * la factura. Antes relee el producto: si el talle o el SKU ya aparecieron, no se crea nada (se arma de nuevo).
+ */
+async function crearTalles(rep: ReposicionFamily, plan: PlanCarga, deps: DepsCarga): Promise<{ hechas: string[]; fallas: string[]; dudas: string[]; unidades: number; enviadas: LineaReposicion[] }> {
+  const crear = rep.crear ?? [];
+  const out = { hechas: [] as string[], fallas: [] as string[], dudas: [] as string[], unidades: 0, enviadas: [] as LineaReposicion[] };
+  const todos = (m: string) => { out.fallas.push(...crear.map((x) => `${x.talle} (${m})`)); return out; };
+  const precio = rep.ajuste ? rep.ajuste.precio ?? rep.ajuste.precioActual : null;
+  if (!rep.ajuste || precio === null || !(precio > 0)) return todos('sin precio para el talle nuevo');
+  let opcion = '', live: { title: string; sku: string | null }[] = [];
+  try {
+    const d = (await deps.gql(LEER_TALLES, { id: rep.productoId })) as { product?: { options?: { name: string }[]; variants?: { nodes?: { title: string; sku: string | null }[] } } | null } | null;
+    const p = d?.product;
+    if (!p?.options || p.options.length !== 1 || !p.variants?.nodes) return todos('no pude releer el producto: armá la carga de nuevo');
+    opcion = p.options[0].name;
+    live = p.variants.nodes;
+  } catch (e) { return todos(`no pude releer el producto: ${motivo(e)}`); }
+  if (live.length + crear.length > 100) return todos('el producto llegaría a más de 100 talles');
+  const igual = (a: string, b: string) => { const A = a.trim().replace(',', '.'), B = b.trim().replace(',', '.'); return A.toUpperCase() === B.toUpperCase() || (/^\d+(\.\d+)?$/.test(A) && /^\d+(\.\d+)?$/.test(B) && Number(A) === Number(B)); };
+  const ya = crear.filter((x) => live.some((v) => igual(v.title, x.talle) || (!!v.sku && v.sku.trim().toUpperCase() === x.sku.toUpperCase())));
+  if (ya.length) return todos(`ya existe ${ya.map((x) => x.talle).join(', ')} en Shopify: armá la carga de nuevo`);
+  const variants = crear.map((x) => ({
+    optionValues: [{ optionName: opcion, name: x.talle }],
+    price: String(precio),
+    inventoryItem: { sku: x.sku, cost: rep.ajuste!.costoNuevo.toFixed(2), tracked: true },
+    inventoryQuantities: [{ locationId: plan.locationId, availableQuantity: x.suma }],
+  }));
+  const lineas = crear.map((x) => ({ talle: x.talle, inventoryItemId: '', actual: null, suma: x.suma }));
+  let data: { productVariantsBulkCreate?: { productVariants?: { id: string }[] | null; userErrors?: { message?: string }[] } } | null;
+  try { data = (await deps.gql(CREAR_TALLES, { productId: rep.productoId, variants })) as typeof data; }
+  catch (e) {
+    if (noSeEjecuto(e)) return todos(motivo(e));
+    out.dudas.push(...crear.map((x) => `${x.talle} (talle nuevo)`)); out.enviadas.push(...lineas); return out;
+  }
+  const ue = data?.productVariantsBulkCreate?.userErrors;
+  const creadas = data?.productVariantsBulkCreate?.productVariants;
+  if (!Array.isArray(ue)) { out.dudas.push(...crear.map((x) => `${x.talle} (talle nuevo)`)); out.enviadas.push(...lineas); return out; }
+  if (ue.length) return todos(errores(ue));
+  if (!Array.isArray(creadas) || creadas.length !== crear.length) { out.dudas.push(...crear.map((x) => `${x.talle} (talle nuevo)`)); out.enviadas.push(...lineas); return out; }
+  for (const x of crear) { out.hechas.push(`${x.talle} nuevo con ${x.suma}`); out.unidades += x.suma; }
+  out.enviadas.push(...lineas);
+  // Que queden en su lugar (35, 36.5, 37…). Si no se puede, igual quedaron creados.
+  const orden = ordenarTalles([...live.map((v) => v.title), ...crear.map((x) => x.talle)]);
+  if (orden) {
+    try {
+      const r = (await deps.gql(ORDENAR_TALLES, { productId: rep.productoId, options: [{ name: opcion, values: orden.map((name) => ({ name })) }] })) as { productOptionsReorder?: { userErrors?: unknown[] } } | null;
+      if (!r?.productOptionsReorder || r.productOptionsReorder.userErrors?.length) out.hechas.push('(no pude ordenar los talles: quedan al final)');
+    } catch { out.hechas.push('(no pude ordenar los talles: quedan al final)'); }
+  }
+  return out;
 }
 
 /**
@@ -843,7 +979,7 @@ export function resumenCarga(plan: PlanCarga, elecciones: EleccionesCarga): { al
       lineas.push(`• ${codigo}: crear «${accion.titulo}» a ${fmt(accion.precio)} (costo ${fmt(accion.costo)}) con ${u} u.`);
     } else {
       reposiciones++;
-      const u = accion.lineas.reduce((s, l) => s + l.suma, 0);
+      const u = accion.lineas.reduce((s, l) => s + l.suma, 0) + (accion.crear ?? []).reduce((s, c) => s + c.suma, 0);
       unidades += u;
       const a = accion.ajuste;
       const extra = a ? [
@@ -851,6 +987,8 @@ export function resumenCarga(plan: PlanCarga, elecciones: EleccionesCarga): { al
         a.costos.length ? `costo ${fmt(a.costoNuevo)} en ${a.costos.map((c) => c.talle).join(', ')}` : '',
         a.ponderados.length ? `costo promedio en ${a.ponderados.map((c) => `${c.talle} ${fmt(c.costo)}`).join(', ')}` : '',
       ].filter(Boolean) : [];
+      if (accion.crear?.length) extra.push(`crear talle ${accion.crear.map((c) => `${c.talle} (${c.suma} u.)`).join(', ')}`);
+      if (accion.etiquetas?.length) extra.push(`etiquetas ${accion.etiquetas.join(', ')}${accion.quitarEtiquetas?.length ? ` (saco ${accion.quitarEtiquetas.join(', ')})` : ''}`);
       if (accion.separar?.length && accion.separarAplicado) extra.push(`separar para órdenes de iD ${textoSeparar(accion.separar)} (no se suman)`);
       if (accion.mover?.length) extra.push(`después pasar la venta de iD a ${plan.sucursal ?? 'Martínez'}: ${accion.mover.map((m) => `${m.talle} ×${m.cantidad} (${m.orden})`).join(', ')}`);
       lineas.push(`• ${codigo}: ${u ? `sumar ${u} u. en` : 'no se suma stock (vendido en iD), solo precio y costo de'} «${accion.titulo}»${extra.length ? ` · ${extra.join(' · ')}` : ''}`);

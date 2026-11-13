@@ -154,7 +154,8 @@ export function limpiarEntrega(e) {
 // Solo «liberarCarga» (a mano, con confirmación) la borra. Borrar la entrega no la borra.
 // ---------------------------------------------------------------------------
 // Family desde el 11-nov; iD (Converse/Le Coq, a Martínez) desde el 12-nov-2026.
-const CARGAN = ['family', 'id'];
+// Distrinando (Reebok, a Martínez) desde el 13-nov-2026.
+const CARGAN = ['family', 'id', 'distrinando'];
 const RE_COD_CARGA = /^[A-Z0-9][A-Z0-9._/-]{1,79}$/;
 const ESTADOS_CARGA = ['cargada', 'parcial', 'dudosa'];
 const campoCarga = (body) => {

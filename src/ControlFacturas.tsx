@@ -28,6 +28,7 @@ import { Archivo, Copiar, Parte } from './EntregasPartes';
 import { OrdenesQueSalen, PanelCarga } from './PanelCarga';
 import { accionesElegidas, ejecutarCargaFamily, resumenCarga, textoCarga, type CargaFamily, type EleccionesCarga, type ModoVenta, type PlanCarga } from './utils/cargaFamily';
 import { cambiosDePrecio, enlacesMail, textoAvisoPrecio, type CambioPrecio, type MailsAviso } from './utils/avisoPrecio';
+import { planCargaDistrinando } from './utils/cargaDistrinando';
 import { estadoCargaFactura, leerEstadoCargaId, ordenesQueSalen, planCargaId, type OrdenQueSale, precioYCostoAntes, SUCURSAL_CARGA_ID, type EstadoCargaId } from './utils/cargaId';
 import { actualizarPreciosManualmente, shopifyGraphQL } from './utils/shopify';
 import {
@@ -197,7 +198,11 @@ export default function ControlFacturas() {
   // iD: vista previa de la carga en Shopify (una entrega por vez).
   const [planCarga, setPlanCarga] = useState<PlanCarga | null>(null);
   // Lo leído para armar la carga: «cargarlo igual» (no separar lo vendido en iD) rearma sin volver a leer.
-  const baseCarga = useRef<{ r: ResultadoFactura; estado: EstadoCargaId; cargas: Record<string, CargaFamily>; modos: Map<string, ModoVenta>; cantidades: Map<string, Record<string, number>> } | null>(null);
+  // Distrinando (13-nov-2026): además la tabla de talle y el talle de destino que se eligen en la vista previa.
+  const baseCarga = useRef<{
+    prov: Prov; r: ResultadoFactura; estado: EstadoCargaId; cargas: Record<string, CargaFamily>; modos: Map<string, ModoVenta>; cantidades: Map<string, Record<string, number>>;
+    pedidos: Pedido[]; tablas: Map<string, string>; destinos: Map<string, Record<string, string>>;
+  } | null>(null);
   const listasRevisadas = useRef(new Set<Prov>());
   // Proveedor elegido ahora: una búsqueda o carga que termina después de cambiarlo no toca la pantalla.
   const provRef = useRef(prov);
@@ -659,13 +664,23 @@ export default function ControlFacturas() {
     setOcupado('Busco los artículos en Shopify para armar la carga…');
     try {
       const d = await api(undefined, p);
-      const estado = await leerEstadoCargaId(r.checklist.map((c) => c.codigo), shopifyGraphQL);
+      const dis = p === 'distrinando';
+      const estado = await leerEstadoCargaId(r.checklist.map((c) => c.codigo), shopifyGraphQL, dis ? { ventasId: false, pos: true } : {});
       if (!sigue(p)) return;
       setDatos({ ...VACIO, ...d });
-      baseCarga.current = { r, estado, cargas: d.cargas ?? {}, modos: new Map(), cantidades: new Map() };
-      setPlanCarga(planCargaId(r, estado, d.cargas ?? {}));
+      baseCarga.current = { prov: p, r, estado, cargas: d.cargas ?? {}, modos: new Map(), cantidades: new Map(), pedidos: d.pedidos ?? [], tablas: new Map(), destinos: new Map() };
+      rearmar();
     } catch (e) { if (sigue(p)) setAvisos([`No pude armar la carga: ${mensaje(e)} No se cargó nada.`]); }
     finally { setOcupado(''); }
+  }
+
+  /** Vuelve a armar la vista previa con lo elegido, sin volver a leer Shopify. */
+  function rearmar() {
+    const b = baseCarga.current;
+    if (!b) return;
+    setPlanCarga(b.prov === 'distrinando'
+      ? planCargaDistrinando(b.r, b.estado, b.cargas, b.pedidos, new Map(b.tablas), new Map(b.cantidades), new Map(b.destinos))
+      : planCargaId(b.r, b.estado, b.cargas, new Map(b.modos), new Map(b.cantidades)));
   }
 
   /** Lo vendido en iD: separarlo (por defecto), cargarlo igual (si ya se separó antes) o cargarlo y pasar la venta a Martínez. */
@@ -673,7 +688,7 @@ export default function ControlFacturas() {
     const b = baseCarga.current;
     if (!b) return;
     if (modo === 'separar') b.modos.delete(codigo); else b.modos.set(codigo, modo);
-    setPlanCarga(planCargaId(b.r, b.estado, b.cargas, new Map(b.modos), new Map(b.cantidades)));
+    rearmar();
   }
 
   /** Cantidad escrita a mano para un talle (12-nov-2026, gax): viene la del remito y se puede cambiar antes de confirmar. */
@@ -681,14 +696,32 @@ export default function ControlFacturas() {
     const b = baseCarga.current;
     if (!b) return;
     b.cantidades.set(codigo, { ...(b.cantidades.get(codigo) ?? {}), [talle]: n });
-    setPlanCarga(planCargaId(b.r, b.estado, b.cargas, new Map(b.modos), new Map(b.cantidades)));
+    rearmar();
+  }
+
+  /** Distrinando: la tabla de talle elegida para un modelo (13-nov-2026, gax). */
+  function tablaCarga(codigo: string, tabla: string) {
+    const b = baseCarga.current;
+    if (!b) return;
+    b.tablas.set(codigo, tabla);
+    rearmar();
+  }
+
+  /** Distrinando: el talle de Shopify donde entra un talle que llegó, escrito a mano ('' = automático). */
+  function destinoCarga(codigo: string, talle: string, destino: string) {
+    const b = baseCarga.current;
+    if (!b) return;
+    const x = { ...(b.destinos.get(codigo) ?? {}) };
+    if (destino) x[talle] = destino; else delete x[talle];
+    b.destinos.set(codigo, x);
+    rearmar();
   }
 
   async function confirmarCarga(r: ResultadoFactura, plan: PlanCarga, elecciones: EleccionesCarga) {
     const res = resumenCarga(plan, elecciones);
-    if (!res.reposiciones) return;
+    if (!res.lineas.length) return;
     const texto = [`Se va a cargar en Shopify (${SUCURSAL_CARGA_ID}):`, ...res.lineas, '',
-      `${res.reposiciones} artículo(s), ${res.unidades} unidades en total.`,
+      `${res.altas ? `${res.altas} producto(s) nuevo(s) y ` : ''}${res.reposiciones} reposición(es), ${res.unidades} unidades en total.`,
       'El precio y el costo se cambian antes de sumar el stock.' + (res.lineas.some((l) => l.includes('pasar la venta')) ? ' Después de sumar el stock, las ventas marcadas pasan de iD a Martínez.' : '') + ' ¿Confirmás?'].join('\n');
     if (!confirm(texto)) return;
     const p = prov, eid = plan.entregaId, factura = r.factura.numero;
@@ -885,10 +918,11 @@ export default function ControlFacturas() {
             onNota={(f) => subirPedidos(f, r.factura.fecha, r.factura.id)}
             onTrello={() => buscarEnTrelloParaFactura(r.factura)} res={res} todas={pedidosControl} consejos={consejos}
             informe={informe?.prov === prov && informe.facturaId === r.factura.id ? informe : null} onRecargarBorrada={recargarBorrada}
-            carga={prov === 'id' ? {
+            carga={prov === 'id' || prov === 'distrinando' ? {
               cargas: datos.cargas ?? {}, plan: planCarga?.entregaId === r.factura.id ? planCarga : null,
               onArmar: () => armarCarga(r), onConfirmar: (e) => planCarga && confirmarCarga(r, planCarga, e),
-              onCancelar: () => setPlanCarga(null), onLiberar: (codigo, c) => liberarCarga(r.factura.id, codigo, c), onModoVenta: modoVenta, onCantidad: cantidadCarga,
+              onCancelar: () => setPlanCarga(null), onLiberar: (codigo, c) => liberarCarga(r.factura.id, codigo, c), onCantidad: cantidadCarga,
+              ...(prov === 'id' ? { onModoVenta: modoVenta, explicacion: EXPLICA_ID } : { onTabla: tablaCarga, onDestino: destinoCarga, explicacion: EXPLICA_DISTRINANDO }),
             } : undefined} />)}
 
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 16, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
@@ -980,6 +1014,9 @@ function estadoRenglon(x: ControlRenglon, nombrePedido: (id: string) => string):
 }
 
 
+const EXPLICA_ID = 'Lo que llegó (el remito, menos lo que salió para órdenes y lo que ya está vendido en iD, que se separa) se SUMA al stock de Martínez; el stock de iD lo lleva la sincronización. Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (si un talle que llega ya tenía stock, lleva el promedio ponderado), y si el margen no llega al 50% hay que poner un precio nuevo para toda la curva. Los productos que no están en Shopify se crean desde Sincronización.';
+const EXPLICA_DISTRINANDO = 'Lo que llegó (el remito) se SUMA al stock de Martínez. Cada talle US entra en el talle de Shopify que da el SKU del proveedor, el AR que informa la nota o la tabla de talle que elijas; al lado de cada talle podés escribir otro si entró en otro. La tabla elegida se agrega a las etiquetas. Los talles que no existen se crean (SKU del proveedor, precio de la curva, costo de la factura) y los modelos nuevos se crean con precio Reebok (Mayorista × 1,8755, terminado en 999). Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (con stock: promedio ponderado). Por ahora solo Reebok calzado.';
+
 function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, informe, onRecargarBorrada, res, todas, consejos, carga }: {
   r: ResultadoFactura; abierta: boolean; onAbrir: () => void; pedidos: PedidoGuardado[]; cerradas: Set<string>; nombrePedido: (id: string) => string;
   res: ResultadoGeneral; todas: PedidoGuardado[]; consejos: Map<string, ConsejoNota>;
@@ -989,7 +1026,12 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
   /** iD: carga en Shopify (Martínez). */
   carga?: {
     cargas: Record<string, CargaFamily>; plan: PlanCarga | null; onArmar: () => void; onConfirmar: (e: EleccionesCarga) => void;
-    onCancelar: () => void; onLiberar: (codigo: string, c: CargaFamily) => void; onModoVenta: (codigo: string, modo: ModoVenta) => void; onCantidad: (codigo: string, talle: string, n: number) => void;
+    onCancelar: () => void; onLiberar: (codigo: string, c: CargaFamily) => void; onCantidad: (codigo: string, talle: string, n: number) => void;
+    explicacion: string;
+    /** iD: lo vendido en iD. */
+    onModoVenta?: (codigo: string, modo: ModoVenta) => void;
+    /** Distrinando: tabla de talle y talle de destino. */
+    onTabla?: (codigo: string, tabla: string) => void; onDestino?: (codigo: string, talle: string, destino: string) => void;
   };
 }) {
   const f = r.factura;
@@ -1079,8 +1121,8 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
         </div>)}
       </div>}
       {carga?.plan && <PanelCarga plan={carga.plan} ocupado={ocupado} onConfirmar={carga.onConfirmar} onCancelar={carga.onCancelar} sucursal={SUCURSAL_CARGA_ID}
-        onModoVenta={carga.onModoVenta} onCantidad={carga.onCantidad} sinTildar
-        explicacion="Lo que llegó (el remito, menos lo que salió para órdenes y lo que ya está vendido en iD, que se separa) se SUMA al stock de Martínez; el stock de iD lo lleva la sincronización. Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (si un talle que llega ya tenía stock, lleva el promedio ponderado), y si el margen no llega al 50% hay que poner un precio nuevo para toda la curva. Los productos que no están en Shopify se crean desde Sincronización." />}
+        onModoVenta={carga.onModoVenta} onCantidad={carga.onCantidad} onTabla={carga.onTabla} onDestino={carga.onDestino} sinTildar
+        explicacion={carga.explicacion} />}
       <TarjetasTrello ids={r.pedidosCubiertos} pedidos={pedidos} />
       {r.semaforo !== 'incompleta' && r.pedidosCubiertos.length > 0 && <PlanillasMarcadas r={r} res={res} pedidos={todas} nombrePedido={nombrePedido} ocupado={ocupado} consejos={consejos} />}
       {informe && <InformeTrelloCaja informe={informe} ocupado={ocupado} onRecargar={onRecargarBorrada} />}

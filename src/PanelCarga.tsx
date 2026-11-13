@@ -8,7 +8,7 @@
 // ============================================================================
 import { useState } from 'react';
 import { fmt } from './utils/controlFacturas';
-import { leerPrecio, precioAEscribir, resumenCarga, textoSeparar, type AjustePrecio, type EleccionesCarga, type ItemCarga, type ModoVenta, type OpcionCarga, type PlanCarga } from './utils/cargaFamily';
+import { leerPrecio, precioAEscribir, resumenCarga, textoSeparar, type AjustePrecio, type EleccionesCarga, type ItemCarga, type ModoVenta, type OpcionCarga, type PlanCarga, type TablaItem } from './utils/cargaFamily';
 import { margenPct } from './utils/margen';
 import { ordenesQueSalen, type OrdenQueSale } from './utils/cargaId';
 import { botonChico, botonPrincipal, inputSt } from './utils/entregasUi';
@@ -18,7 +18,7 @@ const COLOR_ITEM = { listo: 'inherit', elegir: '#fbbf24', bloqueado: '#f87171', 
 const VERDE = '#34d399', AMARILLO = '#fbbf24', ROJO = '#f87171', VIOLETA = '#a78bfa';
 type Eleccion = EleccionesCarga[string];
 
-export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, explicacion, onModoVenta, onCantidad, sinTildar }: {
+export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, explicacion, onModoVenta, onCantidad, onTabla, onDestino, sinTildar }: {
   plan: PlanCarga; ocupado: boolean; onConfirmar: (e: EleccionesCarga) => void; onCancelar: () => void;
   sucursal: string; explicacion: string;
   /** iD: lo vendido en iD se separa; «cargarlo igual» lo suma (si ya se separó antes); «pasar» lo suma y mueve la venta a Martínez. */
@@ -27,14 +27,22 @@ export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, e
   sinTildar?: boolean;
   /** iD (12-nov-2026, gax): la cantidad de cada talle viene sola y se puede escribir a mano. */
   onCantidad?: (codigo: string, talle: string, n: number) => void;
+  /** Distrinando (13-nov-2026, gax): la tabla de talle de cada modelo se elige en un desplegable. */
+  onTabla?: (codigo: string, tabla: string) => void;
+  /** Distrinando (13-nov-2026, gax): en qué talle de Shopify entra cada talle que llegó, editable ('' = automático). */
+  onDestino?: (codigo: string, talle: string, destino: string) => void;
 }) {
   const [elecciones, setElecciones] = useState<EleccionesCarga>(() =>
     Object.fromEntries(plan.items.filter((it) => it.opciones.length).map((it) => [it.codigo, { clave: sinTildar && esCasilla(it) ? 'no' : it.opciones[0].clave }])));
+  // Un artículo que pasa a «listo» después (eligió la tabla, escribió una cantidad) empieza como los demás:
+  // sin tildar si así empiezan. Lo que se confirma es exactamente lo que se ve.
+  const efectivas: EleccionesCarga = { ...elecciones };
+  for (const it of plan.items) if (it.opciones.length && !efectivas[it.codigo]) efectivas[it.codigo] = { clave: sinTildar && esCasilla(it) ? 'no' : it.opciones[0].clave };
   const casillas = plan.items.filter(esCasilla);
-  const tildadas = casillas.filter((it) => (elecciones[it.codigo]?.clave ?? it.opciones[0].clave) !== 'no').length;
+  const tildadas = casillas.filter((it) => efectivas[it.codigo].clave !== 'no').length;
   const elegir = (codigo: string, cambio: Partial<Eleccion>) =>
-    setElecciones((x) => ({ ...x, [codigo]: { ...(x[codigo] ?? { clave: 'no' }), ...cambio } }));
-  const res = resumenCarga(plan, elecciones);
+    setElecciones((x) => ({ ...x, [codigo]: { ...(x[codigo] ?? efectivas[codigo] ?? { clave: 'no' }), ...cambio } }));
+  const res = resumenCarga(plan, efectivas);
   return (
     <div style={{ marginTop: 10, padding: '10px 12px', borderRadius: 8, border: '1px solid rgba(99,102,241,0.6)', background: 'rgba(99,102,241,0.08)' }}>
       <strong>⬆️ Carga en Shopify ({sucursal}): revisá antes de confirmar</strong>
@@ -47,12 +55,13 @@ export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, e
         : <div style={{ fontSize: '0.8rem', opacity: 0.8, marginBottom: 4 }}>
           ¿Algo no llegó todavía? Destildalo: queda pendiente y lo cargás otro día con el mismo botón.
         </div>)}
-      {plan.items.map((it) => <FilaCarga key={it.codigo} it={it} eleccion={elecciones[it.codigo]} onElegir={(c) => elegir(it.codigo, c)} sinTildar={sinTildar}
-        onModoVenta={onModoVenta && ((m) => onModoVenta(it.codigo, m))} onCantidad={onCantidad && ((t, n) => onCantidad(it.codigo, t, n))} ocupado={ocupado} />)}
-      <OrdenesQueSalen ordenes={ordenesQueSalen(plan, elecciones)} />
+      {plan.items.map((it) => <FilaCarga key={it.codigo} it={it} eleccion={efectivas[it.codigo]} onElegir={(c) => elegir(it.codigo, c)} sinTildar={sinTildar}
+        onModoVenta={onModoVenta && ((m) => onModoVenta(it.codigo, m))} onCantidad={onCantidad && ((t, n) => onCantidad(it.codigo, t, n))}
+        onTabla={onTabla && ((t) => onTabla(it.codigo, t))} onDestino={onDestino && ((t, d) => onDestino(it.codigo, t, d))} ocupado={ocupado} />)}
+      <OrdenesQueSalen ordenes={ordenesQueSalen(plan, efectivas)} />
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
         <button style={{ ...botonPrincipal, opacity: res.lineas.length && !ocupado ? 1 : 0.5, cursor: res.lineas.length && !ocupado ? 'pointer' : 'not-allowed' }}
-          disabled={!res.lineas.length || ocupado} onClick={() => onConfirmar(elecciones)}>✅ Confirmar y cargar</button>
+          disabled={!res.lineas.length || ocupado} onClick={() => onConfirmar(efectivas)}>✅ Confirmar y cargar</button>
         <button style={botonChico} disabled={ocupado} onClick={onCancelar}>Cancelar</button>
         <span style={{ fontSize: '0.84rem', opacity: 0.85 }}>
           {res.lineas.length ? `${res.altas ? `${res.altas} nuevo(s) y ` : ''}${res.reposiciones} reposición(es): ${res.unidades} unidades.` : 'No hay nada elegido para cargar.'}
@@ -94,9 +103,10 @@ export function OrdenesQueSalen({ ordenes, titulo }: { ordenes: OrdenQueSale[]; 
 /** Con una sola cosa para hacer, una casilla deja dejarlo para otro día (lo que no llegó todavía). */
 const esCasilla = (it: ItemCarga) => it.estado === 'listo' && it.opciones.length === 1;
 
-function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, ocupado, sinTildar }: {
+function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, onTabla, onDestino, ocupado, sinTildar }: {
   it: ItemCarga; eleccion?: Eleccion; onElegir: (c: Partial<Eleccion>) => void; onModoVenta?: (m: ModoVenta) => void;
-  onCantidad?: (talle: string, n: number) => void; ocupado: boolean; sinTildar?: boolean;
+  onCantidad?: (talle: string, n: number) => void; onTabla?: (tabla: string) => void; onDestino?: (talle: string, destino: string) => void;
+  ocupado: boolean; sinTildar?: boolean;
 }) {
   const op = it.opciones.find((o) => o.clave === (eleccion?.clave ?? it.opciones[0]?.clave));
   const a = op?.accion;
@@ -121,8 +131,12 @@ function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, ocupado, s
       </div>
       {onCantidad && it.talles?.length ? <div style={{ marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
         <span style={{ opacity: 0.8 }}>✏️ Llegó para cargar:</span>
-        {it.talles.map((t) => <CantidadTalle key={t.talle} talle={t.talle} cantidad={t.cantidad} original={t.original} disabled={ocupado} onCambio={(n) => onCantidad(t.talle, n)} />)}
+        {it.talles.map((t) => <span key={t.talle} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+          <CantidadTalle talle={t.talle} cantidad={t.cantidad} original={t.original} disabled={ocupado} onCambio={(n) => onCantidad(t.talle, n)} />
+          {onDestino && t.destino !== undefined && <DestinoTalle talle={t.talle} destino={t.destino} manual={!!t.destinoManual} nuevo={!!t.nuevo} disabled={ocupado} onCambio={(d) => onDestino(t.talle, d)} />}
+        </span>)}
       </div> : null}
+      {it.tabla && <TablaTalle t={it.tabla} onTabla={onTabla} ocupado={ocupado} />}
       {sep?.separar?.length ? <Separar op={sep} onModoVenta={onModoVenta} ocupado={ocupado} /> : null}
       {it.motivo && <div style={{ color: COLOR_ITEM[it.estado], marginTop: 2 }}>{it.estado === 'bloqueado' ? '⛔ ' : ''}{it.motivo}</div>}
       {it.opciones.filter((o) => o.bloqueo && it.opciones.length > 1).map((o) => <div key={o.clave} style={{ opacity: 0.75 }}>· {o.etiqueta}: {o.bloqueo}</div>)}
@@ -133,11 +147,64 @@ function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, ocupado, s
         </div>
       </div>}
       {a?.tipo === 'reposicion' && <div style={{ marginTop: 6 }}>
-        🔁 {a.lineas.length ? <>Sumar en «{a.titulo}»: </> : <>«{a.titulo}»: no se suma stock (vendido en iD), solo precio y costo</>}{a.lineas.map((l) => (l.actual === null ? `${l.talle} alta con ${l.suma}` : `${l.talle} ${l.actual}→${l.actual + l.suma}`)).join(' · ')}
+        🔁 {a.lineas.length || a.crear?.length ? <>Sumar en «{a.titulo}»: </> : <>«{a.titulo}»: no se suma stock (vendido en iD), solo precio y costo</>}{[
+          ...a.lineas.map((l) => (l.actual === null ? `${l.talle} alta con ${l.suma}` : `${l.talle} ${l.actual}→${l.actual + l.suma}`)),
+          ...(a.crear ?? []).map((c) => `🆕 ${c.talle} (talle nuevo) con ${c.suma}`),
+        ].join(' · ')}
+        {a.etiquetas?.length ? <div style={{ opacity: 0.8 }}>🏷️ Etiquetas que se agregan: {a.etiquetas.join(', ')}{a.quitarEtiquetas?.length ? ` (se saca ${a.quitarEtiquetas.join(', ')})` : ''}</div> : null}
       </div>}
       {a?.tipo === 'reposicion' && a.ajuste && <Ajuste a={a.ajuste} precio={eleccion?.precio} onPrecio={(precio) => onElegir({ precio })} />}
       {op?.avisos.map((x, i) => <div key={i} style={{ color: AMARILLO, marginTop: 6, fontSize: '0.8rem' }}>⚠️ {x}</div>)}
     </div>
+  );
+}
+
+/** Distrinando: la tabla de talle del modelo. Las que no coinciden con lo que informa el proveedor no se pueden elegir. */
+function TablaTalle({ t, onTabla, ocupado }: { t: TablaItem; onTabla?: (tabla: string) => void; ocupado: boolean }) {
+  const falta = t.hace && !t.elegida;
+  const bloqueadas = t.opciones.filter((o) => o.bloqueo);
+  return (
+    <div style={{ marginTop: 6, padding: '6px 10px', borderRadius: 6, background: 'rgba(0,0,0,0.14)', borderLeft: `4px solid ${falta ? AMARILLO : 'transparent'}` }}>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span>📏 Tabla de talle{t.actual ? ` (hoy: ${t.actual})` : ''}:</span>
+        <select value={t.elegida} disabled={ocupado || !onTabla} onChange={(ev) => onTabla?.(ev.target.value)} aria-label="Tabla de talle"
+          style={{ ...inputSt, maxWidth: '100%', borderColor: falta ? AMARILLO : undefined }}>
+          {t.opciones.map((o) => <option key={o.clave} value={o.clave} disabled={!!o.bloqueo}>{o.etiqueta}{o.bloqueo ? ' (no coincide)' : ''}</option>)}
+        </select>
+      </div>
+      {t.avisos.map((x, i) => <div key={i} style={{ color: AMARILLO, marginTop: 4, fontSize: '0.8rem' }}>⚠️ {x}</div>)}
+      {bloqueadas.length > 0 && <div style={{ opacity: 0.65, marginTop: 4, fontSize: '0.78rem' }}>
+        No se pueden elegir: {bloqueadas.map((o) => `${o.clave} (${o.bloqueo})`).join(' · ')}.
+      </div>}
+    </div>
+  );
+}
+
+/**
+ * Distrinando: el talle de Shopify donde entra lo que llegó (gax: «que se puedan poner los talles en donde realmente
+ * entraron»). Viene el que da el SKU, la nota o la tabla; se puede escribir otro. Vacío = vuelve al automático.
+ */
+function DestinoTalle({ talle, destino, manual, nuevo, disabled, onCambio }: {
+  talle: string; destino: string; manual: boolean; nuevo: boolean; disabled: boolean; onCambio: (d: string) => void;
+}) {
+  const [texto, setTexto] = useState(destino);
+  const [antes, setAntes] = useState(destino);
+  if (antes !== destino) { setAntes(destino); setTexto(destino); }
+  const aplicar = () => {
+    const t = texto.trim().replace(',', '.');
+    if (t === destino) return;
+    if (!t) { onCambio(''); return; }
+    if (/^\d{2}(\.5)?$/.test(t)) onCambio(t); else setTexto(destino);
+  };
+  return (
+    <label style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }} title={`Talle de Shopify donde entra el ${talle}. Escribí otro si entra en otro talle; borralo para volver al automático.`}>
+      <span style={{ opacity: 0.75 }}>→ talle</span>
+      <input value={texto} disabled={disabled} inputMode="decimal" placeholder="?" aria-label={`Talle de Shopify para ${talle}`}
+        onChange={(ev) => setTexto(ev.target.value)} onBlur={aplicar} onKeyDown={(ev) => { if (ev.key === 'Enter') aplicar(); }}
+        style={{ ...inputSt, width: 48, padding: '2px 4px', borderColor: manual ? AMARILLO : !destino ? ROJO : undefined }} />
+      {nuevo && destino && <span style={{ fontSize: '0.72rem', color: AMARILLO }}>🆕</span>}
+      {manual && <span style={{ fontSize: '0.72rem', color: AMARILLO }}>(a mano)</span>}
+    </label>
   );
 }
 

@@ -24,7 +24,8 @@ export function tituloReebokCalzado(nombre: string): string {
     .toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
 }
 
-function coincideUS(key: string, ar: string, us: string) {
+/** El AR de esa tabla corresponde a ese US (respeta «10W» = Mujer y «M8/W9.5»). */
+export function coincideUS(key: string, ar: string, us: string) {
   const dual = us.match(/^M(\d+(?:\.\d+)?)\/W(\d+(?:\.\d+)?)$/);
   const mujer = us.match(/^(\d+(?:\.\d+)?)W$/);
   if (mujer && key !== 'MUJER') return false;
