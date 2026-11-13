@@ -103,3 +103,17 @@ export function excelSinLeer(
     .map((t) => ({ tarjeta: t.nombre, excel: t.adjuntos.filter((a) => !leidos.has(a.id)).length }))
     .filter((x) => x.excel > 0);
 }
+
+/**
+ * Talle de la nota de iD a partir del talle de pedido que muestra Reposición:
+ * Converse calzado en US (4.5) → columna 045 (US × 10); Le Coq calzado en EU (40) → 040;
+ * letras tal cual. null si no se sabe el talle de iD (no se adivina).
+ */
+export function talleNotaDe(marca: 'converse' | 'lecoq', tallePedido: string | null): string | null {
+  if (!tallePedido) return null;
+  const t = tallePedido.trim().replace(',', '.');
+  if (!/^\d+(\.\d+)?$/.test(t)) return t;
+  const n = Number(t);
+  if (marca === 'converse') return String(Math.round(n * 10));
+  return Number.isInteger(n) ? String(n) : String(Math.round(n * 10));
+}
