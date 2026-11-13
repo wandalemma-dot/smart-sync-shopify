@@ -2,6 +2,46 @@ import { useMemo, useState } from 'react';
 import { idsOrdenes, leerPendientesId, leerPlantillaId, cruzarPedido, generarExcelPedido, detectarPedidosMixtos, marcaPedidoId } from './utils/pedidoId';
 import type { PlantillaId, PendientesSucursal } from './utils/pedidoId';
 import ExclusionPedidoId from './ExclusionPedidoId';
+import { entranteDe, entrantesPorTalle, excelSinLeer, textoEntrante, type DatosEntrantes, type Entrante } from './utils/entrantesId';
+import { estadosTarjetas, listasDePendientes, type EstadoTarjeta, type ListaTrello } from './utils/listasTrello';
+import { apiControl, fechaAr } from './utils/entregasUi';
+
+/** Fecha de hoy en Argentina. */
+const hoyAr = () => new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+interface TarjetaTrello { id: string; nombre: string; idLista?: string; lista?: string; adjuntos: { id: string }[] }
+interface Entrantes { mapa: Map<string, Entrante>; notas: number; avisos: string[] }
+
+/**
+ * Lo que ya está pedido a iD y no llegó, según las notas de las listas de pendientes de Trello
+ * (13-nov-2026, gax). Lee la base de Control de entregas y, si puede, dónde está hoy cada tarjeta.
+ * Nunca corta el armado: si algo falla, avisa.
+ */
+async function leerEntrantes(): Promise<Entrantes> {
+  const avisos: string[] = [];
+  const d = await apiControl(undefined, 'id') as Partial<DatosEntrantes> & { listasTrello?: string[]; trelloVistos?: Record<string, unknown> };
+  const datos: DatosEntrantes = {
+    pedidos: d.pedidos || [], facturas: d.facturas || [], asignaciones: d.asignaciones || {}, remitos: d.remitos || {}, tarjetasTrello: d.tarjetasTrello || {},
+  };
+  try {
+    const r = await fetch('/api/trello?accion=tarjetas', { cache: 'no-store' });
+    const t = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(t.sinTrello ? 'Trello no está conectado' : t.error || `Error ${r.status}`);
+    const tarjetas = (t.tarjetas || []) as TarjetaTrello[];
+    const deLista = listasDePendientes((t.listas || []) as ListaTrello[], d.listasTrello || []);
+    if (!deLista.length) throw new Error('no encontré las listas de pedidos pendientes');
+    const pendientes = new Set(deLista.map((l) => l.id));
+    const cambios: Record<string, EstadoTarjeta> = estadosTarjetas(datos.pedidos, tarjetas, pendientes, datos.tarjetasTrello, hoyAr());
+    datos.tarjetasTrello = { ...datos.tarjetasTrello, ...cambios };
+    if (Object.keys(cambios).length) apiControl({ proveedor: 'id', accion: 'guardarTarjetas', tarjetas: cambios }).catch(() => undefined);
+    const sinLeer = excelSinLeer(tarjetas, pendientes, datos.pedidos, d.trelloVistos || {});
+    if (sinLeer.length) avisos.push(`Hay Excel en Trello que la app todavía no leyó (${sinLeer.map((x) => `«${x.tarjeta}»`).join(', ')}): lo que tengan no se ve en «Entrantes». Abrí «Carga y control de entregas» → iD → «Buscar notas nuevas en Trello» y volvé a armar el pedido.`);
+  } catch (e) {
+    avisos.push(`Trello: ${(e as Error)?.message || 'no respondió'}. «Entrantes» usa las notas ya cargadas, con las listas tal como estaban la última vez.`);
+  }
+  const mapa = entrantesPorTalle(datos, hoyAr());
+  const notas = new Set([...mapa.values()].flatMap((e) => e.notas.map((n) => n.pedidoId))).size;
+  return { mapa, notas, avisos };
+}
 
 export default function PedidoId() {
   const [csv, setCsv] = useState<File | null>(null);
@@ -13,7 +53,9 @@ export default function PedidoId() {
   const [estado, setEstado] = useState('');
   const [error, setError] = useState('');
   const [revisado, setRevisado] = useState(false);
-  const reset = () => { setPendientes(null); setPlantilla(null); setOmitidas([]); setRevisado(false); setError(''); setEstado(''); };
+  const [entrantes, setEntrantes] = useState<Entrantes | null>(null);
+  const [errorEntrantes, setErrorEntrantes] = useState('');
+  const reset = () => { setEntrantes(null); setErrorEntrantes(''); setPendientes(null); setPlantilla(null); setOmitidas([]); setRevisado(false); setError(''); setEstado(''); };
   const resultado = useMemo(() => pendientes && plantilla
     ? cruzarPedido(pendientes.lineas, plantilla, pendientes.avisos, pendientes.ordenes, omitidas) : null, [pendientes, plantilla, omitidas]);
   const mixtos = useMemo(() => detectarPedidosMixtos(pendientes?.lineas || [], pendientes?.etiquetadas || []), [pendientes]);
@@ -28,8 +70,11 @@ export default function PedidoId() {
     try {
       const p = leerPlantillaId(new Uint8Array(await excel.arrayBuffer()));
       const ids = idsOrdenes(await csv.text());
+      // Lo que ya está en camino (Trello), en paralelo con Shopify. Si falla, el pedido se arma igual.
+      const enCamino = leerEntrantes().then(setEntrantes, (e: unknown) => setErrorEntrantes(`No pude leer lo que está por entrar: ${(e as Error)?.message || e}. La columna «Entrantes» queda vacía.`));
       setEstado(`Consultando 0 de ${ids.length} órdenes…`);
       const pendientes = await leerPendientesId(ids, n => setEstado(`Consultando ${n} de ${ids.length} órdenes…`));
+      await enCamino;
       setPlantilla(p); setPendientes({ ...pendientes, ordenes: ids.length });
       setEstado('Revisión lista. El Excel todavía no se envió a iD.');
     } catch (e: any) { setError(e.message || 'No se pudo armar el pedido.'); setEstado(''); }
@@ -51,6 +96,8 @@ export default function PedidoId() {
   const ordenesExcluidas = new Set(exclusiones.map(e => e.orden)).size;
   const avisosEnTabla = new Set(exclusiones.map(e => e.aviso));
   const otrosAvisos = (resultado?.avisos || []).filter(a => !avisosEnTabla.has(a));
+  const entranteFila = (f: { codigo: string; talleProveedor: string }) => entrantes ? entranteDe(entrantes.mapa, f.codigo, f.talleProveedor) : null;
+  const conEntrantes = filas.filter(f => entranteFila(f));
   return <section className="glass-panel" style={{ padding: '1.5rem', border: '1px solid #6366f1' }}>
     <h2 style={{ color: '#a5b4fc', marginTop: 0 }}>📋 Armado de pedido iD</h2>
     <p>Órdenes pendientes → revisión por artículo y talle → Excel de iD completo.</p>
@@ -94,12 +141,19 @@ export default function PedidoId() {
       {faltantes.length > 0 && <p role="alert" style={{ color: '#fda4af', fontWeight: 'bold' }}>⚠ Hay artículos que no se pueden cubrir por completo. Revisá los renglones señalados y sus órdenes antes de descargar.</p>}
       <p>En packs, «Pedir» y «Disponible» son packs; «Necesitás» y «Faltan» son pares. +50 se toma como disponibilidad máxima de 50 en esta propuesta.</p>
       {exclusiones.length > 0 && <p style={{ color: '#fbcfe8' }}>Las órdenes con exclusiones aparecen primero, en rosa, dentro de esta misma lista. Podés analizarlas por separado para ver sus artículos y motivos. Su revisión no agrega cantidades a la compra.</p>}
+      <div style={{ background: 'rgba(56,189,248,.1)', border: '1px solid #38bdf8', borderRadius: 8, padding: '10px 14px', margin: '12px 0' }}>
+        <strong>🚚 Entrantes:</strong> lo que ya pediste a iD y todavía no llegó, por talle, según las notas de las listas de pedidos pendientes de Trello (pedido menos lo facturado y lo pintado en verde). Solo informa: no cambia «Pedir».
+        {entrantes && <div style={{ marginTop: 6 }}>{entrantes.notas} nota(s) con pendientes · {conEntrantes.length} renglón(es) de este pedido ya tienen unidades en camino{conEntrantes.length > 0 && ': están en celeste, revisá si hace falta volver a pedirlas'}.</div>}
+        {errorEntrantes && <div style={{ color: '#fcd34d', marginTop: 6 }}>{errorEntrantes}</div>}
+        {entrantes?.avisos.map((a, i) => <div key={i} style={{ color: '#fcd34d', marginTop: 6 }}>{a}</div>)}
+      </div>
       <div style={{ overflowX: 'auto' }}><table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '.85rem' }}>
-        <thead><tr>{['Artículo / código', 'Talle tienda → iD', 'Órdenes', 'Necesitás', 'Disponible', 'Pedir', 'Faltan', 'Estado'].map(t => <th key={t} style={{ textAlign: 'left', padding: 10 }}>{t}</th>)}</tr></thead>
-        <tbody>{plantilla && exclusiones.map(e => <ExclusionPedidoId key={e.aviso} exclusion={e} plantilla={plantilla} />)}{filas.map((f, i) => <tr key={i} style={{ background: f.ordenes.some(o => ordenesMixtas.has(o)) ? 'rgba(168,85,247,.17)' : f.motivo ? 'rgba(245,158,11,.15)' : 'transparent', borderTop: '1px solid #475569' }}>
+        <thead><tr>{['Artículo / código', 'Talle tienda → iD', 'Órdenes', 'Entrantes', 'Necesitás', 'Disponible', 'Pedir', 'Faltan', 'Estado'].map(t => <th key={t} style={{ textAlign: 'left', padding: 10 }}>{t}</th>)}</tr></thead>
+        <tbody>{plantilla && exclusiones.map(e => <ExclusionPedidoId key={e.aviso} exclusion={e} plantilla={plantilla} />)}{filas.map((f, i) => { const en = entranteFila(f); return <tr key={i} style={{ background: f.ordenes.some(o => ordenesMixtas.has(o)) ? 'rgba(168,85,247,.17)' : f.motivo ? 'rgba(245,158,11,.15)' : en ? 'rgba(56,189,248,.12)' : 'transparent', borderTop: '1px solid #475569' }}>
           <td style={{ padding: 10 }}>{f.titulo}<br/><strong>{f.codigo}</strong>{f.pack > 1 && <div>Pack ×{f.pack} · sobrante previsto: {f.excedente} pares</div>}</td>
-          <td>{f.talle || 'Único'} → {f.talleProveedor}</td><td>{f.ordenes.map((o, j) => <span key={o}>{j > 0 && ', '}{o}{ordenesMixtas.has(o) && <strong style={{ color: '#e9d5ff' }}> (mixto)</strong>}</span>)}</td><td>{f.necesaria}</td><td>{f.tope ? '+' : ''}{f.disponible}</td><td><strong>{f.pedir}</strong></td><td>{f.faltante}</td><td style={{ color: f.motivo ? '#fcd34d' : undefined }}>{f.motivo || 'Listo para pedir'}</td>
-        </tr>)}</tbody>
+          <td>{f.talle || 'Único'} → {f.talleProveedor}</td><td>{f.ordenes.map((o, j) => <span key={o}>{j > 0 && ', '}{o}{ordenesMixtas.has(o) && <strong style={{ color: '#e9d5ff' }}> (mixto)</strong>}</span>)}</td>
+          <td style={{ color: en ? '#7dd3fc' : undefined }}>{en ? <><strong>{textoEntrante(en)}</strong>{en.notas.map(n => <div key={n.pedidoId} style={{ fontSize: '.75rem', opacity: .8 }}>{n.nombre} ({fechaAr(n.fecha)}): {n.cantidad ?? `hasta ${n.hasta}`}</div>)}</> : entrantes ? '0' : '—'}</td><td>{f.necesaria}</td><td>{f.tope ? '+' : ''}{f.disponible}</td><td><strong>{f.pedir}</strong></td><td>{f.faltante}</td><td style={{ color: f.motivo ? '#fcd34d' : undefined }}>{f.motivo || 'Listo para pedir'}</td>
+        </tr>; })}</tbody>
       </table></div>
       {!filas.length && <p>No hay artículos incluidos en esta compra. Revisá los motivos y el análisis separado de las órdenes excluidas.</p>}
       {otrosAvisos.length > 0 && <details open><summary>Avisos de órdenes ({otrosAvisos.length})</summary><ul>{otrosAvisos.map((a, i) => <li key={i}>{a}</li>)}</ul></details>}
