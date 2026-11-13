@@ -5,7 +5,8 @@
 //   · Talle: el remito trae US. Se ubica por el SKU del proveedor (código-US), si no por el AR
 //     que el proveedor informa en la nota y, si no, por la tabla de talle que se elige para el
 //     modelo (talleDistrinando.ts). Una tabla que contradice lo que informa el proveedor no se
-//     puede elegir. La tabla elegida va a las etiquetas («TABLA DE TALLE REEBOK HOMBRE»).
+//     puede elegir. La tabla elegida va a las etiquetas con el nombre del local («TABLA DE TALLE REEBOK 1», «2», «MUJER»):
+//     la web muestra la tabla según esa etiqueta. Una etiqueta vieja («REEBOK HOMBRE») se reemplaza por la «1».
 //     Producto sin tabla de talle con nombre: se avisa para asociarle una.
 //   · Packs «M12 4/7.5 (23322)»: US 4, 5, 6, 7 y 7.5 con 2, 3, 3, 2 y 2 pares por caja, por la
 //     cantidad de cajas. Las cantidades se pueden corregir antes de cargar.
@@ -190,7 +191,8 @@ function opcionReposicion(codigo: string, p: ProductoId | undefined, llegan: Lle
   const etiquetas: string[] = [];
   if (!etiquetaDelCodigo(p.etiquetas, codigo)) etiquetas.push(codigo);
   const quitar: string[] = [];
-  if (tabla && tablaDeEtiquetas(p.etiquetas) !== tabla) {
+  // La etiqueta exacta del local (la web elige la tabla por ella): si tiene otra o la vieja «HOMBRE», se reemplaza.
+  if (tabla && !p.etiquetas.some((x) => norm(x) === norm(etiquetaTabla(tabla)))) {
     etiquetas.push(etiquetaTabla(tabla));
     quitar.push(...etiquetasDeTabla(p.etiquetas));
   }
@@ -293,7 +295,13 @@ export function planCargaDistrinando(r: ResultadoFactura, estado: EstadoCargaId,
     const talles = llegan.map((l) => {
       const u = ubicar(c.codigo, l, productos[0]?.variantes ?? [], pedidos, tElegida);
       const destino = 'error' in u ? u.falta?.talle ?? '' : u.talle;
-      return { talle: etiquetaUS(l.us), cantidad: l.cantidad, original: l.original, destino, ...(l.destino ? { destinoManual: true } : {}), ...('error' in u && u.falta ? { nuevo: true } : {}) };
+      // SKU que tiene hoy ese talle en Shopify (gax: «para escanearlo o saber qué SKU tiene»); si se crea, el que va a llevar.
+      const vDestino = 'error' in u ? (destino ? productos[0]?.variantes.find((v) => mismoTalle(v.talle, destino)) : undefined) : productos[0]?.variantes.find((v) => v.id === u.varianteId);
+      const sku = 'error' in u && u.falta ? u.falta.skuProveedor : vDestino ? vDestino.sku ?? '' : undefined;
+      return {
+        talle: etiquetaUS(l.us), cantidad: l.cantidad, original: l.original, destino, ...(sku !== undefined ? { sku } : {}),
+        ...(l.destino ? { destinoManual: true } : {}), ...('error' in u && u.falta ? { nuevo: true } : {}),
+      };
     });
     const lista = Number(ren?.precioUnitario) || 0, bonif = Number(ren?.bonificacion) || 0;
     const opciones = ids.length

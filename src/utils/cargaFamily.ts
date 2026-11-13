@@ -390,6 +390,8 @@ export interface ItemCarga {
     talle: string; cantidad: number; original: number;
     /** Distrinando: talle de Shopify donde entra ('' = no se sabe), si se escribió a mano y si se crea. */
     destino?: string; destinoManual?: boolean; nuevo?: boolean;
+    /** Distrinando: SKU que tiene hoy ese talle en Shopify ('' = sin SKU); si se crea, el que va a llevar. */
+    sku?: string;
   }[];
   /** Distrinando: tabla de talle del modelo. */
   tabla?: TablaItem;

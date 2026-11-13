@@ -2,11 +2,20 @@ import { simplificarColores } from './coloresComerciales';
 import hombre from './reebokHombre.json';
 import mujer from './reebokMujer.json';
 import nino from './reebokNino.json';
+// TABLA DE TALLE REEBOK 2: hoja impresa del local (foto de gax, 13-nov-2026). 48.5 = 31,8 cm tal cual figura impreso.
+import reebok2 from './reebok2.json';
 import ukTabla from './reebokUK.json';
 import type { ReebokProducto } from './reebokLogic';
 
 export type SizeConversion = Record<string, { arg: string; us: string | null; eu?: string | null; cm: string }>;
-export const REEBOK_TABLAS: Record<string, SizeConversion> = { HOMBRE: hombre, MUJER: mujer, NIÑO: nino };
+// Nombres = etiquetas del local (13-nov-2026, gax: «se llaman así tal cual… se usa una tabla de talle
+// automáticamente al ponerle la etiqueta»): TABLA DE TALLE REEBOK 1, REEBOK 2 y REEBOK MUJER.
+// «1» es la tabla que antes se llamaba HOMBRE (reebokHombre.json): mismos AR, US y cm que la hoja impresa.
+// La «2» no se pisa con ninguna otra en ningún par US–AR: sumarla no vuelve ambiguo un modelo.
+// NIÑO queda para convertir talles K, pero el local no tiene esa hoja.
+export const REEBOK_TABLAS: Record<string, SizeConversion> = { '1': hombre, '2': reebok2, MUJER: mujer, NIÑO: nino };
+/** Etiquetas viejas que nombran la misma tabla con otro nombre (62 productos tenían «REEBOK HOMBRE»). */
+export const REEBOK_ALIAS: Record<string, string> = { HOMBRE: '1' };
 export const REEBOK_SIN_TABLA = 'TABLA DE TALLE REEBOK SIN IDENTIFICAR';
 // Venta sobre el mayorista original, al precio terminado en 999 más cercano.
 export function precioReebokCalzado(mayorista: number): number {
@@ -29,7 +38,7 @@ export function coincideUS(key: string, ar: string, us: string) {
   const dual = us.match(/^M(\d+(?:\.\d+)?)\/W(\d+(?:\.\d+)?)$/);
   const mujer = us.match(/^(\d+(?:\.\d+)?)W$/);
   if (mujer && key !== 'MUJER') return false;
-  const valor = mujer ? mujer[1] : dual ? (key === 'HOMBRE' ? dual[1] : key === 'MUJER' ? dual[2] : '') : us;
+  const valor = mujer ? mujer[1] : dual ? (key === '1' ? dual[1] : key === 'MUJER' ? dual[2] : '') : us;
   return REEBOK_TABLAS[key][ar]?.us === valor;
 }
 

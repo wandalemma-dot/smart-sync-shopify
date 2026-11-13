@@ -87,10 +87,10 @@ describe('vista previa de la carga: Distrinando (13-nov-2026)', () => {
   const dis = {
     ...plan, items: [{
       ...plan.items[0], codigo: 'RBK1100231713', estado: 'bloqueado', motivo: 'Elegí la tabla de talle: hay talles que el proveedor no informa en la nota.', opciones: [],
-      talles: [{ talle: 'US 4', cantidad: 6, original: 6, destino: '' }, { talle: 'US 5', cantidad: 9, original: 9, destino: '36', destinoManual: true, nuevo: true }],
+      talles: [{ talle: 'US 4', cantidad: 6, original: 6, destino: '' }, { talle: 'US 5', cantidad: 9, original: 9, destino: '36', destinoManual: true, nuevo: true, sku: 'RBK1100231713-5' }],
       tabla: {
         elegida: '', actual: null, hace: true, avisos: ['Este producto no tiene tabla de talle: elegí una abajo y se la agrego al cargar.'],
-        opciones: [{ clave: '', etiqueta: 'Elegí la tabla de talle…' }, { clave: 'HOMBRE', etiqueta: 'TABLA DE TALLE REEBOK HOMBRE' }, { clave: 'MUJER', etiqueta: 'TABLA DE TALLE REEBOK MUJER', bloqueo: 'no tiene el US 4' }],
+        opciones: [{ clave: '', etiqueta: 'Elegí la tabla de talle…' }, { clave: '1', etiqueta: 'TABLA DE TALLE REEBOK 1' }, { clave: 'MUJER', etiqueta: 'TABLA DE TALLE REEBOK MUJER', bloqueo: 'no tiene el US 4' }],
       },
     }],
   } as unknown as PlanCarga;
@@ -106,6 +106,9 @@ describe('vista previa de la carga: Distrinando (13-nov-2026)', () => {
     expect(html).toMatch(/aria-label="Talle de Shopify para US 5"[^>]*value="36"/);
     expect(html).toMatch(/\(a mano\)/);
     expect(html).toMatch(/aria-label="Talle de Shopify para US 4"[^>]*value=""/);
+  });
+  it('al lado del talle se ve el SKU (el que tiene o el que va a llevar)', () => {
+    expect(html).toMatch(/🆕 <!-- -->SKU <!-- -->RBK1100231713-5|🆕 SKU RBK1100231713-5/);
   });
   it('se puede agregar un talle que no está en el remito', () => {
     expect(html).toMatch(/＋ Agregar talle/);

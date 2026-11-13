@@ -135,6 +135,10 @@ function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, onTabla, o
         {it.talles.map((t) => <span key={t.talle} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
           <CantidadTalle talle={t.talle} cantidad={t.cantidad} original={t.original} disabled={ocupado} onCambio={(n) => onCantidad(t.talle, n)} />
           {onDestino && t.destino !== undefined && <DestinoTalle talle={t.talle} destino={t.destino} manual={!!t.destinoManual} nuevo={!!t.nuevo} disabled={ocupado} onCambio={(d) => onDestino(t.talle, d)} />}
+          {t.sku !== undefined && <span title={t.nuevo ? 'SKU que va a llevar el talle nuevo' : 'SKU que tiene hoy ese talle en Shopify'}
+            style={{ fontFamily: 'monospace', fontSize: '0.78rem', padding: '1px 6px', borderRadius: 4, background: 'rgba(0,0,0,0.2)', userSelect: 'all', opacity: t.sku ? 1 : 0.6 }}>
+            {t.nuevo ? '🆕 ' : ''}SKU {t.sku || 'sin SKU'}
+          </span>}
         </span>)}
         {onDestino && <AgregarTalle disabled={ocupado} existentes={it.talles.map((t) => t.talle)} onAgregar={(t, n) => onCantidad(t, n)} />}
       </div> : null}
