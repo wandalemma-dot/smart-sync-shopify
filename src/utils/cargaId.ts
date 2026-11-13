@@ -39,7 +39,7 @@ export const SUCURSAL_ID = 'ID (Converse - Le Coq Sportif)';
 type Gql = (query: string, variables?: Record<string, unknown>) => Promise<unknown>;
 
 export interface VarianteId { id: string; talle: string; sku: string; inventoryItemId: string; seguimiento: boolean; disponible: number | null; precio: number | null; costo: number | null }
-export interface ProductoId { id: string; titulo: string; vendor: string; estado: string; etiquetas: string[]; variantes: VarianteId[] }
+export interface ProductoId { id: string; titulo: string; vendor: string; estado: string; etiquetas: string[]; variantes: VarianteId[]; /** Nombres de las opciones (Talle…). */ opciones?: string[] }
 export interface EstadoCargaId {
   locationId: string;
   /** código de la factura → productos de Shopify que lo llevan en el SKU o en una etiqueta. */
@@ -53,6 +53,8 @@ export interface EstadoCargaId {
   ordenesId?: Record<string, LineaOrdenId[]>;
   /** La sucursal de iD (para dejar su stock como estaba al pasar una venta a Martínez). */
   idLocationId?: string;
+  /** Canal Point of Sale (Distrinando: los productos nuevos se publican ahí). */
+  posId?: string | null;
 }
 
 export interface OrdenPendienteId {
@@ -82,9 +84,10 @@ function skuDelCodigo(sku: string, codigo: string): boolean {
   }
   return false;
 }
-const etiquetaDelCodigo = (etiquetas: string[], codigo: string) => etiquetas.some((t) => mismoCodigo(String(t).trim(), codigo));
+export const etiquetaDelCodigo = (etiquetas: string[], codigo: string) => etiquetas.some((t) => mismoCodigo(String(t).trim(), codigo));
 
 const Q_SUCURSALES = `query { locations(first: 100) { nodes { id name } } }`;
+const Q_CANALES = `query { publications(first: 50) { nodes { id name } } }`;
 const Q_VARIANTES = `query($q: String!, $cursor: String) {
   productVariants(first: 100, after: $cursor, query: $q) {
     pageInfo { hasNextPage endCursor }
@@ -93,7 +96,7 @@ const Q_VARIANTES = `query($q: String!, $cursor: String) {
 }`;
 const Q_PRODUCTO = `query($id: ID!, $loc: ID!) {
   product(id: $id) {
-    id title vendor status tags
+    id title vendor status tags options { name }
     variants(first: 100) { nodes { id title sku price inventoryItem { id tracked unitCost { amount } inventoryLevel(locationId: $loc) { quantities(names: ["available"]) { name quantity } } } } }
   }
 }`;
@@ -112,12 +115,12 @@ const Q_LINEAS_FO = `query($id: ID!, $cursor: String) {
 }`;
 interface Pagina<T> { pageInfo: { hasNextPage: boolean; endCursor: string | null }; nodes: T[] }
 type NodoProducto = {
-  id: string; title: string; vendor: string; status: string; tags?: string[];
+  id: string; title: string; vendor: string; status: string; tags?: string[]; options?: { name: string }[];
   variants: { nodes: { id: string; title: string; sku: string | null; price?: string | null; inventoryItem: { id: string; tracked: boolean; unitCost?: { amount: string } | null; inventoryLevel: { quantities: { name: string; quantity: number }[] } | null } | null }[] };
 };
 
 /** Lee lo que hace falta para armar la carga (solo lectura). Si algo falla, no se arma nada. */
-export async function leerEstadoCargaId(codigos: string[], gql: Gql): Promise<EstadoCargaId> {
+export async function leerEstadoCargaId(codigos: string[], gql: Gql, opts: { ventasId?: boolean; pos?: boolean } = {}): Promise<EstadoCargaId> {
   const suc = (await gql(Q_SUCURSALES)) as { locations: { nodes: { id: string; name: string }[] } };
   const loc = suc.locations.nodes.find((l) => mismaSucursal(l.name, SUCURSAL_CARGA_ID));
   if (!loc) throw new Error(`No encontré la sucursal ${SUCURSAL_CARGA_ID} en Shopify. No se cargó nada.`);
@@ -147,7 +150,7 @@ export async function leerEstadoCargaId(codigos: string[], gql: Gql): Promise<Es
     const p = d.product;
     if (!p) continue;
     productos[id] = {
-      id: p.id, titulo: p.title, vendor: p.vendor || '', estado: p.status, etiquetas: p.tags ?? [],
+      id: p.id, titulo: p.title, vendor: p.vendor || '', estado: p.status, etiquetas: p.tags ?? [], opciones: (p.options ?? []).map((o) => o.name),
       variantes: p.variants.nodes.map((v) => {
         const nivel = v.inventoryItem?.inventoryLevel;
         const q = nivel?.quantities.find((x) => x.name === 'available');
@@ -162,6 +165,15 @@ export async function leerEstadoCargaId(codigos: string[], gql: Gql): Promise<Es
     };
   }
   const estado: EstadoCargaId = { locationId: loc.id, porCodigo, productos };
+  if (opts.pos) {
+    const can = (await gql(Q_CANALES)) as { publications: { nodes: { id: string; name: string }[] } };
+    estado.posId = can.publications.nodes.find((p) => {
+      const n = String(p.name || '').toLowerCase();
+      return n.includes('point of sale') || n.includes('punto de venta') || n === 'pos';
+    })?.id ?? null;
+  }
+  // Distrinando: no hay ventas de iD que separar.
+  if (opts.ventasId === false) return estado;
   const locId = suc.locations.nodes.find((l) => mismaSucursal(l.name, SUCURSAL_ID));
   if (!locId) estado.errorPendientes = `no encontré la sucursal ${SUCURSAL_ID}`;
   else estado.idLocationId = locId.id;
@@ -301,7 +313,7 @@ export function firmaCargaId(fecha: string, remito: string, fila: Pick<FilaCheck
  * los que llegan con stock en Martínez llevan el promedio ponderado (costo actual desconocido: no se
  * inventa, conserva el suyo); los que tienen stock en Martínez y no llegan conservan el suyo.
  */
-export function ajusteDe(p: ProductoId, ren: RenglonFactura, lineas: LineaReposicion[]): AjustePrecio | null {
+export function ajusteDe(p: ProductoId, ren: RenglonFactura, lineas: LineaReposicion[], precio?: { sugerido: number; basico: boolean }): AjustePrecio | null {
   const lista = Number(ren.precioUnitario) || 0;
   if (!(lista > 0)) return null;
   const costoNuevo = redondear2(lista * (1 - (Number(ren.bonificacion) || 0) / 100));
@@ -328,7 +340,7 @@ export function ajusteDe(p: ProductoId, ren: RenglonFactura, lineas: LineaReposi
   }
   return {
     costoNuevo, precioActual, precios, margen, ok: precioActual !== null && llegaAl50(precioActual, costoNuevo),
-    basico: esPrecioSugerido(ren.codigo), sugerido: precioId(ren.codigo, lista),
+    basico: precio ? precio.basico : esPrecioSugerido(ren.codigo), sugerido: precio ? precio.sugerido : precioId(ren.codigo, lista),
     variantes: p.variantes.map((v) => ({ id: v.id, talle: v.talle })), costos, ponderados, conservan,
   };
 }

@@ -43,6 +43,9 @@ const manualWrites = new Set([
   'inventorySetQuantities', 'inventoryActivate', 'productSet',
   'productVariantsBulkUpdate', 'productVariantsBulkCreate', 'productOptionsReorder',
   'tagsAdd', 'metafieldsSet', 'publishablePublish',
+  // Carga de Distrinando (13-nov-2026, gax): la tabla de talle elegida reemplaza la etiqueta
+  // «TABLA DE TALLE REEBOK …» anterior. Con confirmación, como el resto.
+  'tagsRemove',
   // Carga de iD (12-nov-2026, gax): pasar a Martínez una venta asignada a iD, con confirmación.
   'fulfillmentOrderMove',
 ]);

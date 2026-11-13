@@ -71,8 +71,18 @@ describe('Family: entregas sin factura (11-nov-2026)', () => {
     await aplicar(fn, { ...base, accion: 'reservarCarga', firma: 'f' });
     await expect(aplicar(fn, { ...base, accion: 'terminarCarga', estado: 'en curso' })).rejects.toThrow(/Estado inválido/);
     await expect(aplicar(fn, { ...base, accion: 'reservarCarga', codigo: 'shb spec' })).rejects.toThrow(/Código inválido/);
-    await expect(aplicar(fn, { ...base, proveedor: 'distrinando', accion: 'reservarCarga' })).rejects.toThrow(/Acción inválida/);
-    expect((await leerTodo(fn, 'distrinando')).cargas).toBeUndefined();
+    await expect(aplicar(fn, { ...base, proveedor: 'otro', accion: 'reservarCarga' })).rejects.toThrow();
+  });
+
+  it('Distrinando también carga en Shopify (13-nov-2026): marca por entrega y código, aparte de Family e iD', async () => {
+    const { fn } = memoria();
+    const c = { proveedor: 'distrinando', entregaId: 'F-0039-00283124', codigo: 'RBKLIX71-RBKGX9659' };
+    expect((await leerTodo(fn, 'distrinando')).cargas).toEqual({});
+    expect(await aplicar(fn, { ...c, accion: 'reservarCarga', firma: '2026-11-10|RBKLIX71-RBKGX9659|6|5:4|0085-00206200', factura: '0039-00283124', detalle: { accion: 'reposicion', titulo: 'Zapatillas Reebok Club C Cardi' } })).toEqual({ ok: true });
+    expect((await aplicar(fn, { ...c, accion: 'reservarCarga', firma: 'x' })).ok).toBe(false);
+    await aplicar(fn, { ...c, accion: 'terminarCarga', estado: 'cargada', detalle: { unidades: 4 } });
+    expect((await leerTodo(fn, 'distrinando')).cargas['F-0039-00283124|RBKLIX71-RBKGX9659']).toMatchObject({ estado: 'cargada', factura: '0039-00283124' });
+    expect((await leerTodo(fn, 'id')).cargas).toEqual({});
   });
 
   it('iD también carga en Shopify (12-nov-2026): su marca lleva el número de factura y va al registro', async () => {

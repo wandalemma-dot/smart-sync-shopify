@@ -82,3 +82,29 @@ describe('vista previa de la carga: cantidades a mano (gax, 12-nov-2026)', () =>
     expect(html()).not.toMatch(/Llegó para cargar/);
   });
 });
+
+describe('vista previa de la carga: Distrinando (13-nov-2026)', () => {
+  const dis = {
+    ...plan, items: [{
+      ...plan.items[0], codigo: 'RBK1100231713', estado: 'bloqueado', motivo: 'Elegí la tabla de talle: hay talles que el proveedor no informa en la nota.', opciones: [],
+      talles: [{ talle: 'US 4', cantidad: 6, original: 6, destino: '' }, { talle: 'US 5', cantidad: 9, original: 9, destino: '36', destinoManual: true, nuevo: true }],
+      tabla: {
+        elegida: '', actual: null, hace: true, avisos: ['Este producto no tiene tabla de talle: elegí una abajo y se la agrego al cargar.'],
+        opciones: [{ clave: '', etiqueta: 'Elegí la tabla de talle…' }, { clave: 'HOMBRE', etiqueta: 'TABLA DE TALLE REEBOK HOMBRE' }, { clave: 'MUJER', etiqueta: 'TABLA DE TALLE REEBOK MUJER', bloqueo: 'no tiene el US 4' }],
+      },
+    }],
+  } as unknown as PlanCarga;
+  const html = renderToStaticMarkup(<PanelCarga plan={dis} ocupado={false} onConfirmar={() => undefined} onCancelar={() => undefined} sucursal="DEPOSITO MARTINEZ" explicacion=""
+    sinTildar onCantidad={() => undefined} onTabla={() => undefined} onDestino={() => undefined} />);
+  it('muestra el desplegable de tabla, con las que no coinciden deshabilitadas, y el aviso', () => {
+    expect(html).toMatch(/Tabla de talle/);
+    expect(html).toMatch(/<option value="MUJER" disabled="">TABLA DE TALLE REEBOK MUJER \(no coincide\)/);
+    expect(html).toMatch(/no tiene tabla de talle/);
+    expect(html).toMatch(/No se pueden elegir: MUJER \(no tiene el US 4\)/);
+  });
+  it('al lado de cada talle, el talle de Shopify donde entra (editable)', () => {
+    expect(html).toMatch(/aria-label="Talle de Shopify para US 5"[^>]*value="36"/);
+    expect(html).toMatch(/\(a mano\)/);
+    expect(html).toMatch(/aria-label="Talle de Shopify para US 4"[^>]*value=""/);
+  });
+});
