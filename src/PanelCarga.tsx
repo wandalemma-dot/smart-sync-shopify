@@ -203,6 +203,9 @@ function Reposicion({ a, enFilas }: { a: Repo; enFilas: string[] }) {
       {!suma ? <>«{a.titulo}»: no se suma stock (vendido en iD), solo precio y costo</>
         : enFilas.length ? <>Se suma en «{a.titulo}»{resto.length ? `: ${resto.join(' · ')}` : '.'}</>
         : <>Sumar en «{a.titulo}»: {resto.join(' · ')}</>}
+      {a.renombrar?.length ? <div style={{ color: AMARILLO }}>
+        Talles que se renombran en Shopify (mismo SKU y stock): {a.renombrar.map((r) => `${r.talle} → ${r.nuevo}${r.sku ? ` (${r.sku})` : ''}`).join(' · ')}
+      </div> : null}
       {a.etiquetas?.length ? <div style={{ opacity: 0.8 }}>Etiquetas que se agregan: {a.etiquetas.join(', ')}{a.quitarEtiquetas?.length ? ` (se saca ${a.quitarEtiquetas.join(', ')})` : ''}</div> : null}
     </div>
   );
@@ -232,7 +235,7 @@ function TallesFilas({ it, a, ocupado, onCantidad, onDestino, onSku, onQuitarTal
               <td style={td}><strong>{t.talle}</strong></td>
               <td style={td}><CantidadTalle talle={t.talle} sinTalle cantidad={t.cantidad} original={t.original} disabled={ocupado} onCambio={(n) => onCantidad(t.talle, n)} /></td>
               <td style={td}>{t.destino !== undefined
-                ? <DestinoTalle talle={t.talle} sinEtiqueta destino={t.destino} manual={!!t.destinoManual} nuevo={!!t.nuevo} disabled={ocupado} onCambio={(d) => onDestino(t.talle, d)} />
+                ? <DestinoTalle talle={t.talle} sinEtiqueta destino={t.destino} manual={!!t.destinoManual} nuevo={!!t.nuevo} renombra={t.renombra} disabled={ocupado} onCambio={(d) => onDestino(t.talle, d)} />
                 : '—'}</td>
               <td style={td}>{t.sku === undefined ? '—'
                 : onSku ? <SkuTalle talle={t.talle} sku={t.sku} manual={!!t.skuManual} nuevo={!!t.nuevo} disabled={ocupado} onCambio={(k) => onSku(t.talle, k)} />
@@ -318,8 +321,10 @@ function SkuTalle({ talle, sku, manual, nuevo, disabled, onCambio }: {
  * Distrinando: el talle de Shopify donde entra lo que llegó (gax: «que se puedan poner los talles en donde realmente
  * entraron»). Viene el que da el SKU, la nota o la tabla; se puede escribir otro. Vacío = vuelve al automático.
  */
-function DestinoTalle({ talle, destino, manual, nuevo, disabled, onCambio, sinEtiqueta }: {
+function DestinoTalle({ talle, destino, manual, nuevo, renombra, disabled, onCambio, sinEtiqueta }: {
   talle: string; destino: string; manual: boolean; nuevo: boolean; disabled: boolean; onCambio: (d: string) => void; sinEtiqueta?: boolean;
+  /** El talle que tiene hoy esa variante, que se renombra a `destino` (mismo SKU y stock). */
+  renombra?: string;
 }) {
   const [texto, setTexto] = useState(destino);
   const [antes, setAntes] = useState(destino);
@@ -337,6 +342,7 @@ function DestinoTalle({ talle, destino, manual, nuevo, disabled, onCambio, sinEt
         onChange={(ev) => setTexto(ev.target.value)} onBlur={aplicar} onKeyDown={(ev) => { if (ev.key === 'Enter') aplicar(); }}
         style={{ ...inputSt, width: 48, padding: '2px 4px', borderColor: manual ? AMARILLO : !destino ? ROJO : undefined }} />
       {nuevo && destino && <span style={{ fontSize: '0.72rem', color: AMARILLO }}>se crea</span>}
+      {renombra && <span style={{ fontSize: '0.72rem', color: AMARILLO }} title={`Hoy en Shopify se llama ${renombra}: se renombra, con el mismo SKU y stock`}>(hoy {renombra})</span>}
       {manual && <span style={{ fontSize: '0.72rem', color: AMARILLO }}>(a mano)</span>}
     </label>
   );

@@ -299,6 +299,12 @@ export interface ReposicionFamily {
    * Se cambia después de sumar el stock; si es un EAN, también el código de barras.
    */
   cambiarSku?: { id: string; talle: string; antes: string; sku: string; barcode?: string }[];
+  /**
+   * Distrinando (13-nov-2026, gax: «el SKU manténelo, pero el talle que está en Shopify hoy lo convertís al talle que
+   * yo te voy a escribir»): talles que se renombran ANTES de tocar precio y stock. Misma variante: SKU, stock, precio y
+   * costo no cambian. `talle` es el nombre de hoy y `sku` el que tiene (se revisan en vivo antes de renombrar).
+   */
+  renombrar?: { id: string; talle: string; nuevo: string; sku: string }[];
   /** Distrinando: etiquetas que se agregan (código, tabla de talle elegida, SKU del proveedor de los talles nuevos). */
   etiquetas?: string[];
   /** Distrinando: etiquetas de tabla que se reemplazan por la elegida. */
@@ -343,6 +349,8 @@ export interface TablaItem {
   hace: boolean;
   /** Avisos de la tabla (el producto no tiene, o su etiqueta no coincide con sus talles). */
   avisos: string[];
+  /** La única tabla que coincide con los talles escritos a mano (viene elegida). */
+  recomendada?: string;
 }
 /** El precio da 50% o más de margen con este costo (en centavos, como precioExistente). */
 export const llegaAl50 = (precio: number, costo: number) => precio > 0 && costo > 0 && Math.round(costo * 100) * 242 <= Math.round(precio * 100) * 100;
@@ -400,6 +408,8 @@ export interface ItemCarga {
     sku?: string;
     /** Distrinando: el SKU se escribió (o escaneó) a mano. */
     skuManual?: boolean;
+    /** Distrinando: el talle que tiene hoy en Shopify esa variante, que se renombra a `destino`. */
+    renombra?: string;
   }[];
   /** Distrinando: tabla de talle del modelo. */
   tabla?: TablaItem;
@@ -596,7 +606,11 @@ const TABLA_JSON = `mutation GuardarTablaCarga($metafields: [MetafieldsSetInput!
   metafieldsSet(metafields: $metafields) { metafields { key } userErrors { field message } }
 }`;
 // Distrinando: talles que faltan en un producto que ya existe. Se relee el producto antes.
-const LEER_TALLES = `query TallesCarga($id: ID!) { product(id: $id) { id options { name values } variants(first: 100) { nodes { title sku } } } }`;
+const LEER_TALLES = `query TallesCarga($id: ID!) { product(id: $id) { id options { name values } variants(first: 100) { nodes { id title sku } } } }`;
+// Distrinando (13-nov-2026, gax): talle corrido → el talle correcto, en la misma variante (SKU y stock no cambian).
+const RENOMBRAR_TALLES = `mutation RenombrarTallesCarga($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+  productVariantsBulkUpdate(productId: $productId, variants: $variants) { productVariants { id title } userErrors { field message } }
+}`;
 const CREAR_TALLES = `mutation CrearTallesCarga($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
   productVariantsBulkCreate(productId: $productId, variants: $variants) { productVariants { id title } userErrors { field message } }
 }`;
@@ -779,6 +793,78 @@ async function cambiarSkus(rep: ReposicionFamily, deps: DepsCarga): Promise<stri
   }
 }
 
+/**
+ * Distrinando (13-nov-2026, gax): renombra los talles corridos, en la misma variante (SKU, stock, precio y costo no
+ * cambian). Antes relee el producto: si algo cambió desde la vista previa, no toca nada. Por tandas: Shopify no deja
+ * dos talles iguales, así que cada tanda solo usa nombres libres (el 46 → 44 espera a que el 44 pase a 43); un
+ * intercambio (44 ↔ 43) pasa primero por un nombre provisorio. ok:false = no se sigue con precio ni stock.
+ */
+async function renombrarTalles(rep: ReposicionFamily, deps: DepsCarga): Promise<{ ok: boolean; mensaje: string }> {
+  const rs = rep.renombrar ?? [];
+  if (!rs.length) return { ok: true, mensaje: '' };
+  const hechos = new Map<string, string>();
+  const fallo = (m: string) => ({
+    ok: false,
+    mensaje: `${hechos.size ? `Ya renombré ${[...hechos.values()].join(', ')}. ` : ''}${m} No se cambió el precio ni se sumó stock en «${rep.titulo}»: revisá sus talles en Shopify y armá la carga de nuevo.`,
+  });
+  let opcion = '';
+  let live: { id: string; title: string; sku: string | null }[] = [];
+  try {
+    const d = (await deps.gql(LEER_TALLES, { id: rep.productoId })) as { product?: { options?: { name: string }[]; variants?: { nodes?: { id: string; title: string; sku: string | null }[] } } | null } | null;
+    const p = d?.product;
+    if (!p?.options || p.options.length !== 1 || !Array.isArray(p.variants?.nodes)) return fallo('No pude releer el producto antes de renombrar los talles.');
+    opcion = p.options[0].name;
+    live = p.variants!.nodes!;
+  } catch (e) { return fallo(`No pude releer el producto antes de renombrar los talles (${motivo(e)}).`); }
+  if (live.length >= 100) return fallo('El producto tiene 100 talles o más: renombralos a mano.');
+  const igual = (a: string, b: string) => { const A = a.trim().replace(',', '.'), B = b.trim().replace(',', '.'); return A.toUpperCase() === B.toUpperCase() || (/^\d+(\.\d+)?$/.test(A) && /^\d+(\.\d+)?$/.test(B) && Number(A) === Number(B)); };
+  const mismoSku = (a: string | null, b: string) => (a ?? '').trim().toUpperCase() === b.trim().toUpperCase();
+  for (const r of rs) {
+    const v = live.find((x) => x.id === r.id);
+    if (!v || !igual(v.title, r.talle) || !mismoSku(v.sku, r.sku)) return fallo(`El talle ${r.talle} (SKU ${r.sku || 'vacío'}) cambió desde que armaste la carga: no renombré nada.`);
+  }
+  const finales = live.map((x) => rs.find((r) => r.id === x.id)?.nuevo ?? x.title);
+  const repetido = finales.find((n, i) => finales.findIndex((m) => igual(m, n)) !== i);
+  if (repetido) return fallo(`Después de renombrar quedarían dos talles ${repetido}: no renombré nada.`);
+  const nombre = new Map(live.map((x) => [x.id, x.title]));
+  const libre = (n: string, id: string) => ![...nombre].some(([otro, t]) => otro !== id && igual(t, n));
+  let pendientes = rs.slice();
+  for (let vuelta = 0; pendientes.length; vuelta++) {
+    if (vuelta > rs.length * 2 + 2) return fallo('No pude ordenar los cambios de talle.');
+    let tanda = pendientes.filter((r) => libre(r.nuevo, r.id)).map((r) => ({ r, a: r.nuevo }));
+    if (!tanda.length) {
+      // Intercambio: uno pasa a un nombre provisorio y libera el suyo.
+      const r = pendientes[0];
+      let prov = `${nombre.get(r.id)} (cambiando)`;
+      while (!libre(prov, r.id)) prov += '*';
+      tanda = [{ r, a: prov }];
+    }
+    const texto = tanda.map(({ r, a }) => `${nombre.get(r.id)} → ${a}`).join(', ');
+    const variants = tanda.map(({ r, a }) => ({ id: r.id, optionValues: [{ optionName: opcion, name: a }] }));
+    let data: { productVariantsBulkUpdate?: { productVariants?: { id: string; title: string }[] | null; userErrors?: { message?: string }[] } } | null;
+    try { data = (await deps.gql(RENOMBRAR_TALLES, { productId: rep.productoId, variants })) as typeof data; }
+    catch (e) { return fallo(noSeEjecuto(e) ? `Shopify no renombró ${texto} (${motivo(e)}).` : `No sé si se renombró ${texto}: ${NO_SE_SABE}.`); }
+    const ue = data?.productVariantsBulkUpdate?.userErrors;
+    const vs = data?.productVariantsBulkUpdate?.productVariants;
+    if (Array.isArray(ue) && ue.length) return fallo(`Shopify no renombró ${texto}: ${errores(ue)}.`);
+    if (!Array.isArray(ue) || !Array.isArray(vs) || tanda.some(({ r, a }) => !vs.some((x) => x.id === r.id && igual(String(x.title ?? ''), a)))) {
+      return fallo(`No sé si se renombró ${texto}: ${NO_SE_SABE}.`);
+    }
+    for (const { r, a } of tanda) { nombre.set(r.id, a); hechos.set(r.id, `${r.talle} → ${a}`); }
+    pendientes = pendientes.filter((r) => !igual(nombre.get(r.id) ?? '', r.nuevo));
+  }
+  // Que queden en su lugar (43, 44, 45…). Si no se puede, igual quedaron renombrados.
+  let orden = '';
+  const valores = ordenarTalles([...nombre.values()]);
+  if (valores) {
+    try {
+      const r = (await deps.gql(ORDENAR_TALLES, { productId: rep.productoId, options: [{ name: opcion, values: valores.map((name) => ({ name })) }] })) as { productOptionsReorder?: { userErrors?: unknown[] } } | null;
+      if (!r?.productOptionsReorder || r.productOptionsReorder.userErrors?.length) orden = ' (no pude ordenar los talles)';
+    } catch { orden = ' (no pude ordenar los talles)'; }
+  }
+  return { ok: true, mensaje: `Talles renombrados (mismo SKU y stock): ${[...hechos.values()].join(', ')}.${orden}` };
+}
+
 /** Distrinando: agrega las etiquetas (y saca las de otra tabla). ok:false = no se pudieron agregar. */
 async function etiquetasDistrinando(rep: ReposicionFamily, deps: DepsCarga): Promise<{ ok: boolean; mensaje: string }> {
   if (!rep.etiquetas?.length) return { ok: true, mensaje: '' };
@@ -875,11 +961,17 @@ export async function ejecutarCargaFamily(plan: PlanCarga, elecciones: Eleccione
     try {
       if (accion.tipo === 'alta') paso = await crearAlta(codigo, accion, plan, deps);
       else {
-        const previo = deps.antes ? await deps.antes(codigo, accion) : null;
-        if (previo && previo.estado !== 'ok') paso = { estado: previo.estado, mensaje: `${previo.mensaje} No se sumó el stock.`, productoId: accion.productoId, titulo: accion.titulo };
+        // Distrinando: primero los talles renombrados. Si no se pudo, no se toca precio ni stock.
+        const renombre = await renombrarTalles(accion, deps);
+        if (!renombre.ok) paso = { estado: 'error', mensaje: renombre.mensaje };
         else {
-          paso = await sumarStock(codigo, accion, plan, deps);
-          if (previo?.mensaje) paso = { ...paso, mensaje: `${previo.mensaje} ${paso.mensaje}`.trim() };
+          const previo = deps.antes ? await deps.antes(codigo, accion) : null;
+          if (previo && previo.estado !== 'ok') paso = { estado: previo.estado, mensaje: `${previo.mensaje} No se sumó el stock.`, productoId: accion.productoId, titulo: accion.titulo };
+          else {
+            paso = await sumarStock(codigo, accion, plan, deps);
+            if (previo?.mensaje) paso = { ...paso, mensaje: `${previo.mensaje} ${paso.mensaje}`.trim() };
+          }
+          if (renombre.mensaje) paso = { ...paso, mensaje: `${renombre.mensaje} ${paso.mensaje}`.trim() };
         }
       }
     }
@@ -1022,6 +1114,7 @@ export function resumenCarga(plan: PlanCarga, elecciones: EleccionesCarga): { al
         a.costos.length ? `costo ${fmt(a.costoNuevo)} en ${a.costos.map((c) => c.talle).join(', ')}` : '',
         a.ponderados.length ? `costo promedio en ${a.ponderados.map((c) => `${c.talle} ${fmt(c.costo)}`).join(', ')}` : '',
       ].filter(Boolean) : [];
+      if (accion.renombrar?.length) extra.unshift(`renombrar talle ${accion.renombrar.map((r) => `${r.talle} → ${r.nuevo}`).join(', ')} (mismo SKU y stock)`);
       if (accion.crear?.length) extra.push(`crear talle ${accion.crear.map((c) => `${c.talle} (${c.suma} u.)`).join(', ')}`);
       if (accion.etiquetas?.length) extra.push(`etiquetas ${accion.etiquetas.join(', ')}${accion.quitarEtiquetas?.length ? ` (saco ${accion.quitarEtiquetas.join(', ')})` : ''}`);
       if (accion.separar?.length && accion.separarAplicado) extra.push(`separar para órdenes de iD ${textoSeparar(accion.separar)} (no se suman)`);

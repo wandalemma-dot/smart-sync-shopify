@@ -13,7 +13,9 @@
 //   · Precio: regla de Reebok (Mayorista × 1,8755 al 999 más cercano). Costo: el de la factura
 //     (lista − bonificación), con promedio ponderado si el talle ya tenía stock en Martínez.
 //     Mismo control de margen que iD (menos de 50% obliga a poner precio a toda la curva).
-//   · El SKU de lo que ya existe no se toca. Talles que faltan: se crean con el SKU del proveedor,
+//   · El SKU de lo que ya existe no se toca. Talle escrito a mano: la variante con el SKU del proveedor de
+//     ese US se renombra a ese talle (mismo SKU y stock); con la tabla elegida, también los otros talles con
+//     SKU del proveedor (talleFinal). Talles que faltan: se crean con el SKU del proveedor,
 //     el precio de la curva y el costo de la factura. Productos que no existen: se crean (gax:
 //     «para todos los productos nuevos está bien»), con la tabla elegida en el desplegable.
 //   · Solo Reebok calzado por ahora. Kappa, Crocs y ropa: a mano.
@@ -22,11 +24,11 @@
 import { claveCodigo, type FilaChecklist, type LineaPedido, type Pedido, type ResultadoFactura } from './controlFacturas';
 import { textoCarga, type AltaFamily, type CargaFamily, type ItemCarga, type LineaReposicion, type OpcionCarga, type PlanCarga, type ReposicionFamily, type TablaItem } from './cargaFamily';
 import { ajusteDe, etiquetaDelCodigo, formasCodigo, SUCURSAL_CARGA_ID, type EstadoCargaId, type ProductoId } from './cargaId';
-import { precioReebokCalzado, REEBOK_TABLAS, tituloReebokCalzado } from './reebokCalzado';
+import { coincideUS, precioReebokCalzado, REEBOK_TABLAS, tituloReebokCalzado } from './reebokCalzado';
 import { niceTitle, redondear2 } from './syncLogic';
 import {
-  arDeNotas, curvaPack, esTalleUS, etiquetasDeTabla, etiquetaTabla, mismoTalle, paresConocidos, skuProveedor, tablaDeEtiquetas, tablaReebok,
-  tablasDelModelo, talleUS, ubicarTalleDistrinando, usDelSku, type VarianteTalle,
+  arDeNotas, curvaPack, esTalleUS, etiquetasDeTabla, etiquetaTabla, mismoTalle, skuProveedor, tablaDeEtiquetas, tablaReebok,
+  TABLAS_REEBOK, talleUS, ubicarTalleDistrinando, usDelSku, type TablaTalle, type VarianteTalle,
 } from './talleDistrinando';
 
 export const VENDOR_REEBOK = 'Reebok';
@@ -70,37 +72,76 @@ export type DestinosDis = ReadonlyMap<string, Readonly<Record<string, string>>>;
 /** Un talle de calzado de Shopify escrito a mano: «44», «38.5», «38,5». */
 export const leerDestino = (s: string) => { const t = String(s ?? '').trim().replace(',', '.'); return /^\d{2}(\.5)?$/.test(t) && Number(t) >= 15 && Number(t) <= 55 ? String(Number(t)) : null; };
 
+/** Un talle de Shopify que se renombra: la misma variante (SKU, stock, precio y costo) con el talle correcto. */
+interface Renombre { id: string; talle: string; nuevo: string; sku: string; /** mano: el talle escrito; tabla: la tabla elegida. */ por: 'mano' | 'tabla'; us: string }
+const esNumeroTalle = (t: string) => /^\d+(\.\d+)?$/.test(String(t ?? '').trim().replace(',', '.'));
+const numTalle = (t: string) => String(Number(String(t).trim().replace(',', '.')));
+
 /**
- * El SKU que pasa a llevar un talle elegido a mano que hoy tiene el SKU del proveedor de OTRO US
- * (13-nov-2026, gax: el 44 tenía «-11» y en realidad es el US 12): el del US que entra ahí. null = no cambia.
+ * Cómo quedan los talles del producto (13-nov-2026, gax: «el SKU manténelo, pero el talle que está en Shopify hoy lo
+ * convertís al talle que yo te voy a escribir»). La variante con el SKU del proveedor de un US pasa a llamarse como el
+ * talle escrito a mano para ese US y, con una tabla elegida, las demás variantes con SKU del proveedor pasan al talle
+ * de la tabla. Nunca se pisa un talle que queda: si el escrito ya lo tiene otra variante que no se mueve, ese US suma
+ * ahí (como antes) y su talle no cambia. `problemas` bloquean el artículo; `choques`, la tabla.
  */
-function skuCorregido(codigo: string, l: Llega, v: VarianteTalle | undefined, variantes: VarianteTalle[], todos: Llega[]): string | null {
-  if (!l.destino || !v) return null;
-  const otro = usDelSku(v.sku ?? '', codigo);
-  if (!otro || otro === talleUS(l.us)) return null;
-  const sku = skuProveedor(codigo, l.us);
-  // Si otro talle ya tiene ese SKU (y no recibe otro US en esta carga), no se adivina: queda el aviso.
-  const tiene = variantes.find((x) => x !== v && norm(x.sku) === sku);
-  if (tiene && !todos.some((o) => o !== l && o.cantidad > 0 && o.destino && mismoTalle(o.destino, tiene.talle))) return null;
-  return sku;
+function talleFinal(codigo: string, variantes: VarianteTalle[], llegan: Llega[], tabla: TablaTalle | null):
+  { renombrar: Renombre[]; problemas: string[]; choques: string[]; final: (v: VarianteTalle) => string } {
+  const delProveedor = new Map<string, VarianteTalle[]>();
+  for (const v of variantes) {
+    const us = usDelSku(v.sku ?? '', codigo);
+    if (us) delProveedor.set(us, [...(delProveedor.get(us) ?? []), v]);
+  }
+  const problemas: string[] = [], choques: string[] = [];
+  const movs = new Map<string, { nuevo: string; por: 'mano' | 'tabla'; us: string }>();
+  const escritos = llegan.filter((l) => l.destino);
+  for (const l of escritos) {
+    const vs = delProveedor.get(talleUS(l.us)) ?? [];
+    if (vs.length > 1) problemas.push(`US ${l.us}: hay dos talles con el SKU ${skuProveedor(codigo, l.us)}`);
+    else if (vs.length === 1 && !mismoTalle(vs[0].talle, l.destino!)) movs.set(vs[0].id, { nuevo: l.destino!, por: 'mano', us: talleUS(l.us) });
+  }
+  if (tabla) for (const [us, vs] of delProveedor) {
+    if (vs.length !== 1 || !esNumeroTalle(vs[0].talle) || escritos.some((l) => talleUS(l.us) === us)) continue;
+    const ar = tabla.ar(us);
+    if (ar && !mismoTalle(vs[0].talle, ar)) movs.set(vs[0].id, { nuevo: ar, por: 'tabla', us });
+  }
+  const final = (v: VarianteTalle) => movs.get(v.id)?.nuevo ?? v.talle;
+  const quien = (w: VarianteTalle) => (w.sku ? `el SKU ${w.sku}` : 'un talle sin SKU');
+  // Dos talles no pueden quedar con el mismo nombre: se deshace el cambio que choca, hasta que no quede ninguno.
+  for (let seguir = true; seguir;) {
+    seguir = false;
+    for (const [id, m] of movs) {
+      const otro = variantes.find((w) => w.id !== id && mismoTalle(final(w), m.nuevo));
+      if (!otro) continue;
+      const om = movs.get(otro.id);
+      if (m.por === 'tabla') { choques.push(`el US ${m.us} iría al ${m.nuevo}, que ya lo tiene ${quien(otro)}`); movs.delete(id); }
+      else if (om?.por === 'tabla') { choques.push(`el US ${om.us} iría al ${m.nuevo}, el talle que escribiste para el US ${m.us}`); movs.delete(otro.id); }
+      else {
+        if (om) problemas.push(`el US ${m.us} y el US ${om.us} van al talle ${m.nuevo}`);
+        // Si no, el talle escrito lo tiene otra variante que queda: ese US suma ahí (se avisa al ubicarlo).
+        movs.delete(id);
+      }
+      seguir = true;
+      break;
+    }
+  }
+  const renombrar = variantes.filter((v) => movs.has(v.id)).map((v) => ({ id: v.id, talle: v.talle, sku: v.sku ?? '', ...movs.get(v.id)! }));
+  return { renombrar, problemas, choques, final };
 }
 
-/** Dónde entra un US: lo escrito a mano manda; si no, SKU del proveedor, nota y tabla. `todos`: los US de esta carga. */
-function ubicar(codigo: string, l: Llega, variantes: VarianteTalle[], pedidos: Pedido[], tabla: ReturnType<typeof tablaReebok>, todos: Llega[] = []): ReturnType<typeof ubicarTalleDistrinando> {
+/** Dónde entra un US, con los talles ya renombrados: lo escrito a mano manda; si no, SKU del proveedor, nota y tabla. */
+function ubicar(codigo: string, l: Llega, variantes: VarianteTalle[], pedidos: Pedido[], tabla: TablaTalle | null): ReturnType<typeof ubicarTalleDistrinando> {
   if (!l.destino) return ubicarTalleDistrinando({ codigo, talle: l.us, variantes, pedidos, tabla });
   const sku = skuProveedor(codigo, l.us);
   const vs = variantes.filter((v) => mismoTalle(v.talle, l.destino!));
   if (vs.length > 1) return { error: `hay dos variantes del talle ${l.destino}` };
   if (!vs.length) {
     const conSku = variantes.find((v) => norm(v.sku) === sku);
-    // Si ese talle recibe otro US en esta misma carga, su SKU se corrige y este queda libre.
-    const seLibera = conSku && todos.some((o) => o !== l && o.cantidad > 0 && o.destino && mismoTalle(o.destino, conSku.talle) && talleUS(o.us) !== talleUS(l.us));
-    if (conSku && !seLibera) return { error: `el SKU ${sku} ya está en el talle ${conSku.talle}: para pasarlo al ${l.destino} corregí ese talle en Shopify (o escribí en el ${conSku.talle} el US que entra ahí)` };
+    if (conSku) return { error: `el SKU ${sku} quedó en el talle ${conSku.talle}` };
     return { error: `no existe el talle ${l.destino}`, falta: { talle: l.destino, skuProveedor: sku, fuente: 'manual' } };
   }
+  // Su propia variante (la del SKU del proveedor, ya renombrada): sin aviso; el cambio de talle se ve en la lista.
   const otro = usDelSku(vs[0].sku ?? '', codigo);
-  const corrige = skuCorregido(codigo, l, vs[0], variantes, todos);
-  const avisos = [`US ${l.us} → talle ${vs[0].talle}: lo elegiste a mano${corrige && !l.sku ? ` (tenía el SKU del US ${otro}: pasa a ${corrige})` : otro && otro !== talleUS(l.us) && !l.sku ? ` (ojo: ese talle tiene el SKU del US ${otro})` : ''}.`];
+  const avisos = otro === talleUS(l.us) ? [] : [`US ${l.us} → talle ${vs[0].talle}: lo elegiste a mano${otro ? ` (ojo: ese talle tiene el SKU del US ${otro})` : ''}.`];
   return { varianteId: vs[0].id, talle: vs[0].talle, fuente: 'manual', skuProveedor: sku, avisos };
 }
 
@@ -146,73 +187,117 @@ function tallesQueLlegan(c: FilaChecklist, notas: LineaPedido[], pares: number, 
 const esReebok = (vendor: string) => /REEBOK/i.test(vendor);
 const NO_CARGAR: OpcionCarga = { clave: 'no', etiqueta: 'No cargar este artículo', accion: null, avisos: [] };
 
-/** Las opciones de tabla de talle del modelo y la que viene elegida. */
-function tablaDelItem(codigo: string, pedidos: Pedido[], productos: ProductoId[], llegan: Llega[], elegida: string | undefined): { tabla: TablaItem; avisos: string[] } {
+/**
+ * Las opciones de tabla de talle del modelo y la que viene elegida. Una tabla no se puede elegir si contradice lo que
+ * manda (lo escrito a mano y el AR de la nota de lo que llega sin SKU del proveedor en Shopify), si le falta un US o si
+ * pisaría un talle que queda. Los talles con SKU del proveedor que no la siguen se corrigen al elegirla (talleFinal).
+ */
+function tablaDelItem(codigo: string, pedidos: Pedido[], productos: ProductoId[], llegan: Llega[], elegida: string | undefined): TablaItem {
   const variantes: VarianteTalle[] = productos.flatMap((p) => p.variantes);
-  // El talle escrito a mano manda sobre la nota y los SKU para ese US (13-nov-2026, gax: «yo le pongo el
-  // 44 y ahí sí coincide con la tabla 2, pero no lo toma»): es donde realmente entra.
-  const aMano = llegan.filter((l) => l.destino && /^\d+(\.\d+)?$/.test(l.destino.replace(',', '.')));
-  const mismoUS = (a: string, b: string) => Number(a) === Number(b);
-  const pares = [
-    ...paresConocidos(codigo, pedidos, variantes).filter((p) => !aMano.some((l) => mismoUS(l.us, p.us))),
-    ...aMano.map((l) => ({ us: l.us, ar: String(Number(l.destino!.replace(',', '.'))), de: 'el talle que escribiste a mano' })),
+  const conSku = (us: string) => variantes.some((v) => norm(v.sku) === skuProveedor(codigo, us));
+  const notaDe = (l: Llega) => arDeNotas(pedidos, skuProveedor(codigo, l.us), l.us).ar;
+  const escritos = llegan.filter((l) => l.destino);
+  // El talle escrito a mano manda (13-nov-2026, gax: «yo le pongo el 44 y ahí sí coincide con la tabla 2»): es donde
+  // realmente entra. Lo que llega sin SKU del proveedor en Shopify va al AR de la nota.
+  const firmes = [
+    ...escritos.map((l) => ({ us: talleUS(l.us), ar: numTalle(l.destino!), de: 'el talle que escribiste a mano' })),
+    ...llegan.filter((l) => !l.destino && !conSku(l.us)).flatMap((l) => {
+      const ar = notaDe(l);
+      return ar ? [{ us: talleUS(l.us), ar: numTalle(ar), de: 'la nota del proveedor' }] : [];
+    }),
   ];
   // Talles que solo se ubican con la tabla: sin SKU del proveedor en Shopify y sin AR en la nota.
-  const necesarios = llegan.filter((l) => !l.destino && !variantes.some((v) => norm(v.sku) === skuProveedor(codigo, l.us)) && !arDeNotas(pedidos, skuProveedor(codigo, l.us), l.us).ar).map((l) => l.us);
-  const posibles = tablasDelModelo(pares, necesarios);
-  const actuales = productos.map((p) => tablaDeEtiquetas(p.etiquetas));
-  const actual = productos.length === 1 ? actuales[0] : null;
-  const avisos: string[] = [];
-  const ok = (n: string) => posibles.some((x) => x.nombre === n && !x.bloqueo);
-  // Viene elegida solo la que ya tiene el producto: una tabla nueva la elige la usuaria (gax).
-  const porDefecto = actual && ok(actual) ? actual : '';
+  const necesarios = llegan.filter((l) => !l.destino && !conSku(l.us) && !notaDe(l)).map((l) => l.us);
+  // Los talles con SKU del proveedor que ya están en Shopify (los escritos a mano ya mandan).
+  const enShopify = variantes.flatMap((v) => {
+    const us = usDelSku(v.sku ?? '', codigo);
+    return us && esNumeroTalle(v.talle) && !escritos.some((l) => talleUS(l.us) === us) ? [{ us, ar: numTalle(v.talle) }] : [];
+  });
+  const evaluadas = TABLAS_REEBOK.map((nombre): { nombre: string; bloqueo?: string; corrige: number; motivo?: string } => {
+    const t = tablaReebok(nombre)!;
+    const choque = firmes.find((x) => !coincideUS(nombre, x.ar, x.us));
+    if (choque) {
+      const dice = t.ar(choque.us);
+      return { nombre, corrige: 0, bloqueo: `no coincide con ${choque.de}: US ${choque.us} = ${choque.ar}${dice ? `, la tabla dice ${dice}` : `, la tabla no tiene el US ${choque.us}`}` };
+    }
+    const sin = [...new Set([...necesarios, ...enShopify.map((x) => x.us)].filter((us) => !t.ar(us)))];
+    if (sin.length) return { nombre, corrige: 0, bloqueo: `no tiene el US ${sin.join(', ')}` };
+    let corrige = 0;
+    for (const p of productos) {
+      const m = talleFinal(codigo, p.variantes, llegan, t);
+      if (m.choques.length) return { nombre, corrige: 0, bloqueo: m.choques[0] };
+      corrige += m.renombrar.filter((r) => r.por === 'tabla').length;
+    }
+    const distinto = enShopify.find((x) => !coincideUS(nombre, x.ar, x.us));
+    return { nombre, corrige, ...(distinto ? { motivo: `no coincide con Shopify: US ${distinto.us} = ${distinto.ar}, la tabla dice ${t.ar(distinto.us)}` } : {}) };
+  });
+  const ev = (n: string) => evaluadas.find((x) => x.nombre === n);
+  const ok = (n: string) => !!ev(n) && !ev(n)!.bloqueo;
+  const actual = productos.length === 1 ? tablaDeEtiquetas(productos[0].etiquetas) : null;
+  const sirven = evaluadas.filter((x) => !x.bloqueo);
+  // Con talles escritos a mano y una sola tabla que coincide, esa viene elegida (gax: «me la tiene que recomendar»).
+  const recomendada = escritos.length && sirven.length === 1 ? sirven[0].nombre : null;
+  // Si no, la que ya tiene el producto, solo si sus talles ya la siguen (elegirla no renombra nada). Una tabla que
+  // corrige talles la elige la usuaria.
+  const porDefecto = recomendada ?? (actual && ok(actual) && !ev(actual)!.corrige ? actual : '');
   const valida = elegida !== undefined && (elegida === '' || ok(elegida));
   const final = valida ? elegida! : porDefecto;
-  if (actual && !ok(actual)) {
-    const motivo = posibles.find((x) => x.nombre === actual)?.bloqueo ?? '';
-    avisos.push(`La etiqueta dice TABLA DE TALLE REEBOK ${actual}, pero sus talles no siguen esa tabla (${motivo}). No la cambio: revisá qué tabla ve el cliente en la web.`);
+  const avisos: string[] = [];
+  if (recomendada && final === recomendada && recomendada !== actual) {
+    avisos.push(`Con los talles que escribiste coincide solo la TABLA DE TALLE REEBOK ${recomendada}: viene elegida y se la agrego al cargar. Si no es la correcta, cambiala.`);
   }
-  if (productos.length === 1 && !actual) {
+  if (actual && final === '' && !(ok(actual) && !ev(actual)!.corrige)) {
+    const e = ev(actual);
+    avisos.push(e?.bloqueo || !e
+      ? `La etiqueta dice TABLA DE TALLE REEBOK ${actual}, pero sus talles no siguen esa tabla (${e?.bloqueo ?? ''}). No la cambio: revisá qué tabla ve el cliente en la web.`
+      : `La etiqueta dice TABLA DE TALLE REEBOK ${actual}, pero sus talles no siguen esa tabla (${e.motivo}). No cambio nada solo: si esa tabla es la correcta, elegila abajo y se corrige${e.corrige > 1 ? 'n' : ''} ${e.corrige} talle${e.corrige > 1 ? 's' : ''}; si no, revisá qué tabla ve el cliente en la web.`);
+  }
+  if (productos.length === 1 && !actual && final === '') {
     const tiene = etiquetasDeTabla(productos[0].etiquetas);
-    avisos.push(`Este producto no tiene tabla de talle${tiene.length ? ` con nombre (tiene ${tiene.join(', ')})` : ''}${posibles.some((x) => !x.bloqueo) ? ': elegí una abajo y se la agrego al cargar.' : `, y ninguna de las tablas coincide con los AR que informa el proveedor (${posibles.map((x) => `${x.nombre}: ${x.bloqueo}`).join(' · ')}). Los talles van por el SKU y la nota.`}`);
+    avisos.push(`Este producto no tiene tabla de talle${tiene.length ? ` con nombre (tiene ${tiene.join(', ')})` : ''}${sirven.length ? ': elegí una abajo y se la agrego al cargar.' : `, y ninguna de las tablas coincide (${evaluadas.map((x) => `${x.nombre}: ${x.bloqueo}`).join(' · ')}). Los talles van por el SKU y la nota.`}`);
   }
   const opciones = [
     { clave: '', etiqueta: necesarios.length ? 'Elegí la tabla de talle…' : actual ? `Dejar la que tiene (${actual})` : 'Sin tabla (los talles van por el SKU y la nota)' },
-    ...posibles.map((x) => ({ clave: x.nombre, etiqueta: `TABLA DE TALLE REEBOK ${x.nombre}`, ...(x.bloqueo ? { bloqueo: x.bloqueo } : {}) })),
+    ...evaluadas.map((x) => ({
+      clave: x.nombre,
+      etiqueta: `TABLA DE TALLE REEBOK ${x.nombre}${x.nombre === recomendada ? ' (recomendada)' : ''}${!x.bloqueo && x.corrige ? ` (corrige ${x.corrige} talle${x.corrige > 1 ? 's' : ''})` : ''}`,
+      ...(x.bloqueo ? { bloqueo: x.bloqueo } : {}),
+    })),
   ];
-  return { tabla: { elegida: final, opciones, actual, hace: necesarios.length > 0, avisos }, avisos };
+  return { elegida: final, opciones, actual, hace: necesarios.length > 0, avisos, ...(recomendada ? { recomendada } : {}) };
 }
 
-/** Sumar lo que llegó en un producto que ya existe (crea los talles que faltan). */
+/** Sumar lo que llegó en un producto que ya existe: renombra los talles corridos y crea los que faltan. */
 function opcionReposicion(codigo: string, p: ProductoId | undefined, llegan: Llega[], pedidos: Pedido[], tabla: string, lista: number, bonif: number, ren: Parameters<typeof ajusteDe>[1] | undefined): OpcionCarga {
   if (!p) return { clave: 'falta', etiqueta: 'Producto que no pude leer', accion: null, bloqueo: 'No pude leer ese producto en Shopify.', avisos: [] };
   const avisos: string[] = [];
   const base = { clave: `repo:${p.id}`, etiqueta: `Sumar el stock en «${p.titulo}»`, avisos };
   if (!esReebok(p.vendor)) return { ...base, accion: null, bloqueo: `«${p.titulo}» es de ${p.vendor || 'otra marca'}: por ahora la carga de Distrinando es solo Reebok. Cargalo a mano.` };
   const t = tabla ? tablaReebok(tabla) : null;
+  // Los talles como quedan después de renombrar (el talle escrito a mano y, con tabla, los demás con SKU del proveedor).
+  const mov = talleFinal(codigo, p.variantes, llegan, t);
+  const finales = p.variantes.map((v) => ({ ...v, talle: mov.final(v) }));
   const lineas: LineaReposicion[] = [];
   const crear: NonNullable<ReposicionFamily['crear']> = [];
   const cambiarSku: NonNullable<ReposicionFamily['cambiarSku']> = [];
-  const problemas: string[] = [];
-  // SKU que cambia en esta carga (escaneado a mano, o corregido porque el talle recibe otro US).
+  const problemas: string[] = [...mov.problemas, ...mov.choques];
+  if (mov.renombrar.length && (p.opciones?.length ?? 1) !== 1) problemas.push('hay que renombrar talles y el producto tiene más de una opción: hacelo a mano');
+  const ubicados = llegan.filter((l) => l.cantidad > 0).map((l) => ({ l, u: ubicar(codigo, l, finales, pedidos, t) }));
+  // SKU escaneado a mano (13-nov-2026, gax): el talle que lo recibe deja el suyo.
   const nuevoSku = new Map<string, string>();
-  for (const l of llegan) {
-    if (!(l.cantidad > 0) || !l.destino) continue;
-    const v = p.variantes.filter((x) => mismoTalle(x.talle, l.destino!));
-    if (v.length !== 1) continue;
-    const s = l.sku ?? skuCorregido(codigo, l, v[0], p.variantes, llegan);
-    if (s && norm(s) !== norm(v[0].sku)) nuevoSku.set(v[0].id, s);
+  for (const { l, u } of ubicados) {
+    if ('error' in u || !l.sku) continue;
+    const v = finales.find((x) => x.id === u.varianteId);
+    if (v && norm(l.sku) !== norm(v.sku)) nuevoSku.set(v.id, l.sku);
   }
   const skuDe = (x: VarianteTalle & { id: string }) => nuevoSku.get(x.id) ?? x.sku;
   // SKU escaneado a mano: no puede estar en otro talle del producto ni repetido en esta carga.
   const skuOcupado = (sku: string, salvo?: string) => {
-    const v = p.variantes.find((x) => x.id !== salvo && norm(skuDe(x)) === norm(sku));
+    const v = finales.find((x) => x.id !== salvo && norm(skuDe(x)) === norm(sku));
     if (v) return `el SKU ${sku} ya lo tiene el talle ${v.talle}`;
     return llegan.filter((x) => x.cantidad > 0 && x.sku && norm(x.sku) === norm(sku)).length > 1 ? `el SKU ${sku} está escrito en dos talles` : '';
   };
-  for (const l of llegan) {
-    if (!(l.cantidad > 0)) continue;
-    const u = ubicar(codigo, l, p.variantes, pedidos, t, llegan);
+  for (const { l, u } of ubicados) {
     if ('error' in u) {
       if (!u.falta) { problemas.push(`US ${l.us}: ${u.error}`); continue; }
       if (crear.some((c) => mismoTalle(c.talle, u.falta!.talle))) { problemas.push(`US ${l.us}: dos US van al talle ${u.falta.talle}`); continue; }
@@ -222,12 +307,11 @@ function opcionReposicion(codigo: string, p: ProductoId | undefined, llegan: Lle
       continue;
     }
     avisos.push(...u.avisos);
-    const v = p.variantes.find((x) => x.id === u.varianteId)!;
-    const skuNuevo = l.sku ?? skuCorregido(codigo, l, v, p.variantes, llegan);
-    if (skuNuevo && norm(skuNuevo) !== norm(v.sku)) {
-      const o = skuOcupado(skuNuevo, v.id);
+    const v = finales.find((x) => x.id === u.varianteId)!;
+    if (l.sku && norm(l.sku) !== norm(v.sku)) {
+      const o = skuOcupado(l.sku, v.id);
       if (o) { problemas.push(`US ${l.us}: ${o}`); continue; }
-      cambiarSku.push({ id: v.id, talle: v.talle, antes: v.sku ?? '', sku: skuNuevo, ...(esEan(skuNuevo) ? { barcode: skuNuevo } : {}) });
+      cambiarSku.push({ id: v.id, talle: v.talle, antes: v.sku ?? '', sku: l.sku, ...(esEan(l.sku) ? { barcode: l.sku } : {}) });
     }
     if (!v.seguimiento || !v.inventoryItemId) { problemas.push(`el talle ${v.talle} no lleva control de stock`); continue; }
     const ya = lineas.find((x) => x.inventoryItemId === v.inventoryItemId);
@@ -238,7 +322,8 @@ function opcionReposicion(codigo: string, p: ProductoId | undefined, llegan: Lle
   if (crear.length && p.variantes.length + crear.length > 100) problemas.push('el producto llegaría a más de 100 talles');
   if (problemas.length) return { ...base, accion: null, bloqueo: `En «${p.titulo}»: ${problemas.join('; ')}. Corregilo en Shopify (o el remito) y armá la carga de nuevo.` };
   if (!lineas.length && !crear.length) return { ...base, accion: null, bloqueo: 'No hay unidades para cargar.' };
-  const ajuste = ren && lista > 0 ? ajusteDe(p, ren, lineas, { sugerido: precioReebokCalzado(lista), basico: false }) : null;
+  // El precio y el costo van por variante; los talles se nombran como quedan.
+  const ajuste = ren && lista > 0 ? ajusteDe({ ...p, variantes: finales }, ren, lineas, { sugerido: precioReebokCalzado(lista), basico: false }) : null;
   if (crear.length && !ajuste) return { ...base, accion: null, bloqueo: 'La factura no trae el precio de lista: no puedo poner precio ni costo a los talles nuevos. Cargalo a mano.' };
   if (!ajuste) avisos.push('La factura no trae el precio de lista de este artículo: no reviso el margen ni el costo.');
   else for (const c of ajuste.conservan) if (c.motivo) avisos.push(`Talle ${c.talle}: ya tenía ${c.stock} en Martínez y ${c.motivo}. Conserva su costo: revisalo a mano.`);
@@ -256,9 +341,11 @@ function opcionReposicion(codigo: string, p: ProductoId | undefined, llegan: Lle
     quitar.push(...etiquetasDeTabla(p.etiquetas));
   }
   for (const c of crear) if (!p.etiquetas.some((x) => norm(x) === norm(c.sku))) etiquetas.push(c.sku);
+  const renombrar = mov.renombrar.map(({ id, talle, nuevo, sku }) => ({ id, talle, nuevo, sku }));
   return {
     ...base, accion: {
       tipo: 'reposicion', productoId: p.id, titulo: p.titulo, lineas, etiquetar: false, ...(ajuste ? { ajuste } : {}),
+      ...(renombrar.length ? { renombrar } : {}),
       ...(crear.length ? { crear } : {}), ...(cambiarSku.length ? { cambiarSku } : {}), ...(etiquetas.length ? { etiquetas } : {}), ...(quitar.length ? { quitarEtiquetas: quitar } : {}),
     },
   };
@@ -355,20 +442,25 @@ export function planCargaDistrinando(r: ResultadoFactura, estado: EstadoCargaId,
     if (!formasCodigo(c.codigo).length) return { ...base, estado: 'bloqueado', motivo: 'El código tiene caracteres que no puedo buscar en Shopify: cargalo a mano.', opciones: [] };
     const ids = estado.porCodigo[c.codigo.toUpperCase()] ?? [];
     const productos = ids.map((id) => estado.productos[id]).filter(Boolean);
-    const { tabla } = tablaDelItem(c.codigo, pedidos, productos, llegan, tablas.get(c.codigo));
-    // En qué talle de Shopify entra cada US (del primer producto; si no existe, el que se crearía).
+    const tabla = tablaDelItem(c.codigo, pedidos, productos, llegan, tablas.get(c.codigo));
+    // En qué talle de Shopify entra cada US (del primer producto, con los talles ya renombrados; si no existe, el que se crearía).
     const tElegida = tabla.elegida ? tablaReebok(tabla.elegida) : null;
+    const mov0 = productos[0] ? talleFinal(c.codigo, productos[0].variantes, llegan, tElegida) : null;
+    const finales0 = productos[0] && mov0 ? productos[0].variantes.map((v) => ({ ...v, talle: mov0.final(v) })) : [];
     const talles = llegan.map((l) => {
-      const u = ubicar(c.codigo, l, productos[0]?.variantes ?? [], pedidos, tElegida, llegan);
+      const u = ubicar(c.codigo, l, finales0, pedidos, tElegida);
       const destino = 'error' in u ? u.falta?.talle ?? '' : u.talle;
       // SKU que tiene hoy ese talle en Shopify (gax: «para escanearlo o saber qué SKU tiene»); si se crea, el que va a llevar.
-      const vDestino = 'error' in u ? (destino ? productos[0]?.variantes.find((v) => mismoTalle(v.talle, destino)) : undefined) : productos[0]?.variantes.find((v) => v.id === u.varianteId);
-      const auto = 'error' in u && u.falta ? u.falta.skuProveedor : vDestino ? skuCorregido(c.codigo, l, vDestino, productos[0]?.variantes ?? [], llegan) ?? vDestino.sku ?? '' : undefined;
+      const vDestino = 'error' in u ? undefined : finales0.find((v) => v.id === u.varianteId);
+      const auto = 'error' in u ? u.falta?.skuProveedor : vDestino?.sku ?? '';
       const sku = auto !== undefined && l.sku ? l.sku : auto;
+      // El talle que tiene hoy, si se renombra (gax: «el SKU manténelo… ponerle el talle correcto»).
+      const renombra = vDestino ? mov0?.renombrar.find((r) => r.id === vDestino.id)?.talle : undefined;
       return {
         talle: etiquetaUS(l.us), cantidad: l.cantidad, original: l.original, destino, ...(sku !== undefined ? { sku } : {}),
         ...(l.destino ? { destinoManual: true } : {}), ...('error' in u && u.falta ? { nuevo: true } : {}),
         ...(auto !== undefined && l.sku && norm(l.sku) !== norm(auto) ? { skuManual: true } : {}),
+        ...(renombra ? { renombra } : {}),
       };
     });
     const lista = Number(ren?.precioUnitario) || 0, bonif = Number(ren?.bonificacion) || 0;
