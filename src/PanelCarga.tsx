@@ -8,10 +8,10 @@
 // ============================================================================
 import { useState, type CSSProperties } from 'react';
 import { fmt } from './utils/controlFacturas';
-import { leerPrecio, precioAEscribir, resumenCarga, textoSeparar, type AjustePrecio, type EleccionesCarga, type ItemCarga, type ModoVenta, type OpcionCarga, type PlanCarga, type TablaItem, type ReposicionFamily, type AltaFamily } from './utils/cargaFamily';
+import { leerPrecio, precioAEscribir, resumenCarga, textoSeparar, type AjustePrecio, type EleccionesCarga, type ItemCarga, type ModoVenta, type OpcionCarga, type PackCarga, type PlanCarga, type TablaItem, type ReposicionFamily, type AltaFamily } from './utils/cargaFamily';
 import { margenPct } from './utils/margen';
 import { ordenesQueSalen, type OrdenQueSale } from './utils/cargaId';
-import { botonChico, botonPrincipal, inputSt } from './utils/entregasUi';
+import { botonChico, botonPrincipal, enlace, inputSt } from './utils/entregasUi';
 import { esTalleUS, talleUS } from './utils/talleDistrinando';
 
 // Lo listo va en el color normal: solo resalta lo que necesita atención (12-nov-2026, gax: «hay mucho color»).
@@ -19,7 +19,7 @@ const COLOR_ITEM = { listo: 'inherit', elegir: '#fbbf24', bloqueado: '#f87171', 
 const VERDE = '#34d399', AMARILLO = '#fbbf24', ROJO = '#f87171', VIOLETA = '#a78bfa';
 type Eleccion = EleccionesCarga[string];
 
-export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, explicacion, onModoVenta, onCantidad, onTabla, onDestino, sinTildar, onSku, onQuitarTalle, onQuitar, onMailSolo }: {
+export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, explicacion, onModoVenta, onCantidad, onTabla, onDestino, sinTildar, onSku, onQuitarTalle, onQuitar, onMailSolo, onPack }: {
   plan: PlanCarga; ocupado: boolean; onConfirmar: (e: EleccionesCarga) => void; onCancelar: () => void;
   sucursal: string; explicacion: string;
   /** iD: lo vendido en iD se separa; «cargarlo igual» lo suma (si ya se separó antes); «pasar» lo suma y mueve la venta a Martínez. */
@@ -40,6 +40,8 @@ export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, e
   onQuitar?: (codigo: string, quitar: boolean) => void;
   /** Distrinando: armar el mail de lo que no llegó aunque no se cargue nada. */
   onMailSolo?: () => void;
+  /** iD (13-nov-2026, gax): unidades por pack escritas a mano (undefined = lo que detecta la app). */
+  onPack?: (codigo: string, n: number | undefined) => void;
 }) {
   const quitados = new Set(plan.quitados ?? []);
   const [elecciones, setElecciones] = useState<EleccionesCarga>(() =>
@@ -74,7 +76,8 @@ export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, e
           onModoVenta={onModoVenta && ((m) => onModoVenta(it.codigo, m))} onCantidad={onCantidad && ((t, n) => onCantidad(it.codigo, t, n))}
           onTabla={onTabla && ((t) => onTabla(it.codigo, t))} onDestino={onDestino && ((t, d) => onDestino(it.codigo, t, d))}
           onSku={onSku && ((t, k) => onSku(it.codigo, t, k))} onQuitarTalle={onQuitarTalle && ((t) => onQuitarTalle(it.codigo, t))}
-          onQuitar={onQuitar && it.estado !== 'cargado' ? () => onQuitar(it.codigo, true) : undefined} ocupado={ocupado} />)}
+          onQuitar={onQuitar && it.estado !== 'cargado' ? () => onQuitar(it.codigo, true) : undefined} ocupado={ocupado}
+          onPack={onPack && ((n) => onPack(it.codigo, n))} />)}
       <OrdenesQueSalen ordenes={ordenesQueSalen(plan, efectivas)} />
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
         <button style={{ ...botonPrincipal, opacity: res.lineas.length && !ocupado ? 1 : 0.5, cursor: res.lineas.length && !ocupado ? 'pointer' : 'not-allowed' }}
@@ -122,12 +125,13 @@ export function OrdenesQueSalen({ ordenes, titulo }: { ordenes: OrdenQueSale[]; 
 /** Con una sola cosa para hacer, una casilla deja dejarlo para otro día (lo que no llegó todavía). */
 const esCasilla = (it: ItemCarga) => it.estado === 'listo' && it.opciones.length === 1;
 
-function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, onTabla, onDestino, onSku, onQuitarTalle, onQuitar, ocupado, sinTildar }: {
+function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, onTabla, onDestino, onSku, onQuitarTalle, onQuitar, ocupado, sinTildar, onPack }: {
   it: ItemCarga; eleccion?: Eleccion; onElegir: (c: Partial<Eleccion>) => void; onModoVenta?: (m: ModoVenta) => void;
   onCantidad?: (talle: string, n: number) => void; onTabla?: (tabla: string) => void; onDestino?: (talle: string, destino: string) => void;
   onSku?: (talle: string, sku: string) => void; onQuitarTalle?: (talle: string) => void; onQuitar?: () => void;
-  ocupado: boolean; sinTildar?: boolean;
+  ocupado: boolean; sinTildar?: boolean; onPack?: (n: number | undefined) => void;
 }) {
+  const [packAbierto, setPackAbierto] = useState(false);
   const op = it.opciones.find((o) => o.clave === (eleccion?.clave ?? it.opciones[0]?.clave));
   const a = op?.accion;
   const casilla = esCasilla(it);
@@ -154,12 +158,17 @@ function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, onTabla, o
       {/* Todo lo del artículo va con sangría: la casilla queda sola a la izquierda (13-nov-2026, gax). */}
       <div style={{ paddingLeft: casilla ? 28 : 0 }}>
       {onCantidad && onDestino && it.talles?.length ? <TallesFilas it={it} a={a} ocupado={ocupado} onCantidad={onCantidad} onDestino={onDestino} onSku={onSku} onQuitarTalle={onQuitarTalle} /> : null}
-      {onCantidad && !onDestino && it.talles?.length ? <div style={{ marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-        <span style={{ opacity: 0.8 }}>Llegó para cargar:</span>
-        {it.talles.map((t) => <span key={t.talle} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
-          <CantidadTalle talle={t.talle} cantidad={t.cantidad} original={t.original} disabled={ocupado} onCambio={(n) => onCantidad(t.talle, n)} />
-        </span>)}
-      </div> : null}
+      {onCantidad && !onDestino && it.talles?.length ? <>
+        {onPack && (it.pack || packAbierto) ? <PackFila pack={it.pack} disabled={ocupado} onCambio={onPack} /> : null}
+        <div style={{ marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+          <span style={{ opacity: 0.8 }}>Llegó para cargar{it.pack && it.pack.unidades > 1 ? ' (en unidades)' : ''}:</span>
+          {it.talles.map((t) => <span key={t.talle} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
+            <CantidadTalle talle={t.talle} cantidad={t.cantidad} original={t.original} disabled={ocupado} onCambio={(n) => onCantidad(t.talle, n)} />
+          </span>)}
+          {onPack && !it.pack && !packAbierto && <button style={{ ...enlace, fontSize: '0.8rem', opacity: 0.85 }} disabled={ocupado}
+            title="Si la factura cobra un pack con varias unidades, escribí cuántas trae" onClick={() => setPackAbierto(true)}>¿Viene en pack?</button>}
+        </div>
+      </> : null}
       {it.tabla && <TablaTalle t={it.tabla} onTabla={onTabla} ocupado={ocupado} />}
       {sep?.separar?.length ? <Separar op={sep} onModoVenta={onModoVenta} ocupado={ocupado} /> : null}
       {it.motivo && <div style={{ color: COLOR_ITEM[it.estado], marginTop: 2 }}>{it.estado === 'bloqueado' ? '⛔ ' : ''}{it.motivo}</div>}
@@ -203,6 +212,9 @@ function Reposicion({ a, enFilas }: { a: Repo; enFilas: string[] }) {
       {!suma ? <>«{a.titulo}»: no se suma stock (vendido en iD), solo precio y costo</>
         : enFilas.length ? <>Se suma en «{a.titulo}»{resto.length ? `: ${resto.join(' · ')}` : '.'}</>
         : <>Sumar en «{a.titulo}»: {resto.join(' · ')}</>}
+      {a.renombrar?.length ? <div style={{ color: AMARILLO }}>
+        Talles que se renombran en Shopify (mismo SKU y stock): {a.renombrar.map((r) => `${r.talle} → ${r.nuevo}${r.sku ? ` (${r.sku})` : ''}`).join(' · ')}
+      </div> : null}
       {a.etiquetas?.length ? <div style={{ opacity: 0.8 }}>Etiquetas que se agregan: {a.etiquetas.join(', ')}{a.quitarEtiquetas?.length ? ` (se saca ${a.quitarEtiquetas.join(', ')})` : ''}</div> : null}
     </div>
   );
@@ -232,7 +244,7 @@ function TallesFilas({ it, a, ocupado, onCantidad, onDestino, onSku, onQuitarTal
               <td style={td}><strong>{t.talle}</strong></td>
               <td style={td}><CantidadTalle talle={t.talle} sinTalle cantidad={t.cantidad} original={t.original} disabled={ocupado} onCambio={(n) => onCantidad(t.talle, n)} /></td>
               <td style={td}>{t.destino !== undefined
-                ? <DestinoTalle talle={t.talle} sinEtiqueta destino={t.destino} manual={!!t.destinoManual} nuevo={!!t.nuevo} disabled={ocupado} onCambio={(d) => onDestino(t.talle, d)} />
+                ? <DestinoTalle talle={t.talle} sinEtiqueta destino={t.destino} manual={!!t.destinoManual} nuevo={!!t.nuevo} renombra={t.renombra} disabled={ocupado} onCambio={(d) => onDestino(t.talle, d)} />
                 : '—'}</td>
               <td style={td}>{t.sku === undefined ? '—'
                 : onSku ? <SkuTalle talle={t.talle} sku={t.sku} manual={!!t.skuManual} nuevo={!!t.nuevo} disabled={ocupado} onCambio={(k) => onSku(t.talle, k)} />
@@ -318,8 +330,10 @@ function SkuTalle({ talle, sku, manual, nuevo, disabled, onCambio }: {
  * Distrinando: el talle de Shopify donde entra lo que llegó (gax: «que se puedan poner los talles en donde realmente
  * entraron»). Viene el que da el SKU, la nota o la tabla; se puede escribir otro. Vacío = vuelve al automático.
  */
-function DestinoTalle({ talle, destino, manual, nuevo, disabled, onCambio, sinEtiqueta }: {
+function DestinoTalle({ talle, destino, manual, nuevo, renombra, disabled, onCambio, sinEtiqueta }: {
   talle: string; destino: string; manual: boolean; nuevo: boolean; disabled: boolean; onCambio: (d: string) => void; sinEtiqueta?: boolean;
+  /** El talle que tiene hoy esa variante, que se renombra a `destino` (mismo SKU y stock). */
+  renombra?: string;
 }) {
   const [texto, setTexto] = useState(destino);
   const [antes, setAntes] = useState(destino);
@@ -337,6 +351,7 @@ function DestinoTalle({ talle, destino, manual, nuevo, disabled, onCambio, sinEt
         onChange={(ev) => setTexto(ev.target.value)} onBlur={aplicar} onKeyDown={(ev) => { if (ev.key === 'Enter') aplicar(); }}
         style={{ ...inputSt, width: 48, padding: '2px 4px', borderColor: manual ? AMARILLO : !destino ? ROJO : undefined }} />
       {nuevo && destino && <span style={{ fontSize: '0.72rem', color: AMARILLO }}>se crea</span>}
+      {renombra && <span style={{ fontSize: '0.72rem', color: AMARILLO }} title={`Hoy en Shopify se llama ${renombra}: se renombra, con el mismo SKU y stock`}>(hoy {renombra})</span>}
       {manual && <span style={{ fontSize: '0.72rem', color: AMARILLO }}>(a mano)</span>}
     </label>
   );
@@ -372,6 +387,43 @@ function AgregarTalle({ existentes, disabled, onAgregar }: { existentes: string[
       <button style={{ ...botonChico, padding: '1px 8px' }} onClick={() => { setAbierto(false); setError(''); }}>Cancelar</button>
       {error && <span style={{ color: ROJO, fontSize: '0.78rem' }}>{error}</span>}
     </span>
+  );
+}
+
+/**
+ * Packs de iD (13-nov-2026, gax: «la factura dice por 6, es porque son 6 bandas»): cuántas unidades trae cada pack.
+ * Viene sola (el «X6» de la factura o del nombre en Shopify) y se puede escribir; vacío vuelve a lo automático.
+ */
+function PackFila({ pack, disabled, onCambio }: { pack?: PackCarga; disabled: boolean; onCambio: (n: number | undefined) => void }) {
+  const valor = pack && !pack.error ? String(pack.unidades) : '';
+  const [texto, setTexto] = useState(valor);
+  const [antes, setAntes] = useState(pack);
+  if (antes !== pack) { setAntes(pack); setTexto(valor); }
+  const aplicar = () => {
+    const t = texto.trim();
+    if (!t) { if (pack?.manual) onCambio(undefined); else setTexto(valor); return; }
+    const n = Number(t);
+    if (!Number.isInteger(n) || n < 1 || n > 100) { setTexto(valor); return; }
+    if (n !== (pack?.unidades ?? 1) || pack?.error) onCambio(n);
+  };
+  const n = pack && !pack.error ? pack.unidades : 1;
+  const bonif = pack?.bonificacion ? ` − ${String(pack.bonificacion).replace('.', ',')}%` : '';
+  return (
+    <div style={{ marginTop: 4 }}>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span>Viene en packs de</span>
+        <input type="number" min={1} max={100} step={1} inputMode="numeric" value={texto} placeholder="?" disabled={disabled} aria-label="Unidades por pack"
+          onChange={(ev) => setTexto(ev.target.value)} onBlur={aplicar} onKeyDown={(ev) => { if (ev.key === 'Enter') aplicar(); }}
+          style={{ ...inputSt, width: 56, padding: '2px 4px', borderColor: pack?.error ? ROJO : pack?.manual ? AMARILLO : undefined }} />
+        <span>unidades{pack?.fuente ? ` (${pack.fuente})` : ''}</span>
+        {pack?.manual && <button style={{ ...enlace, fontSize: '0.8rem' }} disabled={disabled} onClick={() => onCambio(undefined)}>volver a lo automático</button>}
+      </div>
+      {n > 1 && <div style={{ opacity: 0.8, fontSize: '0.8rem' }}>
+        El remito cuenta packs: cada pack se carga como {n} unidades.
+        {pack?.costo !== undefined && pack.lista !== undefined && ` Costo por unidad: lista ${fmt(pack.lista)} ÷ ${n}${bonif} = ${fmt(pack.costo)}.`}
+      </div>}
+      {pack?.manual && n === 1 && <div style={{ opacity: 0.8, fontSize: '0.8rem' }}>No viene en pack: se carga lo que dice el remito y el costo de la factura entero.</div>}
+    </div>
   );
 }
 

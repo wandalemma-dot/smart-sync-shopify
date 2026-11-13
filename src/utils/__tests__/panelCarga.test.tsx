@@ -83,6 +83,37 @@ describe('vista previa de la carga: cantidades a mano (gax, 12-nov-2026)', () =>
   });
 });
 
+describe('vista previa de la carga: packs de iD (gax, 13-nov-2026)', () => {
+  const conPack = (pack?: object) => ({
+    ...plan, items: [{ ...plan.items[0], codigo: 'LAN0122026P', descripcion: 'LCS SHORT SPORTY WRISTBAND BLA', unidades: 6,
+      talles: [{ talle: 'TU', cantidad: 6, original: 6 }], ...(pack ? { pack } : {}) }],
+  }) as unknown as PlanCarga;
+  const html = (p: PlanCarga, onPack?: () => void) => renderToStaticMarkup(
+    <PanelCarga plan={p} ocupado={false} onConfirmar={() => undefined} onCancelar={() => undefined} sucursal="DEPOSITO MARTINEZ" explicacion="" sinTildar
+      onCantidad={() => undefined} onPack={onPack} />);
+  it('muestra cuántas unidades trae cada pack (editable), de dónde salió y el costo por unidad', () => {
+    const h = html(conPack({ unidades: 6, fuente: 'lo dice el nombre en Shopify', lista: 28877, bonificacion: 10, costo: 4331.55 }), () => undefined);
+    expect(h).toMatch(/Viene en packs de/);
+    expect(h).toMatch(/aria-label="Unidades por pack"[^>]*value="6"|value="6"[^>]*aria-label="Unidades por pack"/);
+    expect(h).toMatch(/unidades \(lo dice el nombre en Shopify\)/);
+    expect(h).toMatch(/cada pack se carga como 6 unidades/);
+    expect(h).toMatch(/Costo por unidad: lista \$ 28\.877,00 ÷ 6 − 10% = \$ 4\.331,55/);
+    expect(h).toMatch(/Llegó para cargar \(en unidades\)/);
+    expect(h).not.toMatch(/¿Viene en pack\?/);
+    expect(h).not.toMatch(/volver a lo automático/);
+  });
+  it('escrito a mano: se puede volver a lo automático; con un 1, avisa que no viene en pack', () => {
+    const h = html(conPack({ unidades: 1, fuente: 'lo escribiste a mano', manual: true }), () => undefined);
+    expect(h).toMatch(/volver a lo automático/);
+    expect(h).toMatch(/No viene en pack: se carga lo que dice el remito/);
+  });
+  it('sin pack, un botón chico para decir que viene en pack; en Family no aparece', () => {
+    expect(html(conPack(), () => undefined)).toMatch(/¿Viene en pack\?/);
+    expect(html(conPack(), () => undefined)).not.toMatch(/Viene en packs de/);
+    expect(html(conPack())).not.toMatch(/Viene en pack/);
+  });
+});
+
 describe('vista previa de la carga: Distrinando (13-nov-2026)', () => {
   const dis = {
     ...plan, items: [{
@@ -150,5 +181,23 @@ describe('vista previa de la carga: Distrinando (13-nov-2026)', () => {
   });
   it('se puede agregar un talle que no está en el remito', () => {
     expect(html).toMatch(/＋ Agregar talle/);
+  });
+  it('un talle corrido muestra cómo se llama hoy y la lista de talles que se renombran (gax: «el SKU manténelo»)', () => {
+    const corrido = {
+      ...dis, items: [{
+        ...dis.items[0], estado: 'listo', motivo: '', tabla: undefined,
+        talles: [{ talle: 'US 11', cantidad: 2, original: 2, destino: '43', destinoManual: true, renombra: '44', sku: 'RBK110S232647-11' }],
+        opciones: [{ clave: 'repo:1', etiqueta: 'Sumar', avisos: [], accion: {
+          tipo: 'reposicion', productoId: 'gid://shopify/Product/1', titulo: 'Zapatillas Reebok Nano Classic', etiquetar: false,
+          lineas: [{ talle: '43', inventoryItemId: 'gid://shopify/InventoryItem/1', actual: 1, suma: 2 }],
+          renombrar: [{ id: 'v1', talle: '44', nuevo: '43', sku: 'RBK110S232647-11' }, { id: 'v3', talle: '46.5', nuevo: '45', sku: 'RBK110S232647-12.5' }],
+        } }],
+      }],
+    } as unknown as PlanCarga;
+    const h = renderToStaticMarkup(<PanelCarga plan={corrido} ocupado={false} onConfirmar={() => undefined} onCancelar={() => undefined} sucursal="DEPOSITO MARTINEZ" explicacion=""
+      onCantidad={() => undefined} onTabla={() => undefined} onDestino={() => undefined} />);
+    expect(h).toMatch(/\(hoy 44\)/);
+    expect(h).toMatch(/1 → 3<\/td>/);
+    expect(h).toMatch(/Talles que se renombran en Shopify \(mismo SKU y stock\): 44 → 43 \(RBK110S232647-11\) · 46.5 → 45 \(RBK110S232647-12.5\)/);
   });
 });

@@ -1,10 +1,11 @@
 // Carga de las entregas de iD en Shopify (12-nov-2026, pedido de gax). Shopify SIMULADO: ninguna escritura real.
 import { describe, it, expect, vi } from 'vitest';
-import { accionesElegidas, ejecutarCargaFamily, leerPrecio, llegaAl50, precioAEscribir, resumenCarga, type CargaFamily, type DepsCarga } from '../cargaFamily';
+import { accionesElegidas, ejecutarCargaFamily, leerPrecio, llegaAl50, precioAEscribir, resumenCarga, type CargaFamily, type DepsCarga, type ItemCarga } from '../cargaFamily';
 import {
-  ajusteDe, costoPromedio, estadoCargaFactura, firmaCargaId, formasCodigo, leerEstadoCargaId, leerPendientesId, leerVentasId, ordenesQueSalen, planCargaId, precioYCostoAntes, separarDe, talleEnShopify,
+  ajusteDe, costoPromedio, estadoCargaFactura, firmaCargaId, formasCodigo, leerEstadoCargaId, leerPendientesId, leerVentasId, ordenesQueSalen, packDeCarga, planCargaId, precioYCostoAntes, separarDe, talleEnShopify,
   type EstadoCargaId, type OrdenPendienteId, type ProductoId, type VarianteId,
 } from '../cargaId';
+import { diferenciasDeTalles, netosDeCarga, textoAvisoTalles } from '../avisoTalles';
 import type { FilaChecklist, RenglonFactura, ResultadoFactura } from '../controlFacturas';
 
 const LOC = 'gid://shopify/Location/9';
@@ -575,5 +576,129 @@ describe('iD: qué órdenes ya pueden salir con lo que llegó (gax, 12-nov-2026)
       { lineaId: 'L1', titulo: 'Remera Converse Patch', talle: 'S', cantidad: 1 },
       { lineaId: 'L2', titulo: 'Remera Le Coq Monochrome', talle: 'S', cantidad: 1 },
     ] });
+  });
+});
+
+describe('iD: packs (13-nov-2026, gax: «la factura dice por 6, es porque son 6 bandas»)', () => {
+  // Caso real: LAN0122026P. La factura dice «LCS SHORT SPORTY WRISTBAND BLA» (sin X6) a $28.877 el pack (−10% = $25.989,30);
+  // en Shopify «Muñequeras Le Coq Sportif Lcs Short Sp Wristband X6 Blanco» a $11.900, con costo $4.331,55 (= 25.989,30 ÷ 6).
+  const COD = 'LAN0122026P';
+  const VTU = 'gid://shopify/ProductVariant/TU';
+  const munequera = (titulo = 'Muñequeras Le Coq Sportif Lcs Short Sp Wristband X6 Blanco', disponible: number | null = 0, extra: Partial<VarianteId> = {}): ProductoId => ({
+    id: 'gid://shopify/Product/77', titulo, vendor: 'Le Coq Sportif', estado: 'ACTIVE', etiquetas: [COD],
+    variantes: [variante('TU', disponible, { sku: `${COD}-TU`, precio: 11900, costo: 4331.55, ...extra })],
+  });
+  const renPack = (descripcion = 'LCS SHORT SPORTY WRISTBAND BLA'): RenglonFactura => ({ codigo: COD, descripcion, precioUnitario: 28877, bonificacion: 10, cantidad: 1, total: 25989.3 });
+  const filaPack = (talles: FilaChecklist['talles'] = [{ talle: 'TU', cantidad: 1 }], descripcion = 'LCS SHORT SPORTY WRISTBAND BLA', extra: Partial<FilaChecklist> = {}) =>
+    fila(talles, { codigo: COD, descripcion, cantidad: 1, ...extra });
+  const pack = (descripcion?: string) => resultado([filaPack(undefined, descripcion)], [renPack(descripcion)]);
+  const repo = (it: ItemCarga) => {
+    const a = it.opciones[0].accion;
+    if (a?.tipo !== 'reposicion') throw new Error('esperaba reposición');
+    return a;
+  };
+
+  it('cuántas unidades trae: el «X6» de la factura o del nombre en Shopify (la regla de Sincronización); nunca del código', () => {
+    expect(packDeCarga('LCS SHORT SPORTY WRISTBAND X 6 BLUE', ['Muñequeras Le Coq Sportif Wristband Azul'])).toEqual({ unidades: 6, fuente: 'lo dice la factura' });
+    expect(packDeCarga('LCS SHORT SPORTY WRISTBAND BLA', ['Muñequeras Le Coq Sportif Lcs Short Sp Wristband X6 Blanco'])).toEqual({ unidades: 6, fuente: 'lo dice el nombre en Shopify' });
+    expect(packDeCarga('PUMAS SOCKS X 6 CON ANTIDES', ['Medias Le Coq Sportif Pumas Socks X6 Negro'])).toEqual({ unidades: 6, fuente: 'lo dice la factura y el nombre en Shopify' });
+    expect(packDeCarga('LCS SOCKS X 6', ['Medias Le Coq Sportif Socks X3'])).toEqual({ unidades: 1, fuente: '', error: 'No sé cuántas unidades trae cada pack: la factura dice packs de 6 y el nombre en Shopify dice 3.' });
+    expect(packDeCarga('LCS SOCKS', ['Medias X3', 'Medias X6']).error).toMatch(/el nombre en Shopify dice 3 y 6/);
+    expect(packDeCarga('REMERA 3XL', ['Remera A123X6 Negro'])).toEqual({ unidades: 1, fuente: '' });
+    // Lo escrito a mano manda, también para decir que no viene en pack.
+    expect(packDeCarga('LCS SOCKS X 6', [], 12)).toEqual({ unidades: 12, fuente: 'lo escribiste a mano', manual: true });
+    expect(packDeCarga('LCS SOCKS X 6', [], 1)).toEqual({ unidades: 1, fuente: 'lo escribiste a mano', manual: true });
+  });
+
+  it('caso real: 1 pack del remito se carga como 6 unidades, a $4.331,55 cada una; el margen por unidad da verde', () => {
+    const r = pack();
+    const plan = planCargaId(r, estado(munequera(), COD), {});
+    const [it] = plan.items;
+    expect(it.estado).toBe('listo');
+    expect(it.unidades).toBe(6);
+    expect(it.talles).toEqual([{ talle: 'TU', cantidad: 6, original: 6 }]);
+    expect(it.pack).toEqual({ unidades: 6, fuente: 'lo dice el nombre en Shopify', lista: 28877, bonificacion: 10, costo: 4331.55 });
+    const a = repo(it);
+    expect(a.lineas).toEqual([{ talle: 'TU', inventoryItemId: 'gid://shopify/InventoryItem/TU', actual: 0, suma: 6 }]);
+    expect(a.pack).toBe(6);
+    // Antes: costo $25.989,30 contra $11.900 = margen −164% y obligaba a un precio de $65.900.
+    // Ahora: 1 − 4.331,55 / (11.900 / 1,21) = 56%. El sugerido por unidad (28.877 ÷ 6 × 2,27, al 900) es su precio de hoy.
+    expect(a.ajuste).toMatchObject({ costoNuevo: 4331.55, precioActual: 11900, ok: true, sugerido: 11900, costos: [], ponderados: [] });
+    expect(a.ajuste!.margen).toBeCloseTo(55.96, 1);
+    expect(precioAEscribir(a.ajuste!)).toBeNull();
+    expect(resumenCarga(plan, {}).lineas[0]).toMatch(/sumar 6 u\. \(vienen en packs de 6\) en «Muñequeras/);
+    // La marca «una sola vez» sigue siendo la del remito (1 pack).
+    expect(it.firma).toBe(firmaCargaId('2026-11-10', '0013-00125274', r.checklist[0]));
+  });
+
+  it('LAN0125034P: si lo dice la factura («X 6») alcanza; el costo nuevo por unidad va a los talles sin stock', () => {
+    const it = planCargaId(pack('LCS SHORT SPORTY WRISTBAND X 6 BLUE'), estado(munequera('Muñequeras Le Coq Sportif Wristband Azul', 0, { costo: 4000 }), COD), {}).items[0];
+    expect(it.pack).toMatchObject({ unidades: 6, fuente: 'lo dice la factura' });
+    const a = repo(it);
+    expect(a.ajuste!.costoNuevo).toBe(4331.55);
+    expect(a.ajuste!.costos).toEqual([{ id: VTU, talle: 'TU', actual: 4000 }]);
+  });
+
+  it('con stock en Martínez el costo promedio se hace por unidad', () => {
+    // 2 a $4.000 + 6 a $4.331,55 = $4.248,66.
+    const a = repo(planCargaId(pack(), estado(munequera(undefined, 2, { costo: 4000 }), COD), {}).items[0]);
+    expect(a.ajuste!.ponderados).toEqual([{ id: VTU, talle: 'TU', stock: 2, suma: 6, actual: 4000, costo: 4248.66 }]);
+  });
+
+  it('lo marcado «-1» son unidades que salieron para órdenes (de un pack de 6 se cargan 5); lo escrito a mano va en unidades', () => {
+    const r = resultado([filaPack([{ talle: 'TU', cantidad: 0, retirado: 1 }], undefined, { retirado: 1 })], [renPack()]);
+    const it = planCargaId(r, estado(munequera(), COD), {}).items[0];
+    expect(it.estado).toBe('listo');
+    expect(it.talles).toEqual([{ talle: 'TU', cantidad: 5, original: 5 }]);
+    expect(it.opciones[0].avisos.join(' ')).toMatch(/Salieron 1 para órdenes .*unidades sueltas del pack.*Si salió el pack entero, corregí la cantidad/);
+    const escrito = planCargaId(pack(), estado(munequera(), COD), {}, new Map(), new Map([[COD, { TU: 5 }]])).items[0];
+    expect(escrito.talles).toEqual([{ talle: 'TU', cantidad: 5, original: 6 }]);
+    expect(escrito.opciones[0].avisos.join(' ')).toMatch(/Cantidad escrita a mano: TU 6→5/);
+  });
+
+  it('lo vendido en iD se separa en unidades: llega 1 pack (6) y hay 1 vendida → se suman 5', () => {
+    const e = { ...estado(munequera(), COD), pendientesId: { [VTU]: [{ nombre: '#210900', fecha: '2026-11-11', cantidad: 1, cuenta: true }] } };
+    const it = planCargaId(pack(), e, {}).items[0];
+    expect(repo(it).lineas.map((l) => [l.talle, l.suma])).toEqual([['TU', 5]]);
+    expect(it.opciones[0].separar).toEqual([{ talle: 'TU', cantidad: 1, ordenes: [{ nombre: '#210900', cantidad: 1 }] }]);
+  });
+
+  it('si la factura y Shopify dicen packs distintos no se adivina; escrito a mano, se carga', () => {
+    const r = pack('LCS SOCKS X 6 BLA');
+    const e = estado(munequera('Medias Le Coq Sportif Socks X3 Blanco'), COD);
+    const it = planCargaId(r, e, {}).items[0];
+    expect(it).toMatchObject({ estado: 'bloqueado', motivo: expect.stringMatching(/la factura dice packs de 6 y el nombre en Shopify dice 3\. Escribí cuántas unidades/) });
+    expect(it.pack).toMatchObject({ unidades: 1, error: expect.any(String) });
+    expect(it.talles).toEqual([{ talle: 'TU', cantidad: 1, original: 1 }]);
+    const manual = planCargaId(r, e, {}, new Map(), new Map(), new Map([[COD, 6]])).items[0];
+    expect(manual).toMatchObject({ estado: 'listo', unidades: 6, pack: { unidades: 6, fuente: 'lo escribiste a mano', manual: true, costo: 4331.55 } });
+  });
+
+  it('«no viene en pack» (1 a mano) carga lo del remito con el costo entero; si el margen da negativo, pregunta si viene en pack', () => {
+    const it = planCargaId(pack(), estado(munequera(), COD), {}, new Map(), new Map(), new Map([[COD, 1]])).items[0];
+    expect(it.pack).toEqual({ unidades: 1, fuente: 'lo escribiste a mano', manual: true });
+    expect(it.unidades).toBe(1);
+    const a = repo(it);
+    expect(a.ajuste!.costoNuevo).toBe(25989.3);
+    expect(a.pack).toBeUndefined();
+    expect(it.opciones[0].avisos.join(' ')).toMatch(/deja el margen en negativo\. ¿Viene en pack\?/);
+    // Sin «X6» en ningún lado: no se inventa el pack, pero se pregunta.
+    const sinX = planCargaId(pack(), estado(munequera('Muñequeras Le Coq Sportif Wristband Blanco'), COD), {}).items[0];
+    expect(sinX.pack).toBeUndefined();
+    expect(sinX.unidades).toBe(1);
+    expect(sinX.opciones[0].avisos.join(' ')).toMatch(/¿Viene en pack\?/);
+    // Con un margen sano no se pregunta nada.
+    expect(planCargaId(resultado([fila([{ talle: 'S', cantidad: 2 }])]), estado(), {}).items[0].opciones[0].avisos.join(' ')).not.toMatch(/pack/);
+  });
+
+  it('el mail de diferencias con el remito cuenta unidades, con el neto por unidad', () => {
+    const plan = planCargaId(pack(), estado(munequera(), COD), {}, new Map(), new Map([[COD, { TU: 5 }]]));
+    const netos = netosDeCarga(plan.items, [renPack()]);
+    expect(netos).toEqual({ [COD]: 4331.55 });
+    const difs = diferenciasDeTalles(plan.items, [{ codigo: COD, estado: 'cargada', mensaje: '' }], netos);
+    expect(difs).toEqual([{ codigo: COD, descripcion: 'LCS SHORT SPORTY WRISTBAND BLA', talles: [{ talle: 'TU', remito: 6, llego: 5 }], neto: 4331.55, pack: 6 }]);
+    const { cuerpo } = textoAvisoTalles(difs, { proveedor: 'iD', factura: '0011-00140008', remito: '0013-00125300' });
+    expect(cuerpo).toMatch(/Según el remito: TU ×6 \(en unidades: viene en packs de 6\)\. Llegó: TU ×5\./);
+    expect(cuerpo).toMatch(/Falta 1 unidad \(\$ 4\.331,55 neto a precio de factura\)\./);
   });
 });
