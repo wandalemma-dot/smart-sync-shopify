@@ -5,6 +5,7 @@ import { analizarFacturas, type Factura, type LineaPedido, type Pedido, type Rem
 import { planCargaDistrinando, tituloDistrinando } from '../cargaDistrinando';
 import { accionesElegidas, ejecutarCargaFamily, type ReposicionFamily, type AltaFamily } from '../cargaFamily';
 import type { EstadoCargaId, ProductoId, VarianteId } from '../cargaId';
+import { diferenciasDeTalles, textoAvisoTalles } from '../avisoTalles';
 
 const linea = (sku: string, descripcion: string, cantidad: number, precio = 63982.4, udm = 1): LineaPedido => ({
   sku, codigo: sku.includes('---') ? sku.split('---')[0] : sku.replace(/-[^-]*$/, ''), descripcion, talle: udm > 1 ? `Pack x${udm} (${descripcion.replace(/^.* - (M12)/, '$1')})` : descripcion.replace(/^.*(?:\s-\s|\s)((?:AR|UK)\s?)?(\d+(?:\.\d)?)$/, (_m, p, n) => `${p ? p.trim() + ' ' : ''}${n}`),
@@ -77,7 +78,7 @@ describe('carga de Distrinando', () => {
     expect(a.ajuste!.ponderados).toEqual([expect.objectContaining({ talle: '43', stock: 2, suma: 15, costo: 37402.45 })]);
     // No tiene tabla con nombre: avisa. Ninguna sirve (US 11 = 43 no es Hombre).
     expect(it74.tabla?.avisos.join(' ')).toMatch(/no tiene tabla de talle/);
-    expect(it74.tabla?.opciones.find((o) => o.clave === 'HOMBRE')?.bloqueo).toMatch(/no coincide con Shopify: US 10.5 = 42, la tabla dice 43.5/);
+    expect(it74.tabla?.opciones.find((o) => o.clave === '1')?.bloqueo).toMatch(/no coincide con Shopify: US 10.5 = 42, la tabla dice 43.5/);
     expect(a.etiquetas).toBeUndefined();
   });
 
@@ -106,21 +107,21 @@ describe('carga de Distrinando', () => {
     expect(it.estado).toBe('bloqueado');
     expect(it.motivo).toMatch(/Elegí la tabla de talle/);
     expect(it.tabla?.opciones.find((o) => o.clave === 'MUJER')?.bloqueo).toMatch(/no tiene el US 4/);
-    const plan = planCargaDistrinando(r, estado(), {}, [NOTA], new Map([['RBK1100231713', 'HOMBRE']]), new Map([['RBK1100231713', { 'US 7.5': 5 }]]));
+    const plan = planCargaDistrinando(r, estado(), {}, [NOTA], new Map([['RBK1100231713', '1']]), new Map([['RBK1100231713', { 'US 7.5': 5 }]]));
     it = item(plan, 'RBK1100231713');
     expect(it.estado).toBe('listo');
     const a = it.opciones[0].accion as AltaFamily;
-    expect(a).toMatchObject({ tipo: 'alta', vendor: 'Reebok', precio: 154999, costo: 49586.46, productType: 'Zapatillas', tabla: { nombre: 'HOMBRE' } });
+    expect(a).toMatchObject({ tipo: 'alta', vendor: 'Reebok', precio: 154999, costo: 49586.46, productType: 'Zapatillas', tabla: { nombre: '1' } });
     expect(a.titulo).toBe(tituloDistrinando('NANO COURT - FUTURE CYAN/FTWR WHITE/BLACK - M12 4/7.5 (23322)'));
     expect(a.titulo).not.toMatch(/M12|23322/);
     expect(a.variantes.map((v) => `${v.talle}:${v.cantidad}:${v.sku}`)).toEqual([
       '35:6:RBK1100231713-4', '36:9:RBK1100231713-5', '37:9:RBK1100231713-6', '38.5:6:RBK1100231713-7', '39:5:RBK1100231713-7.5']);
-    expect(a.etiquetas).toEqual(expect.arrayContaining(['RBK1100231713', 'RBK1100231713-4', 'TABLA DE TALLE REEBOK HOMBRE']));
+    expect(a.etiquetas).toEqual(expect.arrayContaining(['RBK1100231713', 'RBK1100231713-4', 'TABLA DE TALLE REEBOK 1']));
     expect(it.opciones[0].avisos.join(' ')).toMatch(/US 7.5 6→5/);
   });
 
   it('una tabla que contradice la nota no se puede elegir aunque venga pedida', () => {
-    const plan = planCargaDistrinando(resultado(), estado(), {}, [NOTA], new Map([['RBK110S236074', 'HOMBRE']]));
+    const plan = planCargaDistrinando(resultado(), estado(), {}, [NOTA], new Map([['RBK110S236074', '1']]));
     const it = item(plan, 'RBK110S236074');
     expect(it.tabla?.elegida).toBe('');
     expect((it.opciones[0].accion as ReposicionFamily).etiquetas).toBeUndefined();
@@ -128,9 +129,9 @@ describe('carga de Distrinando', () => {
 
   it('elegir una tabla que coincide reemplaza la etiqueta vieja («REEBOK 2»)', () => {
     // US 11 = 44 en la nota coincide con Hombre: se puede elegir y reemplaza «TABLA DE TALLE REEBOK 2».
-    const plan = planCargaDistrinando(resultado(), estado(), {}, [NOTA], new Map([['RBK110S236046', 'HOMBRE']]));
+    const plan = planCargaDistrinando(resultado(), estado(), {}, [NOTA], new Map([['RBK110S236046', '1']]));
     const a = item(plan, 'RBK110S236046').opciones[0].accion as ReposicionFamily;
-    expect(a.etiquetas).toEqual(['TABLA DE TALLE REEBOK HOMBRE', 'RBK110S236046-11']);
+    expect(a.etiquetas).toEqual(['TABLA DE TALLE REEBOK 1', 'RBK110S236046-11']);
     expect(a.quitarEtiquetas).toEqual(['TABLA DE TALLE REEBOK 2']);
   });
 
@@ -156,8 +157,37 @@ describe('carga de Distrinando', () => {
     expect((it.opciones[0].accion as AltaFamily).tabla).toBeUndefined();
   });
 
+  it('un talle que no está en el remito se agrega (gax: «me entró en otro talle, en 13 americano») y sale en el mail', () => {
+    const r = resultado();
+    const sinCambios = planCargaDistrinando(r, estado(), {}, [NOTA]);
+    const plan = planCargaDistrinando(r, estado(), {}, [NOTA], new Map(), new Map([['RBK110S236074', { 'US 12': 14, 'US 13': 1, 'US ZZ': 3 }]]));
+    const it74 = item(plan, 'RBK110S236074');
+    expect(it74.estado).toBe('listo');
+    expect(it74.talles?.map((t) => `${t.talle}:${t.cantidad}/${t.original}`)).toEqual(['US 11:15/15', 'US 12:14/15', 'US 13:1/0']);
+    expect(it74.talles?.[2]).toMatchObject({ destino: '45.5', sku: 'RBK110S236074-13' });
+    // Al lado de cada talle, el SKU que tiene hoy en Shopify (el 43 tiene el EAN).
+    expect(it74.talles?.[0]).toMatchObject({ destino: '43', sku: '4066749645052' });
+    const a = it74.opciones[0].accion as ReposicionFamily;
+    expect(a.lineas.map((l) => `${l.talle}:${l.suma}`)).toEqual(['43:15', '44:14', '45.5:1']);
+    expect(it74.opciones[0].avisos.join(' ')).toMatch(/US 12 15→14 · US 13 \+1 \(no está en el remito\)/);
+    // La marca «una sola vez» sigue siendo la del remito.
+    expect(it74.firma).toBe(item(sinCambios, 'RBK110S236074').firma);
+    // El mail del final: solo lo cargado y distinto del remito.
+    const difs = diferenciasDeTalles(plan.items, [{ codigo: 'RBK110S236074', estado: 'cargada', mensaje: '' }, { codigo: 'RBK110S236046', estado: 'cargada', mensaje: '' }], { RBK110S236074: 38389.44 });
+    expect(difs).toHaveLength(1);
+    const { asunto, cuerpo } = textoAvisoTalles(difs, { proveedor: 'Distrinando', factura: '0039-00283124', remito: '0085-00206200', fecha: '13/11/2026' });
+    expect(asunto).toBe('Diferencia de talles — Distrinando remito 0085-00206200');
+    expect(cuerpo).toMatch(/Según el remito: US 12 ×15\. Llegó: US 12 ×14, US 13 ×1\./);
+    expect(cuerpo).toMatch(/Misma cantidad de pares: mismo modelo y mismo precio, el importe se compensa/);
+    // Si faltan pares, dice cuántos y cuánto es.
+    const falta = textoAvisoTalles([{ ...difs[0], talles: [{ talle: 'US 12', remito: 15, llego: 14 }] }], { proveedor: 'Distrinando' }).cuerpo;
+    expect(falta).toMatch(/Falta 1 par \(\$ 38\.389,44 neto a precio de factura\)/);
+    // Sin cargar (error o sin tildar) no entra al mail.
+    expect(diferenciasDeTalles(plan.items, [{ codigo: 'RBK110S236074', estado: 'error', mensaje: '' }], {})).toEqual([]);
+  });
+
   it('ejecución: etiquetas, stock y talle nuevo; relee el producto antes de crear', async () => {
-    const plan = planCargaDistrinando(resultado(), estado(), {}, [NOTA], new Map([['RBK110S236046', 'HOMBRE']]));
+    const plan = planCargaDistrinando(resultado(), estado(), {}, [NOTA], new Map([['RBK110S236046', '1']]));
     const llamadas: string[] = [];
     const gql = vi.fn(async (q: string, v?: Record<string, unknown>) => {
       const nombre = /(?:mutation|query)\s+(\w+)/.exec(q)?.[1] ?? '?';

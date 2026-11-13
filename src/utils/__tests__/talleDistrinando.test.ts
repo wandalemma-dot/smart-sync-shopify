@@ -54,12 +54,24 @@ describe('talle de Distrinando en Shopify', () => {
 
   it('3) sin SKU ni nota, la tabla elegida; sin tabla no adivina', () => {
     const vs = [v('44', '4066749953270'), v('46', 'RBK110S239239-12')];
-    expect(ubicar('RBK110S239239', '11', vs, 'HOMBRE', [])).toMatchObject({ talle: '44', fuente: 'tabla' });
+    expect(ubicar('RBK110S239239', '11', vs, '1', [])).toMatchObject({ talle: '44', fuente: 'tabla' });
     expect(ubicar('RBK110S239239', '11', vs, null, [])).toMatchObject({ error: expect.stringMatching(/Elegí la tabla/) });
     expect(tablaDeEtiquetas(['TABLA DE TALLE REEBOK NINO'])).toBe('NIÑO');
-    expect(tablaDeEtiquetas(['TABLA DE TALLE REEBOK 2'])).toBeNull();
+    // Hojas del local (13-nov-2026): REEBOK 1, REEBOK 2 y MUJER; la vieja «HOMBRE» es la 1.
+    expect(tablaDeEtiquetas(['TABLA DE TALLE REEBOK 2'])).toBe('2');
+    expect(tablaDeEtiquetas(['TABLA DE TALLE REEBOK 1'])).toBe('1');
+    expect(tablaDeEtiquetas(['TABLA DE TALLE REEBOK HOMBRE'])).toBe('1');
+    expect(tablaDeEtiquetas(['TABLA DE TALLE REEBOK 1', 'TABLA DE TALLE REEBOK HOMBRE'])).toBe('1');
     expect(tablaDeEtiquetas(['TABLA DE TALLE REEBOK SIN IDENTIFICAR'])).toBeNull();
     expect(tablaDeEtiquetas(['TABLA DE TALLE REEBOK HOMBRE', 'TABLA DE TALLE REEBOK MUJER'])).toBeNull();
+  });
+
+  it('TABLA DE TALLE REEBOK 2 (hoja del local): la Nano X3 Blanca, US 11 = 43, 12 = 44, 13 = 45.5', () => {
+    const t = tablaReebok('2')!;
+    expect(['7', '10.5', '11', '12', '13', '15.5'].map((us) => t.ar(us))).toEqual(['38', '42', '43', '44', '45.5', '48.5']);
+    const pares = paresConocidos('RBK110S236074', [NOTA], [v('42', 'RBK110S236074-10.5'), v('45.5', 'RBK110S236074-13')]);
+    const ok = tablasDelModelo(pares, []).filter((x) => !x.bloqueo).map((x) => x.nombre);
+    expect(ok).toEqual(['2']);
   });
 
   it('la curva del pack: «M12 4/7.5 (23322)» y «M12U 5/7,5 (3441)»', () => {

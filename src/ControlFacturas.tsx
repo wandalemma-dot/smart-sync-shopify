@@ -28,6 +28,7 @@ import { Archivo, Copiar, Parte } from './EntregasPartes';
 import { OrdenesQueSalen, PanelCarga } from './PanelCarga';
 import { accionesElegidas, ejecutarCargaFamily, resumenCarga, textoCarga, type CargaFamily, type EleccionesCarga, type ModoVenta, type PlanCarga } from './utils/cargaFamily';
 import { cambiosDePrecio, enlacesMail, textoAvisoPrecio, type CambioPrecio, type MailsAviso } from './utils/avisoPrecio';
+import { diferenciasDeTalles, textoAvisoTalles } from './utils/avisoTalles';
 import { planCargaDistrinando } from './utils/cargaDistrinando';
 import { estadoCargaFactura, leerEstadoCargaId, ordenesQueSalen, planCargaId, type OrdenQueSale, precioYCostoAntes, SUCURSAL_CARGA_ID, type EstadoCargaId } from './utils/cargaId';
 import { actualizarPreciosManualmente, shopifyGraphQL } from './utils/shopify';
@@ -182,6 +183,8 @@ export default function ControlFacturas() {
   const [avisos, setAvisos] = useState<string[]>([]);
   /** Precios de venta que cambió la última carga: se ofrece mandar el aviso por mail. */
   const [avisoPrecio, setAvisoPrecio] = useState<{ cambios: CambioPrecio[]; asunto: string; cuerpo: string } | null>(null);
+  /** Talles distintos al remito en la última carga (13-nov-2026, gax): el mail para avisar. */
+  const [avisoTalles, setAvisoTalles] = useState<{ asunto: string; cuerpo: string } | null>(null);
   /** Órdenes de iD que se llevaron algo de la última carga: cuáles ya pueden salir (12-nov-2026, gax). */
   const [ordenesCarga, setOrdenesCarga] = useState<OrdenQueSale[]>([]);
   const [fechaPedido, setFechaPedido] = useState(hoy());
@@ -727,7 +730,7 @@ export default function ControlFacturas() {
     const p = prov, eid = plan.entregaId, factura = r.factura.numero;
     const elegidas = accionesElegidas(plan, elecciones);
     const salen = ordenesQueSalen(plan, elecciones);
-    setAvisoPrecio(null); setOrdenesCarga([]);
+    setAvisoPrecio(null); setAvisoTalles(null); setOrdenesCarga([]);
     setOcupado('Cargando en Shopify… no cierres esta página.');
     try {
       const resultados = await ejecutarCargaFamily(plan, elecciones, {
@@ -744,10 +747,15 @@ export default function ControlFacturas() {
         setAvisos(resultados.map((x) => `${icono[x.estado]} ${x.codigo}: ${x.mensaje}`));
         setOrdenesCarga(salen);
         const cambios = cambiosDePrecio(elegidas, resultados);
-        if (cambios.length) {
-          const fecha = hoyAr().split('-').reverse().join('/');
-          setAvisoPrecio({ cambios, ...textoAvisoPrecio(cambios, { proveedor: PROVS.find((x) => x.id === p)?.nombre ?? p, factura, remito: r.remito?.numero, fecha }) });
-        }
+        const fecha = hoyAr().split('-').reverse().join('/');
+        const proveedor = PROVS.find((x) => x.id === p)?.nombre ?? p;
+        if (cambios.length) setAvisoPrecio({ cambios, ...textoAvisoPrecio(cambios, { proveedor, factura, remito: r.remito?.numero, fecha }) });
+        const netos = Object.fromEntries(plan.items.map((it) => {
+          const ren = r.factura.renglones.find((x) => claveCodigo(x.codigo) === claveCodigo(it.codigo));
+          return [it.codigo, ren ? Math.round((Number(ren.precioUnitario) || 0) * (1 - (Number(ren.bonificacion) || 0) / 100) * 100) / 100 : 0];
+        }));
+        const difs = diferenciasDeTalles(plan.items, resultados, netos);
+        if (difs.length) setAvisoTalles(textoAvisoTalles(difs, { proveedor, factura, remito: r.remito?.numero, fecha }));
       }
       setPlanCarga(null);
     } catch (e) { if (sigue(p)) setAvisos([`La carga se cortó: ${mensaje(e)} Revisá en Shopify qué quedó cargado antes de volver a intentar.`]); }
@@ -838,7 +846,7 @@ export default function ControlFacturas() {
   // Las notas subidas a mano y borradas también se anotan ahí (con «P:»), pero no son Excel de Trello.
   const excelTrello = Object.entries(datos.trelloVistos).filter(([k]) => /^[a-f0-9]{24}$/.test(k)).map(([, v]) => v);
   const facturasRes = [...res.facturas].reverse();
-  const cambiarProv = (p: Prov) => { setPlanCarga(null); setAvisoPrecio(null); setOrdenesCarga([]); setVerRegistro(false); provRef.current = p; setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
+  const cambiarProv = (p: Prov) => { setPlanCarga(null); setAvisoPrecio(null); setAvisoTalles(null); setOrdenesCarga([]); setVerRegistro(false); provRef.current = p; setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
 
   const cabecera = (<>
     <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
@@ -885,6 +893,7 @@ export default function ControlFacturas() {
       </div>}
       {avisoPrecio && <AvisoPrecio aviso={avisoPrecio} mails={datos.mailsAviso ?? { para: [], copia: [] }} ocupado={!!ocupado}
         onGuardarMails={async (m) => { await api({ accion: 'guardarMailsAviso', ...m }); await recargar(); }} onCerrar={() => setAvisoPrecio(null)} />}
+      {avisoTalles && <AvisoTalles aviso={avisoTalles} onCerrar={() => setAvisoTalles(null)} />}
 
       {vista !== 'entregas' && <button style={{ ...enlace, marginBottom: 10 }} onClick={() => setVista('entregas')}>← Volver a las entregas</button>}
 
@@ -1545,6 +1554,35 @@ function AvisoPrecio({ aviso, mails, ocupado, onGuardarMails, onCerrar }: {
           </div>
         </div>
       )}
+      {msg && <div style={{ fontSize: '0.8rem', marginTop: 6 }}>{msg}</div>}
+    </div>
+  );
+}
+
+/**
+ * Talles distintos al remito (13-nov-2026, gax: «que me deje un mail para mandar qué pasó con los talles»).
+ * El mail se abre escrito y sin destinatario: la persona elige a quién mandarlo. La app no lo envía.
+ */
+function AvisoTalles({ aviso, onCerrar }: { aviso: { asunto: string; cuerpo: string }; onCerrar: () => void }) {
+  const [msg, setMsg] = useState('');
+  const { gmail, mailto } = enlacesMail({ para: [], copia: [] }, aviso.asunto, aviso.cuerpo);
+  async function copiar() {
+    try { await navigator.clipboard.writeText(`${aviso.asunto}\n\n${aviso.cuerpo}`); setMsg('✔ Texto copiado.'); }
+    catch { setMsg('No pude copiar: seleccioná el texto de abajo y copialo a mano.'); }
+  }
+  return (
+    <div style={{ border: '1px solid rgba(251,191,36,0.6)', borderRadius: 10, padding: '12px 14px', margin: '6px 0 14px', background: 'rgba(251,191,36,0.07)' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline' }}>
+        <strong>✉️ Llegaron talles distintos al remito: avisá por mail</strong>
+        <button style={enlace} onClick={onCerrar}>Cerrar</button>
+      </div>
+      <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: '0.82rem', margin: '8px 0', padding: '8px 10px', background: 'rgba(0,0,0,0.2)', borderRadius: 6 }}>{aviso.cuerpo}</pre>
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <a href={gmail} target="_blank" rel="noreferrer" style={{ ...botonPrincipal, textDecoration: 'none' }}>✉️ Escribir el mail (Gmail)</a>
+        <a href={mailto} style={{ ...boton, textDecoration: 'none' }}>Abrir en mi programa de mail</a>
+        <button style={boton} onClick={copiar}>📋 Copiar texto</button>
+        <span style={{ fontSize: '0.8rem', opacity: 0.75 }}>El mail se abre sin destinatario: completalo vos.</span>
+      </div>
       {msg && <div style={{ fontSize: '0.8rem', marginTop: 6 }}>{msg}</div>}
     </div>
   );

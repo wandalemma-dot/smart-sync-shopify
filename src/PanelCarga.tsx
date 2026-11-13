@@ -6,12 +6,13 @@
 // factura. 50% o más = verde; menos = amarillo y hay que poner un precio nuevo para
 // TODA la curva (los básicos tienen precio impuesto: se avisa, no obliga).
 // ============================================================================
-import { useState } from 'react';
+import { useState, type CSSProperties } from 'react';
 import { fmt } from './utils/controlFacturas';
-import { leerPrecio, precioAEscribir, resumenCarga, textoSeparar, type AjustePrecio, type EleccionesCarga, type ItemCarga, type ModoVenta, type OpcionCarga, type PlanCarga, type TablaItem } from './utils/cargaFamily';
+import { leerPrecio, precioAEscribir, resumenCarga, textoSeparar, type AjustePrecio, type EleccionesCarga, type ItemCarga, type ModoVenta, type OpcionCarga, type PlanCarga, type TablaItem, type ReposicionFamily, type AltaFamily } from './utils/cargaFamily';
 import { margenPct } from './utils/margen';
 import { ordenesQueSalen, type OrdenQueSale } from './utils/cargaId';
 import { botonChico, botonPrincipal, inputSt } from './utils/entregasUi';
+import { esTalleUS, talleUS } from './utils/talleDistrinando';
 
 // Lo listo va en el color normal: solo resalta lo que necesita atención (12-nov-2026, gax: «hay mucho color»).
 const COLOR_ITEM = { listo: 'inherit', elegir: '#fbbf24', bloqueado: '#f87171', cargado: '#94a3b8' } as const;
@@ -118,7 +119,7 @@ function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, onTabla, o
     <div style={{ borderTop: '2px solid rgba(255,255,255,0.2)', padding: '14px 0 12px', fontSize: '0.84rem', lineHeight: 1.55 }}>
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
         {casilla && <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center', cursor: 'pointer' }} title={sinTildar ? 'Tildalo cuando lo controlaste: solo se carga lo tildado' : 'Destildalo si todavía no llegó: queda pendiente'}>
-          <input type="checkbox" checked={!fuera} onChange={(ev) => onElegir({ clave: ev.target.checked ? it.opciones[0].clave : 'no' })} />
+          <input type="checkbox" style={{ width: 18, height: 18, margin: 0, cursor: 'pointer' }} checked={!fuera} onChange={(ev) => onElegir({ clave: ev.target.checked ? it.opciones[0].clave : 'no' })} />
         </label>}
         <strong style={{ color: COLOR_ITEM[it.estado], opacity: fuera ? 0.55 : 1 }}>{it.codigo}</strong>
         <span style={{ opacity: fuera ? 0.5 : 0.8 }}>{it.descripcion} · {it.unidades} u.</span>
@@ -129,11 +130,13 @@ function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, onTabla, o
           {it.opciones.map((o) => <option key={o.clave} value={o.clave} disabled={!!o.bloqueo}>{o.etiqueta}{o.bloqueo ? ' (no se puede)' : ''}</option>)}
         </select>}
       </div>
-      {onCantidad && it.talles?.length ? <div style={{ marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-        <span style={{ opacity: 0.8 }}>✏️ Llegó para cargar:</span>
+      {/* Todo lo del artículo va con sangría: la casilla queda sola a la izquierda (13-nov-2026, gax). */}
+      <div style={{ paddingLeft: casilla ? 28 : 0 }}>
+      {onCantidad && onDestino && it.talles?.length ? <TallesFilas it={it} a={a} ocupado={ocupado} onCantidad={onCantidad} onDestino={onDestino} /> : null}
+      {onCantidad && !onDestino && it.talles?.length ? <div style={{ marginTop: 4, display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
+        <span style={{ opacity: 0.8 }}>Llegó para cargar:</span>
         {it.talles.map((t) => <span key={t.talle} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
           <CantidadTalle talle={t.talle} cantidad={t.cantidad} original={t.original} disabled={ocupado} onCambio={(n) => onCantidad(t.talle, n)} />
-          {onDestino && t.destino !== undefined && <DestinoTalle talle={t.talle} destino={t.destino} manual={!!t.destinoManual} nuevo={!!t.nuevo} disabled={ocupado} onCambio={(d) => onDestino(t.talle, d)} />}
         </span>)}
       </div> : null}
       {it.tabla && <TablaTalle t={it.tabla} onTabla={onTabla} ocupado={ocupado} />}
@@ -141,20 +144,85 @@ function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, onTabla, o
       {it.motivo && <div style={{ color: COLOR_ITEM[it.estado], marginTop: 2 }}>{it.estado === 'bloqueado' ? '⛔ ' : ''}{it.motivo}</div>}
       {it.opciones.filter((o) => o.bloqueo && it.opciones.length > 1).map((o) => <div key={o.clave} style={{ opacity: 0.75 }}>· {o.etiqueta}: {o.bloqueo}</div>)}
       {a?.tipo === 'alta' && <div style={{ marginTop: 4 }}>
-        🆕 Crear <input value={eleccion?.titulo ?? a.titulo} onChange={(ev) => onElegir({ titulo: ev.target.value })} style={{ ...inputSt, width: 'min(420px, 100%)' }} />
+        Crear producto nuevo: <input value={eleccion?.titulo ?? a.titulo} onChange={(ev) => onElegir({ titulo: ev.target.value })} style={{ ...inputSt, width: 'min(420px, 100%)' }} />
         <div style={{ opacity: 0.8, marginTop: 2 }}>
           Tipo {a.productType} · precio {fmt(a.precio)} · costo {fmt(a.costo)} · {a.variantes.map((v) => `${v.talle}:${v.cantidad}`).join(' ')} · SKU {a.variantes[0]?.sku}… · etiquetas {a.etiquetas.join(', ')}
         </div>
       </div>}
-      {a?.tipo === 'reposicion' && <div style={{ marginTop: 6 }}>
-        🔁 {a.lineas.length || a.crear?.length ? <>Sumar en «{a.titulo}»: </> : <>«{a.titulo}»: no se suma stock (vendido en iD), solo precio y costo</>}{[
-          ...a.lineas.map((l) => (l.actual === null ? `${l.talle} alta con ${l.suma}` : `${l.talle} ${l.actual}→${l.actual + l.suma}`)),
-          ...(a.crear ?? []).map((c) => `🆕 ${c.talle} (talle nuevo) con ${c.suma}`),
-        ].join(' · ')}
-        {a.etiquetas?.length ? <div style={{ opacity: 0.8 }}>🏷️ Etiquetas que se agregan: {a.etiquetas.join(', ')}{a.quitarEtiquetas?.length ? ` (se saca ${a.quitarEtiquetas.join(', ')})` : ''}</div> : null}
-      </div>}
+      {a?.tipo === 'reposicion' && <Reposicion a={a} enFilas={onDestino && onCantidad && it.talles?.length ? it.talles.map((t) => t.destino ?? '') : []} />}
       {a?.tipo === 'reposicion' && a.ajuste && <Ajuste a={a.ajuste} precio={eleccion?.precio} onPrecio={(precio) => onElegir({ precio })} />}
       {op?.avisos.map((x, i) => <div key={i} style={{ color: AMARILLO, marginTop: 6, fontSize: '0.8rem' }}>⚠️ {x}</div>)}
+      </div>
+    </div>
+  );
+}
+
+const mismo = (x: string, y: string) => x.trim().replace(',', '.').toUpperCase() === y.trim().replace(',', '.').toUpperCase();
+type Repo = ReposicionFamily;
+
+/** Cómo queda el stock de Martínez en ese talle de Shopify (lo mismo que dice la línea «Se suma en…»). */
+function stockDe(a: Repo | undefined, destino: string | undefined): string {
+  if (!a || !destino) return '—';
+  const l = a.lineas.find((x) => mismo(x.talle, destino));
+  if (l) return l.actual === null ? `alta con ${l.suma}` : `${l.actual} → ${l.actual + l.suma}`;
+  const c = a.crear?.find((x) => mismo(x.talle, destino));
+  return c ? `talle nuevo con ${c.suma}` : '—';
+}
+
+/** Dónde se suma. Con los talles en filas, acá van solo los talles que no tienen fila (si hubiera). */
+function Reposicion({ a, enFilas }: { a: Repo; enFilas: string[] }) {
+  const fuera = (t: string) => !enFilas.some((d) => d && mismo(d, t));
+  const resto = [
+    ...a.lineas.filter((l) => fuera(l.talle)).map((l) => (l.actual === null ? `${l.talle} alta con ${l.suma}` : `${l.talle} ${l.actual}→${l.actual + l.suma}`)),
+    ...(a.crear ?? []).filter((c) => fuera(c.talle)).map((c) => `${c.talle} (talle nuevo) con ${c.suma}`),
+  ];
+  const suma = a.lineas.length || a.crear?.length;
+  return (
+    <div style={{ marginTop: 6 }}>
+      {!suma ? <>«{a.titulo}»: no se suma stock (vendido en iD), solo precio y costo</>
+        : enFilas.length ? <>Se suma en «{a.titulo}»{resto.length ? `: ${resto.join(' · ')}` : '.'}</>
+        : <>Sumar en «{a.titulo}»: {resto.join(' · ')}</>}
+      {a.etiquetas?.length ? <div style={{ opacity: 0.8 }}>Etiquetas que se agregan: {a.etiquetas.join(', ')}{a.quitarEtiquetas?.length ? ` (se saca ${a.quitarEtiquetas.join(', ')})` : ''}</div> : null}
+    </div>
+  );
+}
+
+/**
+ * Distrinando (13-nov-2026, gax: «que los talles aparezcan como en filas para distinguir cada talle por separado»):
+ * un talle por fila, con lo que llegó, el talle de Shopify donde entra, su SKU y cómo queda el stock de Martínez.
+ */
+function TallesFilas({ it, a, ocupado, onCantidad, onDestino }: {
+  it: ItemCarga; a: Repo | AltaFamily | null | undefined; ocupado: boolean;
+  onCantidad: (talle: string, n: number) => void; onDestino: (talle: string, destino: string) => void;
+}) {
+  const repo = a?.tipo === 'reposicion' ? a : undefined;
+  const th: CSSProperties = { textAlign: 'left', fontWeight: 600, fontSize: '0.76rem', opacity: 0.7, padding: '2px 12px 4px 0', whiteSpace: 'nowrap' };
+  const td: CSSProperties = { padding: '4px 12px 4px 0', borderTop: '1px solid rgba(255,255,255,0.08)', whiteSpace: 'nowrap', verticalAlign: 'middle' };
+  return (
+    <div style={{ marginTop: 6 }}>
+      <div style={{ overflowX: 'auto' }}>
+        <table style={{ borderCollapse: 'collapse' }}>
+          <thead><tr>
+            <th style={th}>Talle que llegó</th><th style={th}>Pares</th><th style={th}>Talle en Shopify</th><th style={th}>SKU en Shopify</th>{repo ? <th style={th}>Stock en Martínez</th> : null}
+          </tr></thead>
+          <tbody>{(it.talles ?? []).map((t) => (
+            <tr key={t.talle}>
+              <td style={td}><strong>{t.talle}</strong></td>
+              <td style={td}><CantidadTalle talle={t.talle} sinTalle cantidad={t.cantidad} original={t.original} disabled={ocupado} onCambio={(n) => onCantidad(t.talle, n)} /></td>
+              <td style={td}>{t.destino !== undefined
+                ? <DestinoTalle talle={t.talle} sinEtiqueta destino={t.destino} manual={!!t.destinoManual} nuevo={!!t.nuevo} disabled={ocupado} onCambio={(d) => onDestino(t.talle, d)} />
+                : '—'}</td>
+              <td style={td}>{t.sku !== undefined
+                ? <span title={t.nuevo ? 'SKU que va a llevar el talle nuevo' : 'SKU que tiene hoy ese talle en Shopify'}
+                  style={{ fontFamily: 'monospace', fontSize: '0.8rem', padding: '1px 6px', borderRadius: 4, background: 'rgba(0,0,0,0.2)', userSelect: 'all', opacity: t.sku ? 1 : 0.6 }}>
+                  {t.sku || 'sin SKU'}
+                </span> : '—'}</td>
+              {repo ? <td style={td}>{stockDe(repo, t.destino)}</td> : null}
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+      <div style={{ marginTop: 4 }}><AgregarTalle disabled={ocupado} existentes={(it.talles ?? []).map((t) => t.talle)} onAgregar={(t, n) => onCantidad(t, n)} /></div>
     </div>
   );
 }
@@ -173,9 +241,10 @@ function TablaTalle({ t, onTabla, ocupado }: { t: TablaItem; onTabla?: (tabla: s
         </select>
       </div>
       {t.avisos.map((x, i) => <div key={i} style={{ color: AMARILLO, marginTop: 4, fontSize: '0.8rem' }}>⚠️ {x}</div>)}
-      {bloqueadas.length > 0 && <div style={{ opacity: 0.65, marginTop: 4, fontSize: '0.78rem' }}>
+      {bloqueadas.length > 0 && <details style={{ opacity: 0.7, marginTop: 4, fontSize: '0.78rem' }}>
+        <summary style={{ cursor: 'pointer' }}>Por qué no se pueden elegir otras tablas</summary>
         No se pueden elegir: {bloqueadas.map((o) => `${o.clave} (${o.bloqueo})`).join(' · ')}.
-      </div>}
+      </details>}
     </div>
   );
 }
@@ -184,8 +253,8 @@ function TablaTalle({ t, onTabla, ocupado }: { t: TablaItem; onTabla?: (tabla: s
  * Distrinando: el talle de Shopify donde entra lo que llegó (gax: «que se puedan poner los talles en donde realmente
  * entraron»). Viene el que da el SKU, la nota o la tabla; se puede escribir otro. Vacío = vuelve al automático.
  */
-function DestinoTalle({ talle, destino, manual, nuevo, disabled, onCambio }: {
-  talle: string; destino: string; manual: boolean; nuevo: boolean; disabled: boolean; onCambio: (d: string) => void;
+function DestinoTalle({ talle, destino, manual, nuevo, disabled, onCambio, sinEtiqueta }: {
+  talle: string; destino: string; manual: boolean; nuevo: boolean; disabled: boolean; onCambio: (d: string) => void; sinEtiqueta?: boolean;
 }) {
   const [texto, setTexto] = useState(destino);
   const [antes, setAntes] = useState(destino);
@@ -198,19 +267,52 @@ function DestinoTalle({ talle, destino, manual, nuevo, disabled, onCambio }: {
   };
   return (
     <label style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }} title={`Talle de Shopify donde entra el ${talle}. Escribí otro si entra en otro talle; borralo para volver al automático.`}>
-      <span style={{ opacity: 0.75 }}>→ talle</span>
+      {!sinEtiqueta && <span style={{ opacity: 0.75 }}>→ talle</span>}
       <input value={texto} disabled={disabled} inputMode="decimal" placeholder="?" aria-label={`Talle de Shopify para ${talle}`}
         onChange={(ev) => setTexto(ev.target.value)} onBlur={aplicar} onKeyDown={(ev) => { if (ev.key === 'Enter') aplicar(); }}
         style={{ ...inputSt, width: 48, padding: '2px 4px', borderColor: manual ? AMARILLO : !destino ? ROJO : undefined }} />
-      {nuevo && destino && <span style={{ fontSize: '0.72rem', color: AMARILLO }}>🆕</span>}
+      {nuevo && destino && <span style={{ fontSize: '0.72rem', color: AMARILLO }}>se crea</span>}
       {manual && <span style={{ fontSize: '0.72rem', color: AMARILLO }}>(a mano)</span>}
     </label>
   );
 }
 
+/**
+ * Distrinando (13-nov-2026, gax: «no me llegó el producto, me entró directamente en otro talle, en 13 americano»):
+ * agregar un talle US que no figura en el remito. Queda en amarillo «(remito 0)» y entra en el mail del final.
+ */
+function AgregarTalle({ existentes, disabled, onAgregar }: { existentes: string[]; disabled: boolean; onAgregar: (talle: string, n: number) => void }) {
+  const [abierto, setAbierto] = useState(false);
+  const [us, setUs] = useState('');
+  const [n, setN] = useState('1');
+  const [error, setError] = useState('');
+  if (!abierto) return <button style={{ ...botonChico, padding: '1px 8px' }} disabled={disabled} onClick={() => setAbierto(true)}>＋ Agregar talle</button>;
+  const agregar = () => {
+    const t = talleUS(us);
+    const c = Number(n.trim());
+    if (!esTalleUS(t)) { setError('Escribí el talle americano (US), por ejemplo 13 o 8.5.'); return; }
+    if (existentes.includes(`US ${t}`)) { setError(`El US ${t} ya está: cambiá su cantidad.`); return; }
+    if (!Number.isInteger(c) || c <= 0 || c > 9999) { setError('Escribí cuántos pares llegaron.'); return; }
+    onAgregar(`US ${t}`, c);
+    setAbierto(false); setUs(''); setN('1'); setError('');
+  };
+  return (
+    <span style={{ display: 'inline-flex', gap: 4, alignItems: 'center', flexWrap: 'wrap' }}>
+      <span style={{ opacity: 0.8 }}>Talle que no está en el remito: US</span>
+      <input value={us} onChange={(ev) => setUs(ev.target.value)} inputMode="decimal" placeholder="13" aria-label="Talle US a agregar" style={{ ...inputSt, width: 48, padding: '2px 4px' }} />
+      <span style={{ opacity: 0.8 }}>pares</span>
+      <input value={n} onChange={(ev) => setN(ev.target.value)} inputMode="numeric" aria-label="Pares del talle agregado" style={{ ...inputSt, width: 48, padding: '2px 4px' }}
+        onKeyDown={(ev) => { if (ev.key === 'Enter') agregar(); }} />
+      <button style={{ ...botonChico, padding: '1px 8px' }} disabled={disabled} onClick={agregar}>Agregar</button>
+      <button style={{ ...botonChico, padding: '1px 8px' }} onClick={() => { setAbierto(false); setError(''); }}>Cancelar</button>
+      {error && <span style={{ color: ROJO, fontSize: '0.78rem' }}>{error}</span>}
+    </span>
+  );
+}
+
 /** Un talle con su cantidad: se escribe y se aplica al salir del casillero o con Enter. */
-function CantidadTalle({ talle, cantidad, original, disabled, onCambio }: {
-  talle: string; cantidad: number; original: number; disabled: boolean; onCambio: (n: number) => void;
+function CantidadTalle({ talle, cantidad, original, disabled, onCambio, sinTalle }: {
+  talle: string; cantidad: number; original: number; disabled: boolean; onCambio: (n: number) => void; sinTalle?: boolean;
 }) {
   const [texto, setTexto] = useState(String(cantidad));
   const [antes, setAntes] = useState(cantidad);
@@ -222,7 +324,7 @@ function CantidadTalle({ talle, cantidad, original, disabled, onCambio }: {
   const cambiado = cantidad !== original;
   return (
     <label style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }} title={cambiado ? `El remito dice ${original}` : 'Lo que dice el remito: cambialo si llegó otra cantidad'}>
-      <strong>{talle}</strong>
+      {!sinTalle && <strong>{talle}</strong>}
       <input type="number" min={0} max={9999} step={1} inputMode="numeric" value={texto} disabled={disabled} aria-label={`Cantidad talle ${talle}`}
         onChange={(ev) => setTexto(ev.target.value)} onBlur={aplicar} onKeyDown={(ev) => { if (ev.key === 'Enter') aplicar(); }}
         style={{ ...inputSt, width: 56, padding: '2px 4px', borderColor: cambiado ? AMARILLO : undefined }} />
@@ -273,8 +375,8 @@ function Ajuste({ a, precio, onPrecio }: { a: AjustePrecio; precio?: number; onP
     <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 6, background: 'rgba(0,0,0,0.14)' }}>
       <div>
         {a.precioActual === null
-          ? <span style={{ color }}>⚠️ Los talles tienen precios distintos ({a.precios.map(fmt).join(', ') || 'sin precio'}): poné un precio para toda la curva.</span>
-          : <>{a.ok ? '✅' : '⚠️'} Margen con el costo nuevo ({fmt(a.costoNuevo)}) y el precio actual ({fmt(a.precioActual)}): <strong style={{ color }}>{pct(a.margen)}</strong>{a.ok ? '' : <span style={{ color }}> — no llega al 50%</span>}.</>}
+          ? <span style={{ color }}>Los talles tienen precios distintos ({a.precios.map(fmt).join(', ') || 'sin precio'}): poné un precio para toda la curva.</span>
+          : <>Margen con el costo nuevo ({fmt(a.costoNuevo)}) y el precio actual ({fmt(a.precioActual)}): <strong style={{ color }}>{pct(a.margen)}</strong>{a.ok ? '' : <span style={{ color }}> — no llega al 50%</span>}.</>}
         {a.basico && !a.ok && a.precioActual !== null && ' Es un básico (precio impuesto): podés dejar el precio como está.'}
       </div>
       {(obliga || a.basico || precio !== undefined) && <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 6 }}>

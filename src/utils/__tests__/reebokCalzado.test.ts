@@ -51,7 +51,7 @@ describe('Reebok Calzado',()=>{
  it('agrega US14/48 y US15/49 sin cambiar US13/47 y admite el UK13 del SKU14',()=>{
   const pares=[{us:'13',ar:'47'},{us:'14',ar:'48'},{us:'15',ar:'49'}];
   const tabla=tablaReebok(pares);
-  expect(tabla.tablaTalle).toBe('TABLA DE TALLE REEBOK HOMBRE');
+  expect(tabla.tablaTalle).toBe('TABLA DE TALLE REEBOK 1');
   for(const [ar,us,cm] of [['47','13','31'],['48','14','32'],['49','15','33']])
    expect(tabla.sizeConversion?.[ar]).toEqual({arg:ar,us,cm});
   const rs=[['14','13'],['8','7'],['8.5','7.5']].map(([us,uk])=>{
@@ -60,7 +60,7 @@ describe('Reebok Calzado',()=>{
   const result=parseReebokCalzado([headers,...rs]);
   expect(result.avisos.filter(a=>!a.includes('revisar colores'))).toEqual([]);
   expect(result.productos.RBK1100033912.sizes).toEqual({'48':1,'40':1,'40.5':1});
-  expect(result.productos.RBK1100033912.tablaTalle).toBe('TABLA DE TALLE REEBOK HOMBRE');
+  expect(result.productos.RBK1100033912.tablaTalle).toBe('TABLA DE TALLE REEBOK 1');
  });
  it('simplifica el ejemplo confirmado en resumen, alta y CSV sin cambiar sus datos',async()=>{
   const r=altaRow('10','43','RBK1100000089');
@@ -117,7 +117,7 @@ describe('Reebok Calzado',()=>{
   expect(call[1].metafields[0]).toMatchObject({ownerId:'p',namespace:'custom',key:'size_conversion',type:'json'});
  });
  it('crea AR claro sin tabla, sin escribir un JSON vacío ni convertir',async()=>{
-  const r=await processFiles(file([headers,altaRow('10.5','42')]),null,null,config);
+  const r=await processFiles(file([headers,altaRow('10.5','41.5')]),null,null,config);
   const [p]=buildMatrixProducts(r,config);expect(p.tags).toContain(REEBOK_SIN_TABLA);expect(p.sizeConversion).toBeUndefined();
   await createProducts(r,config);expect(graphql.mock.calls.some(([q])=>q.includes('mutation GuardarTabla'))).toBe(false);
  });

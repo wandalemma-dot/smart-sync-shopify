@@ -15,7 +15,7 @@
 // (`tablasDelModelo`): cargaría pares en el talle equivocado o crearía un talle repetido.
 // ============================================================================
 import type { Pedido } from './controlFacturas';
-import { coincideUS, REEBOK_TABLAS, talleArReebok } from './reebokCalzado';
+import { coincideUS, REEBOK_ALIAS, REEBOK_TABLAS, talleArReebok } from './reebokCalzado';
 
 export interface VarianteTalle { id: string; talle: string; sku: string }
 /** manual: la usuaria escribió en qué talle de Shopify entra (gax, 13-nov-2026). */
@@ -55,7 +55,7 @@ export const esTalleUS = (t: string) => /^\d{1,2}(\.\d)?[KW]?$/.test(talleUS(t))
 
 export const TABLAS_REEBOK = Object.keys(REEBOK_TABLAS);
 export const etiquetaTabla = (nombre: string) => `TABLA DE TALLE REEBOK ${nombre}`;
-/** La tabla Reebok con ese nombre (HOMBRE, MUJER, NIÑO). */
+/** La tabla Reebok con ese nombre (1, 2, MUJER, NIÑO). */
 export function tablaReebok(nombre: string): TablaTalle | null {
   const tabla = REEBOK_TABLAS[nombre];
   if (!tabla) return null;
@@ -85,10 +85,13 @@ export function arDeNotas(pedidos: Pedido[], sku: string, us: string): { ar: str
 export const etiquetasDeTabla = (etiquetas: string[]) => etiquetas.filter((t) => norm(t).startsWith('TABLA DE TALLE REEBOK'));
 /** La tabla con nombre de la etiqueta del producto, si tiene una sola etiqueta de tabla y es Hombre, Mujer o Niño. */
 export function tablaDeEtiquetas(etiquetas: string[]): string | null {
-  const tabs = etiquetasDeTabla(etiquetas).map(norm);
-  if (tabs.length !== 1) return null;
-  const nombre = tabs[0].slice('TABLA DE TALLE REEBOK'.length).trim().replace('NINO', 'NIÑO');
-  return nombre in REEBOK_TABLAS ? nombre : null;
+  // «REEBOK HOMBRE» (etiqueta vieja) es la «REEBOK 1»: con las dos etiquetas, igual es una sola.
+  const nombres = [...new Set(etiquetasDeTabla(etiquetas).map((t) => {
+    const n = norm(t).slice('TABLA DE TALLE REEBOK'.length).trim().replace('NINO', 'NIÑO');
+    return REEBOK_ALIAS[n] ?? n;
+  }))];
+  if (nombres.length !== 1) return null;
+  return nombres[0] in REEBOK_TABLAS ? nombres[0] : null;
 }
 
 /** SKU con formato del proveedor para ese código: devuelve el talle US que lleva (o null si es EAN u otro). */
