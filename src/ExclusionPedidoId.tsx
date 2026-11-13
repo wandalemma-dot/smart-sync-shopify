@@ -19,10 +19,10 @@ export default function ExclusionPedidoId({ exclusion, plantilla }: { exclusion:
       <td colSpan={2} style={{ padding: 10 }}><strong>{exclusion.alcance === 'orden' ? 'Orden excluida de esta compra' : 'Preparación excluida de esta orden'}</strong><br/>Pago: {exclusion.pago}<br/>
         <button type="button" disabled={ocupado} aria-expanded={abierto} onClick={analizar} style={{ marginTop: 8 }}>{ocupado ? 'Consultando…' : abierto ? 'Ocultar análisis' : 'Analizar por separado'}</button>
       </td>
-      <td><strong>{exclusion.orden}</strong></td><td>—</td><td>—</td><td><strong>0</strong></td><td>—</td>
+      <td><strong>{exclusion.orden}</strong></td><td>—</td><td>—</td><td>—</td><td><strong>0</strong></td><td>—</td>
       <td style={{ padding: 10, color: '#fbcfe8' }}>{exclusion.motivo}<br/><small>No se incluye en el Excel.</small></td>
     </tr>
-    {abierto && <tr><td colSpan={8} style={{ padding: 16, border: '1px solid #f9a8d4' }}>
+    {abierto && <tr><td colSpan={9} style={{ padding: 16, border: '1px solid #f9a8d4' }}>
       <h4 style={{ marginTop: 0 }}>Análisis separado de {exclusion.orden}</h4>
       <p>Consulta los pendientes actuales de iD y los compara con la plantilla cargada. Las cantidades de esta revisión no se suman al Excel principal.</p>
       {ocupado && <p role="status">Consultando artículos y motivos actuales en Shopify…</p>}
