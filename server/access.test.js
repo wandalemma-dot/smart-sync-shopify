@@ -141,3 +141,43 @@ describe('session entry', () => {
     expect(a.statusCode).toBe(401); expect(b.statusCode).toBe(403);
   });
 });
+
+describe('clave del depósito (misma app, se revoca aparte)', () => {
+  const depKey = 'dep-test-only-'.padEnd(48, 'd');
+  const login = key => { const res = response(); session({ method: 'POST', headers: { origin }, body: { key } }, res); return res; };
+  beforeEach(() => { vi.stubEnv('APP_ACCESS_KEY_DEPOSITO', depKey); });
+
+  it('entra con su propia clave y tiene los mismos permisos que la principal', async () => {
+    const dep = login(depKey);
+    expect(dep.statusCode).toBe(200);
+    expect(JSON.stringify(dep)).not.toContain(depKey);
+    const cookie = dep.headers['Set-Cookie'].split(';')[0];
+    const g = response(); session({ method: 'GET', headers: { cookie } }, g);
+    expect(g.body.authenticated).toBe(true);
+    const res = response(); await handler(request('mutation { inventorySetQuantities(input: {}) { userErrors { message } } }', { origin, cookie }), res);
+    expect(res.statusCode).toBe(200);
+    expect(login(appKey).statusCode).toBe(200);
+  });
+  it('sin la variable, o igual a la principal, la clave del depósito no abre nada', () => {
+    vi.stubEnv('APP_ACCESS_KEY_DEPOSITO', '');
+    expect(login(depKey).statusCode).toBe(401);
+    vi.stubEnv('APP_ACCESS_KEY_DEPOSITO', 'corta');
+    expect(login('corta').statusCode).toBe(401);
+  });
+  it('cambiar la clave del depósito lo deja afuera sin tocar la sesión principal', async () => {
+    const dep = `${COOKIE}=${makeSession(Date.now(), 'deposito')}`;
+    const yo = `${COOKIE}=${makeSession()}`;
+    vi.stubEnv('APP_ACCESS_KEY_DEPOSITO', 'otra-clave-'.padEnd(48, 'x'));
+    const a = response(); await handler(request('{ shop { name } }', { origin, cookie: dep }), a);
+    const b = response(); await handler(request('{ shop { name } }', { origin, cookie: yo }), b);
+    expect(a.statusCode).toBe(401); expect(b.statusCode).toBe(200);
+  });
+  it('no se pueden cruzar las firmas de una clave y la otra', async () => {
+    const [payloadDep, firmaDep] = makeSession(Date.now(), 'deposito').split('.');
+    const [payloadYo, firmaYo] = makeSession().split('.');
+    for (const token of [`${payloadYo}.${firmaDep}`, `${payloadDep}.${firmaYo}`]) {
+      const res = response(); await handler(request('{ shop { name } }', { origin, cookie: `${COOKIE}=${token}` }), res);
+      expect(res.statusCode).toBe(401);
+    }
+  });
+});

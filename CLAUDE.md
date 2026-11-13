@@ -1069,6 +1069,7 @@ Solo lectura. No escribe en Shopify ni carga la web externa.
   `productVariantsBulkUpdate`. **No agregues mutaciones sin pensarlo.**
 - `api/remito.js` (fotos con IA) se BORRÓ el 25-oct-2026: era un endpoint público que gastaba la cuenta de Anthropic.
   Desde el 11-nov-2026 la foto del remito se lee con `api/leer-remito.js`: SOLO sesión humana y mismo origen (el bot no entra), no guarda la foto ni toca Shopify. No volver a abrirlo al público.
+- **Clave del depósito (13-nov-2026, pedido de gax).** La app no tiene usuarios: hay UNA clave principal (`APP_ACCESS_KEY`, Vercel) y, aparte, `APP_ACCESS_KEY_DEPOSITO` (32+ caracteres, distinta de la principal). gax eligió que la del depósito tenga los MISMOS permisos (toda la app); `identity()` devuelve `'user'` para las dos. Solo cambia la firma: la sesión del depósito se firma con SU clave, así que cambiarla o borrarla en Vercel (y volver a desplegar) deja afuera al depósito sin tocar la principal. Sin la variable, todo sigue como antes. `roleForKey()` en `server/access.js`, tests al final de `server/access.test.js`.
 - Antecedente: hubo un token y un client secret hardcodeados en el repo público.
   Se rotaron. **Nunca vuelvas a poner un secreto en el código.**
 - 11-nov-2026: `TRELLO_TOKEN` estaba guardado en Vercel con un salto de línea al final. Node

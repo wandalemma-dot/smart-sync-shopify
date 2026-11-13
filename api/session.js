@@ -1,4 +1,4 @@
-import { allowedOrigin, identity, makeSession, noStore, sameSecret, sessionCookie, validSecret } from '../server/access.js';
+import { allowedOrigin, identity, makeSession, noStore, roleForKey, sessionCookie, validSecret } from '../server/access.js';
 
 export default function handler(req, res) {
   noStore(res);
@@ -18,7 +18,9 @@ export default function handler(req, res) {
         : 'La clave guardada en Vercel tiene menos de 32 caracteres. Guardá una clave más larga y actualizá el despliegue.',
     });
   }
-  if (!sameSecret(req.body?.key, process.env.APP_ACCESS_KEY)) return res.status(401).json({ error: 'Clave de acceso incorrecta.' });
-  res.setHeader('Set-Cookie', sessionCookie(makeSession()));
+  // Clave principal o clave del depósito (misma app; la del depósito se puede cambiar aparte).
+  const rol = roleForKey(req.body?.key);
+  if (!rol) return res.status(401).json({ error: 'Clave de acceso incorrecta.' });
+  res.setHeader('Set-Cookie', sessionCookie(makeSession(Date.now(), rol)));
   return res.status(200).json({ authenticated: true, readOnly: true });
 }
