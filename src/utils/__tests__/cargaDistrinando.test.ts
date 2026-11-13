@@ -213,6 +213,64 @@ describe('carga de Distrinando', () => {
     expect(llamadas).toEqual(['EtiquetarFamily', 'QuitarTabla', 'TallesCarga', 'CrearTallesCarga', 'OrdenarTallesCarga']);
   });
 
+  it('el SKU se puede escribir o escanear (gax: «que yo pueda escanear uno nuevo»); si es un EAN, también va como código de barras', () => {
+    const r = resultado();
+    const skus = new Map<string, Record<string, string>>([['RBK110S236074', { 'US 12': '4066749999999' }], ['RBK110S236046', { 'US 11': 'ESCANEADO-44' }]]);
+    const plan = planCargaDistrinando(r, estado(), {}, [NOTA], new Map(), new Map(), new Map(), skus);
+    const it74 = item(plan, 'RBK110S236074');
+    expect(it74.talles?.[1]).toMatchObject({ talle: 'US 12', sku: '4066749999999', skuManual: true });
+    expect(it74.talles?.[0].skuManual).toBeUndefined();
+    const a = it74.opciones[0].accion as ReposicionFamily;
+    expect(a.cambiarSku).toEqual([expect.objectContaining({ talle: '44', antes: '4066749645083', sku: '4066749999999', barcode: '4066749999999' })]);
+    expect(it74.opciones[0].avisos.join(' ')).toMatch(/Talle 44: el SKU pasa de 4066749645083 a 4066749999999 \(también como código de barras\)/);
+    // Talle nuevo: lleva el escaneado; en etiquetas sigue el SKU del proveedor. No es EAN: sin código de barras.
+    const b = item(plan, 'RBK110S236046').opciones[0].accion as ReposicionFamily;
+    expect(b.crear).toEqual([{ talle: '44', sku: 'RBK110S236046-11', suma: 4, skuShopify: 'ESCANEADO-44' }]);
+    expect(b.etiquetas).toEqual(['RBK110S236046-11']);
+    // El SKU de otro talle del producto no se puede usar.
+    const choca = planCargaDistrinando(r, estado(), {}, [NOTA], new Map(), new Map(), new Map(), new Map([['RBK110S236074', { 'US 12': '4066749645052' }]]));
+    expect(item(choca, 'RBK110S236074').motivo).toMatch(/el SKU 4066749645052 ya lo tiene el talle 43/);
+    // Igual al que tiene: no cambia nada.
+    const igual = planCargaDistrinando(r, estado(), {}, [NOTA], new Map(), new Map(), new Map(), new Map([['RBK110S236074', { 'US 12': '4066749645083' }]]));
+    expect((item(igual, 'RBK110S236074').opciones[0].accion as ReposicionFamily).cambiarSku).toBeUndefined();
+  });
+
+  it('un talle agregado queda en su lugar (gax: «que el 11 quede arriba del 12»)', () => {
+    const plan = planCargaDistrinando(resultado(), estado(), {}, [NOTA], new Map(), new Map([['RBK110S236074', { 'US 10.5': 1 }]]));
+    expect(item(plan, 'RBK110S236074').talles?.map((t) => t.talle)).toEqual(['US 10.5', 'US 11', 'US 12']);
+  });
+
+  it('un artículo que se saca de la carga (no llegó) va al mail', () => {
+    const plan = planCargaDistrinando(resultado(), estado(), {}, [NOTA]);
+    const difs = diferenciasDeTalles(plan.items, [], { RBK110S236046: 38389.44 }, new Set(['RBK110S236046']));
+    expect(difs).toEqual([expect.objectContaining({ codigo: 'RBK110S236046', noLlego: true, talles: [{ talle: 'US 11', remito: 4, llego: 0 }] })]);
+    const { cuerpo } = textoAvisoTalles(difs, { proveedor: 'Distrinando', remito: '0085-00206200' });
+    expect(cuerpo).toMatch(/Según el remito: US 11 ×4\. No llegó\./);
+    expect(cuerpo).toMatch(/Faltan 4 pares \(\$ 153\.557,76 neto a precio de factura\)/);
+  });
+
+  it('ejecución: el SKU escaneado se cambia después de sumar el stock, con su código de barras', async () => {
+    const plan = planCargaDistrinando(resultado(), estado(), {}, [NOTA], new Map(), new Map(), new Map(), new Map([['RBK110S236074', { 'US 12': '4066749999999' }]]));
+    const llamadas: string[] = [];
+    const gql = vi.fn(async (q: string, v?: Record<string, unknown>) => {
+      const nombre = /(?:mutation|query)\s+(\w+)/.exec(q)?.[1] ?? '?';
+      llamadas.push(nombre);
+      if (nombre === 'SumarFamily') return { inventorySetQuantities: { inventoryAdjustmentGroup: { id: 'g' }, userErrors: [] } };
+      if (nombre === 'CambiarSkuCarga') {
+        expect(v!.variants).toEqual([{ id: expect.stringMatching(/ProductVariant/), inventoryItem: { sku: '4066749999999' }, barcode: '4066749999999' }]);
+        return { productVariantsBulkUpdate: { productVariants: [{ id: 'x' }], userErrors: [] } };
+      }
+      throw new Error(`inesperada ${nombre}`);
+    });
+    const elegidas = Object.fromEntries(plan.items.filter((i) => i.opciones.length).map((i) => [i.codigo, { clave: i.codigo === 'RBK110S236074' ? i.opciones[0].clave : 'no' }]));
+    const res = await ejecutarCargaFamily(plan, elegidas, {
+      gql, reservar: async () => ({ ok: true }), terminar: async () => {}, liberar: async () => {}, clave: () => 'k', antes: async () => ({ estado: 'ok', mensaje: '' }),
+    });
+    expect(res[0].estado).toBe('cargada');
+    expect(res[0].mensaje).toMatch(/SKU cambiado: 44 4066749645083 → 4066749999999 \(también código de barras\)/);
+    expect(llamadas).toEqual(['SumarFamily', 'CambiarSkuCarga']);
+  });
+
   it('si el talle apareció mientras tanto, no lo crea', async () => {
     const plan = planCargaDistrinando(resultado(), estado(), {}, [NOTA]);
     const gql = vi.fn(async (q: string, v?: Record<string, unknown>) => {

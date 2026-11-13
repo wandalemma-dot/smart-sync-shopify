@@ -20,7 +20,7 @@
 // Ejecución, marca «una sola vez» y vista previa: las de iD/Family (cargaFamily.ts).
 // ============================================================================
 import { claveCodigo, type FilaChecklist, type LineaPedido, type Pedido, type ResultadoFactura } from './controlFacturas';
-import { textoCarga, type AltaFamily, type CargaFamily, type ItemCarga, type LineaReposicion, type OpcionCarga, type PlanCarga, type TablaItem } from './cargaFamily';
+import { textoCarga, type AltaFamily, type CargaFamily, type ItemCarga, type LineaReposicion, type OpcionCarga, type PlanCarga, type ReposicionFamily, type TablaItem } from './cargaFamily';
 import { ajusteDe, etiquetaDelCodigo, formasCodigo, SUCURSAL_CARGA_ID, type EstadoCargaId, type ProductoId } from './cargaId';
 import { precioReebokCalzado, REEBOK_TABLAS, tituloReebokCalzado } from './reebokCalzado';
 import { niceTitle, redondear2 } from './syncLogic';
@@ -56,7 +56,15 @@ export function tituloDistrinando(descripcion: string): string {
   return niceTitle(tituloReebokCalzado(`Zapatillas Reebok ${d}`));
 }
 
-interface Llega { us: string; cantidad: number; original: number; /** Talle de Shopify escrito a mano. */ destino?: string }
+interface Llega { us: string; cantidad: number; original: number; /** Talle de Shopify escrito a mano. */ destino?: string; /** SKU escrito o escaneado a mano. */ sku?: string }
+/** SKU escrito o escaneado a mano (13-nov-2026, gax: «que yo pueda escanear uno nuevo»): código → «US 11» → SKU. */
+export type SkusDis = ReadonlyMap<string, Readonly<Record<string, string>>>;
+/** Un SKU escrito a mano: sin espacios, hasta 100 caracteres. null = no sirve. */
+export const leerSku = (s: string) => { const t = String(s ?? '').trim(); return /^\S{1,100}$/.test(t) ? t : null; };
+/** Un EAN (8, 12, 13 o 14 dígitos): va también como código de barras, como en las altas. */
+export const esEan = (s: string) => /^(\d{8}|\d{12,14})$/.test(s);
+/** Los talles en orden (gax: «que el US 11 quede arriba del 12»). */
+const porTalle = (a: Llega, b: Llega) => (Number(a.us) || 0) - (Number(b.us) || 0);
 /** Talle de Shopify escrito a mano: código → «US 11» → AR. */
 export type DestinosDis = ReadonlyMap<string, Readonly<Record<string, string>>>;
 /** Un talle de calzado de Shopify escrito a mano: «44», «38.5», «38,5». */
@@ -158,19 +166,33 @@ function opcionReposicion(codigo: string, p: ProductoId | undefined, llegan: Lle
   if (!esReebok(p.vendor)) return { ...base, accion: null, bloqueo: `«${p.titulo}» es de ${p.vendor || 'otra marca'}: por ahora la carga de Distrinando es solo Reebok. Cargalo a mano.` };
   const t = tabla ? tablaReebok(tabla) : null;
   const lineas: LineaReposicion[] = [];
-  const crear: { talle: string; sku: string; suma: number }[] = [];
+  const crear: NonNullable<ReposicionFamily['crear']> = [];
+  const cambiarSku: NonNullable<ReposicionFamily['cambiarSku']> = [];
   const problemas: string[] = [];
+  // SKU escaneado a mano: no puede estar en otro talle del producto ni repetido en esta carga.
+  const skuOcupado = (sku: string, salvo?: string) => {
+    const v = p.variantes.find((x) => x.id !== salvo && norm(x.sku) === norm(sku));
+    if (v) return `el SKU ${sku} ya lo tiene el talle ${v.talle}`;
+    return llegan.filter((x) => x.cantidad > 0 && x.sku && norm(x.sku) === norm(sku)).length > 1 ? `el SKU ${sku} está escrito en dos talles` : '';
+  };
   for (const l of llegan) {
     if (!(l.cantidad > 0)) continue;
     const u = ubicar(codigo, l, p.variantes, pedidos, t);
     if ('error' in u) {
       if (!u.falta) { problemas.push(`US ${l.us}: ${u.error}`); continue; }
       if (crear.some((c) => mismoTalle(c.talle, u.falta!.talle))) { problemas.push(`US ${l.us}: dos US van al talle ${u.falta.talle}`); continue; }
-      crear.push({ talle: u.falta.talle, sku: u.falta.skuProveedor, suma: l.cantidad });
+      const manual = l.sku && norm(l.sku) !== norm(u.falta.skuProveedor) ? l.sku : undefined;
+      if (manual) { const o = skuOcupado(manual); if (o) { problemas.push(`US ${l.us}: ${o}`); continue; } }
+      crear.push({ talle: u.falta.talle, sku: u.falta.skuProveedor, suma: l.cantidad, ...(manual ? { skuShopify: manual, ...(esEan(manual) ? { barcode: manual } : {}) } : {}) });
       continue;
     }
     avisos.push(...u.avisos);
     const v = p.variantes.find((x) => x.id === u.varianteId)!;
+    if (l.sku && norm(l.sku) !== norm(v.sku)) {
+      const o = skuOcupado(l.sku, v.id);
+      if (o) { problemas.push(`US ${l.us}: ${o}`); continue; }
+      cambiarSku.push({ id: v.id, talle: v.talle, antes: v.sku ?? '', sku: l.sku, ...(esEan(l.sku) ? { barcode: l.sku } : {}) });
+    }
     if (!v.seguimiento || !v.inventoryItemId) { problemas.push(`el talle ${v.talle} no lleva control de stock`); continue; }
     const ya = lineas.find((x) => x.inventoryItemId === v.inventoryItemId);
     if (ya) { problemas.push(`US ${l.us}: el talle ${v.talle} ya recibe otro US`); continue; }
@@ -185,7 +207,8 @@ function opcionReposicion(codigo: string, p: ProductoId | undefined, llegan: Lle
   if (!ajuste) avisos.push('La factura no trae el precio de lista de este artículo: no reviso el margen ni el costo.');
   else for (const c of ajuste.conservan) if (c.motivo) avisos.push(`Talle ${c.talle}: ya tenía ${c.stock} en Martínez y ${c.motivo}. Conserva su costo: revisalo a mano.`);
   for (const l of lineas) if (l.actual === null) avisos.push(`Talle ${l.talle}: no está dado de alta en ${SUCURSAL_CARGA_ID}; se da de alta con ${l.suma}.`);
-  if (crear.length) avisos.push(`Se crea${crear.length > 1 ? 'n' : ''} el talle ${crear.map((c) => `${c.talle} (SKU ${c.sku})`).join(', ')} con el precio de la curva y costo ${ajuste ? redondear2(lista * (1 - bonif / 100)) : ''}.`);
+  for (const x of cambiarSku) avisos.push(`Talle ${x.talle}: el SKU pasa de ${x.antes || 'vacío'} a ${x.sku}${x.barcode ? ' (también como código de barras)' : ''}.`);
+  if (crear.length) avisos.push(`Se crea${crear.length > 1 ? 'n' : ''} el talle ${crear.map((c) => `${c.talle} (SKU ${c.skuShopify ?? c.sku})`).join(', ')} con el precio de la curva y costo ${ajuste ? redondear2(lista * (1 - bonif / 100)) : ''}.`);
   if (p.estado !== 'ACTIVE') avisos.push(`El producto está ${p.estado === 'DRAFT' ? 'en borrador' : 'archivado'} en Shopify: se le suma igual el stock.`);
   // Etiquetas: el código del proveedor, la tabla elegida y el SKU del proveedor de los talles nuevos.
   const etiquetas: string[] = [];
@@ -200,7 +223,7 @@ function opcionReposicion(codigo: string, p: ProductoId | undefined, llegan: Lle
   return {
     ...base, accion: {
       tipo: 'reposicion', productoId: p.id, titulo: p.titulo, lineas, etiquetar: false, ...(ajuste ? { ajuste } : {}),
-      ...(crear.length ? { crear } : {}), ...(etiquetas.length ? { etiquetas } : {}), ...(quitar.length ? { quitarEtiquetas: quitar } : {}),
+      ...(crear.length ? { crear } : {}), ...(cambiarSku.length ? { cambiarSku } : {}), ...(etiquetas.length ? { etiquetas } : {}), ...(quitar.length ? { quitarEtiquetas: quitar } : {}),
     },
   };
 }
@@ -213,6 +236,7 @@ function opcionAlta(codigo: string, llegan: Llega[], pedidos: Pedido[], tabla: s
   if (!(lista > 0)) return { ...base, accion: null, bloqueo: 'La factura no trae el precio de lista: no puedo calcular precio ni costo. Crealo desde Sincronización.' };
   const t = tabla ? tablaReebok(tabla) : null;
   const variantes: AltaFamily['variantes'] = [];
+  const proveedor: string[] = [];
   const problemas: string[] = [];
   for (const l of llegan) {
     if (!(l.cantidad > 0)) continue;
@@ -221,14 +245,18 @@ function opcionAlta(codigo: string, llegan: Llega[], pedidos: Pedido[], tabla: s
     const f = 'falta' in u ? u.falta! : null;
     if (!f) continue;
     if (variantes.some((v) => mismoTalle(v.talle, f.talle))) { problemas.push(`dos US van al talle ${f.talle}`); continue; }
-    variantes.push({ talle: f.talle, sku: f.skuProveedor, cantidad: l.cantidad });
+    const manual = l.sku && norm(l.sku) !== norm(f.skuProveedor) ? l.sku : undefined;
+    if (manual && llegan.filter((x) => x.cantidad > 0 && x.sku && norm(x.sku) === norm(manual)).length > 1) { problemas.push(`el SKU ${manual} está escrito en dos talles`); continue; }
+    variantes.push({ talle: f.talle, sku: manual ?? f.skuProveedor, cantidad: l.cantidad, ...(manual && esEan(manual) ? { barcode: manual } : {}) });
+    proveedor.push(f.skuProveedor);
   }
   if (problemas.length) return { ...base, accion: null, bloqueo: `${problemas.join('; ')}.` };
   if (!variantes.length) return { ...base, accion: null, bloqueo: 'No hay unidades para cargar.' };
   variantes.sort((a, b) => Number(a.talle) - Number(b.talle));
   const costo = redondear2(lista * (1 - bonif / 100));
   const precio = precioReebokCalzado(lista);
-  const etiquetas = [codigo, ...variantes.map((v) => v.sku), ...(tabla ? [etiquetaTabla(tabla)] : [])];
+  // En etiquetas va siempre el SKU del proveedor (aunque se haya escaneado otro para el talle).
+  const etiquetas = [codigo, ...proveedor, ...(tabla ? [etiquetaTabla(tabla)] : [])];
   if (!tabla) avisos.push('Se crea sin tabla de talle (los AR salen de la nota del proveedor). Si querés, elegí una arriba.');
   return {
     ...base, accion: {
@@ -243,7 +271,7 @@ function opcionAlta(codigo: string, llegan: Llega[], pedidos: Pedido[], tabla: s
  * `pedidos`: todas las notas de Distrinando (dan el AR que informa el proveedor y la curva de los packs).
  */
 export function planCargaDistrinando(r: ResultadoFactura, estado: EstadoCargaId, cargas: Record<string, CargaFamily>, pedidos: Pedido[],
-  tablas: TablasCarga = new Map(), cantidades: CantidadesDis = new Map(), destinos: DestinosDis = new Map()): PlanCarga {
+  tablas: TablasCarga = new Map(), cantidades: CantidadesDis = new Map(), destinos: DestinosDis = new Map(), skus: SkusDis = new Map()): PlanCarga {
   const f = r.factura;
   const avisos: string[] = [];
   const remito = r.remito?.numero || f.remito || '';
@@ -270,6 +298,7 @@ export function planCargaDistrinando(r: ResultadoFactura, estado: EstadoCargaId,
     // Cantidades escritas a mano (por US).
     const escritas = cantidades.get(c.codigo) ?? {};
     const aMano = destinos.get(c.codigo) ?? {};
+    const skusAMano = skus.get(c.codigo) ?? {};
     // Talles agregados a mano que no están en el remito (13-nov-2026, gax: «me entró en otro talle, en 13 americano»).
     const agregados: Llega[] = Object.keys(escritas)
       .filter((k) => /^US /.test(k) && esTalleUS(k.slice(3)) && !llegada.llegan.some((l) => etiquetaUS(l.us) === etiquetaUS(talleUS(k.slice(3)))))
@@ -278,8 +307,9 @@ export function planCargaDistrinando(r: ResultadoFactura, estado: EstadoCargaId,
     const llegan = [...llegada.llegan, ...agregados].map((l) => {
       const x = escritas[etiquetaUS(l.us)] !== undefined ? { ...l, cantidad: escritas[etiquetaUS(l.us)] } : { ...l };
       const d = aMano[etiquetaUS(l.us)] ? leerDestino(aMano[etiquetaUS(l.us)]) : null;
-      return d ? { ...x, destino: d } : x;
-    });
+      const k = skusAMano[etiquetaUS(l.us)] ? leerSku(skusAMano[etiquetaUS(l.us)]) : null;
+      return { ...x, ...(d ? { destino: d } : {}), ...(k ? { sku: k } : {}) };
+    }).sort(porTalle);
     const unidades = llegan.reduce((s, l) => s + l.cantidad, 0);
     const cambiadas = llegan.filter((l) => l.cantidad !== l.original);
     const base = { codigo: c.codigo, descripcion, unidades, firma: firmaBase, talles: llegan.map((l) => ({ talle: etiquetaUS(l.us), cantidad: l.cantidad, original: l.original })) };
@@ -297,10 +327,12 @@ export function planCargaDistrinando(r: ResultadoFactura, estado: EstadoCargaId,
       const destino = 'error' in u ? u.falta?.talle ?? '' : u.talle;
       // SKU que tiene hoy ese talle en Shopify (gax: «para escanearlo o saber qué SKU tiene»); si se crea, el que va a llevar.
       const vDestino = 'error' in u ? (destino ? productos[0]?.variantes.find((v) => mismoTalle(v.talle, destino)) : undefined) : productos[0]?.variantes.find((v) => v.id === u.varianteId);
-      const sku = 'error' in u && u.falta ? u.falta.skuProveedor : vDestino ? vDestino.sku ?? '' : undefined;
+      const auto = 'error' in u && u.falta ? u.falta.skuProveedor : vDestino ? vDestino.sku ?? '' : undefined;
+      const sku = auto !== undefined && l.sku ? l.sku : auto;
       return {
         talle: etiquetaUS(l.us), cantidad: l.cantidad, original: l.original, destino, ...(sku !== undefined ? { sku } : {}),
         ...(l.destino ? { destinoManual: true } : {}), ...('error' in u && u.falta ? { nuevo: true } : {}),
+        ...(auto !== undefined && l.sku && norm(l.sku) !== norm(auto) ? { skuManual: true } : {}),
       };
     });
     const lista = Number(ren?.precioUnitario) || 0, bonif = Number(ren?.bonificacion) || 0;
