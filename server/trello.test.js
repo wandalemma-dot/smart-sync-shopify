@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import * as XLSX from 'xlsx';
 import { unzipSync, zipSync } from 'fflate';
-import { adjuntarArchivo, bajarAdjunto, esVerde, fechaCreacion, listarTarjetas, MAX_ADJUNTO, nombreAdjunto, verdesDe } from './trello.js';
+import { adjuntarArchivo, bajarAdjunto, esVerde, fechaCreacion, listarTarjetas, MAX_ADJUNTO, moverTarjeta, nombreAdjunto, verdesDe } from './trello.js';
 import { esVerde as esVerdeApp } from '../src/utils/planillaVerde.ts';
 import { NOTA_1522, VERDES_1522, planillaFalsa } from '../src/utils/__tests__/planillaFalsa.ts';
 import { leerPedidoAuto } from '../src/utils/lectoresFacturas.ts';
@@ -367,5 +367,58 @@ describe('Adjuntar la factura y el remito a la tarjeta (14-nov-2026)', () => {
     const r2 = res();
     await handler({ method: 'POST', headers: { cookie: `${COOKIE}=${makeSession()}`, origin: 'https://otro.example', host: 'app.example', 'content-type': 'application/json' }, body: { accion: 'adjuntar' } }, r2);
     expect(r2.code).toBe(403);
+  });
+});
+
+describe('Mover una tarjeta de lista (14-nov-2026)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+  const LISTA = 'b'.repeat(24);
+  function trello({ boardCard = BOARD_ID, boardLista = BOARD_ID, idList = 'a'.repeat(24), cerrada = false, estado = 200 } = {}) {
+    const puts = [];
+    const f = vi.fn(async (url, opts = {}) => {
+      const ruta = url.replace('https://api.trello.com/1', '');
+      if (opts.method === 'PUT') {
+        puts.push({ ruta, auth: opts.headers.Authorization });
+        return estado === 200 ? Response.json({ id: CARD }) : new Response('unauthorized permission requested', { status: estado });
+      }
+      if (ruta.startsWith(`/cards/${CARD}`)) return Response.json({ idBoard: boardCard, idList, closed: false });
+      if (ruta.startsWith(`/lists/${LISTA}`)) return Response.json({ idBoard: boardLista, closed: cerrada, name: 'FINALIZADO' });
+      if (ruta.startsWith('/boards/')) return Response.json({ id: BOARD_ID });
+      return new Response('', { status: 404 });
+    });
+    return { f, puts };
+  }
+
+  it('pasa la tarjeta a la lista (arriba), con las claves en el encabezado', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    const { f, puts } = trello();
+    expect(await moverTarjeta(CARD, LISTA, f)).toEqual({ yaEstaba: false });
+    expect(puts).toEqual([{ ruta: `/cards/${CARD}?idList=${LISTA}&pos=top`, auth: 'OAuth oauth_consumer_key="k", oauth_token="t"' }]);
+    for (const [url] of f.mock.calls) expect(url).not.toMatch(/key=|token=/);
+  });
+
+  it('si ya está en esa lista no hace nada', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    const { f, puts } = trello({ idList: LISTA });
+    expect(await moverTarjeta(CARD, LISTA, f)).toEqual({ yaEstaba: true });
+    expect(puts).toHaveLength(0);
+  });
+
+  it('solo tarjetas y listas del tablero de compras; lista archivada no', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    for (const op of [{ boardCard: 'e'.repeat(24) }, { boardLista: 'e'.repeat(24) }, { cerrada: true }]) {
+      const { f, puts } = trello(op);
+      await expect(moverTarjeta(CARD, LISTA, f)).rejects.toThrow(/tablero de compras|archivada/);
+      expect(puts).toHaveLength(0);
+    }
+    const { f } = trello();
+    await expect(moverTarjeta('../x', LISTA, f)).rejects.toThrow(/inválido/);
+    await expect(moverTarjeta(CARD, 'x', f)).rejects.toThrow(/inválido/);
+  });
+
+  it('con la clave de solo lectura avisa que hay que cambiarla', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    const { f } = trello({ estado: 401 });
+    await expect(moverTarjeta(CARD, LISTA, f)).rejects.toThrow(/solo lectura/);
   });
 });

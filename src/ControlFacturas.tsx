@@ -20,7 +20,7 @@ import {
 import { leerFacturaDistrinando, leerFacturaId, leerPedidoAuto, leerTextoRemito, textoRemito, type HojaMarcada, type ItemPdf } from './utils/lectoresFacturas';
 import { celdasVerdes, hojaVisible, marcarPlanilla } from './utils/planillaVerde';
 import { consejoNota, fusionarPlanilla, marcasDeNota, type ConsejoNota, type MarcasNota } from './utils/marcasPlanilla';
-import { conEstadoTrello, estadosTarjetas, listaDeParciales, listasDePendientes, tarjetaDeNota, type EstadoTarjeta, type ListaTrello } from './utils/listasTrello';
+import { conEstadoTrello, estadosTarjetas, listaDeParciales, listaFinalizado, listasDePendientes, movimientosTarjetas, tarjetaDeNota, type EstadoTarjeta, type ListaTrello } from './utils/listasTrello';
 import ControlFamily from './ControlFamily';
 import RegistroCargas from './RegistroCargas';
 import EnlacesRapidos from './EnlacesRapidos';
@@ -34,6 +34,7 @@ import { entregaArchivada, estadoCargaFactura, leerEstadoCargaId, ordenesQueSale
 import { actualizarPreciosManualmente, shopifyGraphQL } from './utils/shopify';
 import {
   adjuntarATrello, apiControl, archivosParaTrello, boton, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, nombreArchivoPlanilla, slug, td, th,
+  moverEnTrello,
 } from './utils/entregasUi';
 
 type Prov = 'distrinando' | 'id' | 'family';
@@ -298,16 +299,73 @@ export default function ControlFacturas() {
   const resumen = useMemo(() => resumenPedidos(pedidosControl, res), [pedidosControl, res]);
   // Qué hacer con la tarjeta de cada nota hoy: finalizar, pasar a la lista de parciales o nada (la app no la mueve).
   const listaParcial = useMemo(() => listaDeParciales(listasTablero ?? []), [listasTablero]);
+  const listaFinal = useMemo(() => listaFinalizado(listasTablero ?? [])?.nombre || '', [listasTablero]);
   const listaDe = useCallback((p: { origen?: string }) => datos.tarjetasTrello[tarjetaDeNota(p)]?.lista || '', [datos.tarjetasTrello]);
   const consejos = useMemo(() => {
     const out = new Map<string, ConsejoNota>();
     for (const p of pedidosControl) {
-      try { out.set(p.id, consejoNota(marcasDeNota(res, null, pedidosControl, p.id), { listaActual: listaDe(p), listaParcial })); } catch { /* sin datos */ }
+      try { out.set(p.id, consejoNota(marcasDeNota(res, null, pedidosControl, p.id), { listaActual: listaDe(p), listaParcial, listaFinal })); } catch { /* sin datos */ }
     }
     return out;
-  }, [res, pedidosControl, listaDe, listaParcial]);
+  }, [res, pedidosControl, listaDe, listaParcial, listaFinal]);
   const cerradas = useMemo(() => new Set(pedidosControl.filter((p) => p.cerradaDesde).map((p) => p.id)), [pedidosControl]);
   const nombrePedido = (id: string) => { const p = datos.pedidos.find((x) => x.id === id); return p ? (p.nroProveedor ? `N° ${p.nroProveedor}` : p.nombre) : id; };
+
+  /**
+   * Mueve solas las tarjetas de Trello de una entrega (14-nov-2026, gax: «que haga todo automático»):
+   * con la factura subida, de pedidos pendientes a «RECIBIDO / CONTROL / CARGA»; con la entrega cerrada,
+   * a «FINALIZADO» si llegó todo lo de la tarjeta o a pendientes de indumentaria/calzado si llegó una parte.
+   * Usa datos frescos de la base y de Trello. Devuelve qué movió (o por qué no pudo), para mostrarlo.
+   */
+  async function avanzarTarjetas(p: Prov, facturaId: string): Promise<string[]> {
+    if (p === 'family') return [];
+    try {
+      const r = await fetch('/api/trello?accion=tarjetas', { cache: 'no-store' });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok) return d.sinTrello ? [] : [`Trello: no pude ver las tarjetas para moverlas (${d.error || `Error ${r.status}`}).`];
+      const listas = (d.listas || []) as ListaTrello[];
+      const tarjetas = (d.tarjetas || []) as TarjetaTrello[];
+      if (sigue(p)) setListasTablero(listas);
+      const frescos = { ...VACIO, ...(await api(undefined, p)) } as Datos;
+      const ctrl = conEstadoTrello(frescos.pedidos, frescos.tarjetasTrello, hoyAr());
+      const resF = analizarFacturas(ctrl, frescos.facturas, frescos.asignaciones, frescos.remitos);
+      const rf = resF.facturas.find((x) => x.factura.id === facturaId);
+      if (!rf) return [];
+      const carga = p === 'id' || p === 'distrinando' ? estadoCargaFactura(rf, frescos.cargas ?? {}, frescos.noLlego) : null;
+      const cerrada = entregaArchivada(rf, carga, frescos.archivo?.[facturaId]?.estado);
+      const pend = listasDePendientes(listas, frescos.listasTrello);
+      const consejosDe = (tarjeta: string) => ctrl.filter((x) => tarjetaDeNota(x) === tarjeta).map((x) => {
+        try { return consejoNota(marcasDeNota(resF, null, ctrl, x.id)).tipo; } catch { return 'nada' as const; }
+      });
+      const plan = movimientosTarjetas({
+        tarjetasEntrega: rf.pedidosCubiertos.map((id) => tarjetaDeNota(ctrl.find((x) => x.id === id))),
+        tarjetas, listas, pendientes: new Set(pend.map((l) => l.id)), cerrada, consejos: consejosDe,
+      });
+      const hechos = [...plan.avisos];
+      const movidas = new Map<string, ListaTrello>();
+      for (const m of plan.mover) {
+        try {
+          await moverEnTrello(m.tarjeta, m.hacia.id);
+          movidas.set(m.tarjeta, m.hacia);
+          hechos.push(`Trello: pasé «${m.nombre}» de «${m.desde}» a «${m.hacia.nombre}» (${m.motivo}).`);
+        } catch (e) { hechos.push(`Trello: no pude pasar «${m.nombre}» a «${m.hacia.nombre}» (${mensaje(e)}). Movela a mano.`); }
+      }
+      if (movidas.size && pend.length) {
+        // Se anota dónde quedó cada tarjeta: una nota que pasó a «FINALIZADO» deja de elegirse sola.
+        const nuevas = tarjetas.map((t) => (movidas.has(t.id) ? { ...t, idLista: movidas.get(t.id)!.id, lista: movidas.get(t.id)!.nombre } : t));
+        const cambios = estadosTarjetas(frescos.pedidos, nuevas, new Set(pend.map((l) => l.id)), frescos.tarjetasTrello, hoyAr());
+        if (Object.keys(cambios).length) await guardarEstados(p, cambios);
+      }
+      return hechos;
+    } catch (e) { return [`Trello: no pude mover las tarjetas (${mensaje(e)}). Movelas a mano.`]; }
+  }
+  /** Mueve las tarjetas de la entrega y suma lo que pasó a los avisos de la pantalla. */
+  async function avanzarYAvisar(p: Prov, facturaId: string) {
+    const m = await avanzarTarjetas(p, facturaId);
+    if (!sigue(p) || !m.length) return;
+    await recargar();
+    setAvisos((a) => [...a, ...m]);
+  }
 
   /** Si cambia el remito, la vista previa de la carga de esa entrega ya no vale: se cierra. */
   function soltarPlan(facturaId: string) {
@@ -632,6 +690,7 @@ export default function ControlFacturas() {
     setInforme(inf);
     setAvisos(m.length ? m : ['Trello: no hay notas de pedido nuevas de este proveedor.']);
     setAbierta(factura.id);
+    await avanzarYAvisar(p, factura.id);
   }
 
   /** Vuelve a cargar una nota de Trello que se había borrado a mano (si no está ya cargada de otra forma). */
@@ -790,6 +849,8 @@ export default function ControlFacturas() {
       if (quitar) x[`${facturaId}|${codigo}`] = { fecha: new Date().toISOString() }; else delete x[`${facturaId}|${codigo}`];
       return { ...d, noLlego: x };
     });
+    // Si era lo último que faltaba, la entrega se cierra: la tarjeta de Trello avanza sola.
+    if (quitar) void avanzarYAvisar(p, facturaId);
     const b = baseCarga.current;
     if (!b || b.r.factura.id !== facturaId) return;
     if (quitar) b.quitados.add(codigo); else b.quitados.delete(codigo);
@@ -827,7 +888,8 @@ export default function ControlFacturas() {
     if (estado === 'cerrada' && !confirm(`¿Dar por cerrada la entrega de la factura ${r.factura.numero}? Pasa al apartado verde de cargadas; la podés volver a abrir cuando quieras. No cambia nada en Shopify.`)) return;
     if (estado === 'cerrada') { soltarPlan(r.factura.id); setAbierta(null); }
     setVerCerrada(null);
-    await guardar({ accion: 'archivarEntrega', entregaId: r.factura.id, estado });
+    const p = prov;
+    if (await guardar({ accion: 'archivarEntrega', entregaId: r.factura.id, estado }) && estado === 'cerrada') await avanzarYAvisar(p, r.factura.id);
   }
 
   /** El mail de diferencias con el remito (talles distintos y lo que no llegó). */
@@ -873,6 +935,8 @@ export default function ControlFacturas() {
       setPlanCarga(null);
     } catch (e) { if (sigue(p)) setAvisos([`La carga se cortó: ${mensaje(e)} Revisá en Shopify qué quedó cargado antes de volver a intentar.`]); }
     finally { setOcupado(''); if (sigue(p)) await recargar(); }
+    // Con la carga terminada, la entrega se cierra sola y la tarjeta de Trello pasa a su lista.
+    if (sigue(p)) await avanzarYAvisar(p, eid);
   }
 
   async function liberarCarga(entregaId: string, codigo: string, c: CargaFamily) {
@@ -926,6 +990,7 @@ export default function ControlFacturas() {
     await recargar();
     setAvisos([...nuevos, ...deTrello]);
     setAbierta(factura.id);
+    await avanzarYAvisar(p, factura.id);
   }
 
   const pedidosOrd = [...datos.pedidos].sort((a, b) => b.fecha.localeCompare(a.fecha));
@@ -970,7 +1035,7 @@ export default function ControlFacturas() {
   const tarjeta = (r: ResultadoFactura) => <TarjetaEntrega key={r.factura.id} r={r} abierta={abierta === r.factura.id}
       onAbrir={() => setAbierta(abierta === r.factura.id ? null : r.factura.id)} pedidos={pedidosOrd} cerradas={cerradas} nombrePedido={nombrePedido}
       manual={datos.asignaciones[r.factura.id] || []} condiciones={condiciones} ocupado={!!ocupado}
-      onAsignar={(ids) => guardar({ accion: 'guardarAsignacion', facturaId: r.factura.id, pedidos: ids })}
+      onAsignar={async (ids) => { const p = prov; if (await guardar({ accion: 'guardarAsignacion', facturaId: r.factura.id, pedidos: ids })) await avanzarYAvisar(p, r.factura.id); }}
       onBorrar={() => confirm(`¿Borrar la entrega de la factura ${r.factura.numero}? Se borran también el remito y lo que contó el depósito.`) && guardar({ accion: 'borrarFactura', id: r.factura.id })}
       onDeposito={() => { setFacturaDeposito(r.factura.id); setVista('deposito'); }}
       onFotos={(f) => { soltarPlan(r.factura.id); fotosParaFactura(r.factura.id, f); }}
@@ -1605,7 +1670,8 @@ function ListasTrelloCaja({ listas, elegidas, ocupado, onElegir }: { listas: Lis
       <summary style={{ cursor: 'pointer' }}>
         🗂️ Listas de Trello de donde salen las notas: {listas ? (usadas.length ? usadas.map((l) => `«${l.nombre}»`).join(', ') : 'ninguna') : 'las que dicen «pendiente» en el nombre'}{elegidas.length ? '' : ' (automático)'}
       </summary>
-      <p style={{ opacity: 0.75, margin: '4px 0' }}>Solo esas tarjetas traen notas. Una nota cuya tarjeta pasó a otra lista no se usa sola para las facturas nuevas (sí si la tildás a mano en la entrega).</p>
+      <p style={{ opacity: 0.75, margin: '4px 0' }}>Solo esas tarjetas traen notas. Una nota cuya tarjeta pasó a otra lista no se usa sola para las facturas nuevas (sí si la tildás a mano en la entrega). «RECIBIDO / CONTROL / CARGA» cuenta siempre.</p>
+      <p style={{ opacity: 0.75, margin: '4px 0' }}>La app mueve sola las tarjetas: al subir la factura pasa la tarjeta de su nota a «RECIBIDO / CONTROL / CARGA»; al cerrarse la entrega, a «FINALIZADO» si llegó todo, o a pendientes de indumentaria/calzado si falta una parte.</p>
       {!listas && <div style={{ opacity: 0.7 }}>Todavía no leí las listas de Trello (tocá «Buscar notas nuevas en Trello»).</div>}
       {listas?.map((l) => <label key={l.id} style={{ display: 'block' }}>
         <input type="checkbox" disabled={ocupado} checked={ids.includes(l.id)}

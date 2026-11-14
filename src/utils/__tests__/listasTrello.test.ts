@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { analizarFacturas, NUNCA_PENDIENTE, notaDisponible } from '../controlFacturas';
 import type { Factura, Pedido, RenglonFactura } from '../controlFacturas';
-import { conEstadoTrello, estadosTarjetas, listasDePendientes, tarjetaDeNota } from '../listasTrello';
+import { conEstadoTrello, estadosTarjetas, listaFinalizado, listaRecibido, listasDePendientes, movimientosTarjetas, tarjetaDeNota } from '../listasTrello';
 
 // Listas del tablero COMPRAS Y ENTREGAS (capturas de gax, 11-nov-2026).
 const L = (n: number) => String(n).repeat(24).slice(0, 24);
@@ -95,5 +95,63 @@ describe('listas de pedidos pendientes en Trello (gax: «solo tené en cuenta es
     const f4 = analizarFacturas([notas[0]], [factura('F4', '2026-11-08', [ren('X', 2)])], {}, { F4: { numero: '', fecha: '', renglones: [{ codigo: 'X', cantidad: 2, talles: [] }] } }).facturas[0];
     expect(f4.faltaNota).toBe(true);
     expect(f4.semaforo).toBe('incompleta');
+  });
+});
+
+describe('mover las tarjetas solas (14-nov-2026, gax: «que haga todo automático»)', () => {
+  const TAB = [
+    { id: L(1), nombre: 'PEDIDOS PENDIENTES' },
+    { id: L(2), nombre: 'PENDIENDE DE INDUMENTARIA/CALZADO' },
+    { id: L(3), nombre: 'RECIBIDO / CONTROL / CARGA' },
+    { id: L(5), nombre: 'FINALIZADO' },
+    { id: L(4), nombre: 'Pagos' },
+  ];
+  const tarjetas = [
+    { id: T('a'), nombre: 'LE COQ el 1/11', idLista: L(1), lista: 'PEDIDOS PENDIENTES' },
+    { id: T('b'), nombre: 'LE COQ el 3/11', idLista: L(3), lista: 'RECIBIDO / CONTROL / CARGA' },
+    { id: T('c'), nombre: 'CONVERSE', idLista: L(2), lista: 'PENDIENDE DE INDUMENTARIA/CALZADO' },
+    { id: T('e'), nombre: 'Otra', idLista: L(4), lista: 'Pagos' },
+    { id: T('f'), nombre: 'Ya terminada', idLista: L(5), lista: 'FINALIZADO' },
+  ];
+  const pendientes = new Set(listasDePendientes(TAB).map((l) => l.id));
+  const base = { tarjetas, listas: TAB, pendientes };
+
+  it('«RECIBIDO / CONTROL / CARGA» cuenta como lista de notas; «RECIBIDOS» a secas no', () => {
+    expect(listasDePendientes(TAB).map((l) => l.nombre)).toEqual(['PEDIDOS PENDIENTES', 'PENDIENDE DE INDUMENTARIA/CALZADO', 'RECIBIDO / CONTROL / CARGA']);
+    expect(listasDePendientes(TAB, [L(1)]).map((l) => l.nombre)).toEqual(['PEDIDOS PENDIENTES', 'RECIBIDO / CONTROL / CARGA']);
+    expect(listaRecibido(LISTAS)).toBeUndefined();
+    expect(listaFinalizado(TAB)?.id).toBe(L(5));
+    // Dos listas con el mismo nombre: no se adivina.
+    expect(listaFinalizado([...TAB, { id: L(6), nombre: 'Finalizados 2025' }])).toBeUndefined();
+  });
+
+  it('con la factura subida, de pendientes a «RECIBIDO / CONTROL / CARGA»; las de otras listas no se tocan', () => {
+    const r = movimientosTarjetas({ ...base, tarjetasEntrega: [T('a'), T('b'), T('c'), T('e'), T('f'), T('a')], cerrada: false, consejos: () => ['finalizar'] });
+    expect(r.mover.map((m) => [m.nombre, m.hacia.nombre])).toEqual([
+      ['LE COQ el 1/11', 'RECIBIDO / CONTROL / CARGA'],
+      ['CONVERSE', 'RECIBIDO / CONTROL / CARGA'],
+    ]);
+    expect(r.avisos).toEqual([]);
+  });
+
+  it('con la entrega cerrada: llegó todo → FINALIZADO; llegó una parte → pendientes de indumentaria/calzado', () => {
+    const consejos = (t: string) => (t === T('a') ? ['finalizar' as const] : t === T('b') ? ['parcial' as const] : ['finalizar' as const, 'nada' as const]);
+    const r = movimientosTarjetas({ ...base, tarjetasEntrega: [T('a'), T('b'), T('c'), T('e'), T('f')], cerrada: true, consejos });
+    expect(r.mover.map((m) => [m.nombre, m.hacia.nombre])).toEqual([
+      ['LE COQ el 1/11', 'FINALIZADO'],
+      ['LE COQ el 3/11', 'PENDIENDE DE INDUMENTARIA/CALZADO'],
+      // CONVERSE ya está en la lista de parciales: se queda.
+    ]);
+    // Nada llegó todavía: no se mueve.
+    expect(movimientosTarjetas({ ...base, tarjetasEntrega: [T('b')], cerrada: true, consejos: () => ['nada'] }).mover).toEqual([]);
+  });
+
+  it('sin la lista de destino avisa para moverla a mano', () => {
+    const sin = TAB.filter((l) => l.id !== L(5) && l.id !== L(3));
+    const r1 = movimientosTarjetas({ ...base, listas: sin, tarjetasEntrega: [T('a')], cerrada: false, consejos: () => [] });
+    expect(r1.mover).toEqual([]);
+    expect(r1.avisos[0]).toMatch(/RECIBIDO \/ CONTROL \/ CARGA.*a mano/);
+    const r2 = movimientosTarjetas({ ...base, listas: sin, tarjetasEntrega: [T('a')], cerrada: true, consejos: () => ['finalizar'] });
+    expect(r2.avisos[0]).toMatch(/FINALIZADO.*a mano/);
   });
 });

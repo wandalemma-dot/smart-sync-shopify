@@ -1,8 +1,8 @@
 // Trello para el control de facturas: lista las tarjetas del tablero de compras y baja sus
-// Excel. La única escritura: adjuntar la factura o la foto del remito a una tarjeta del tablero
-// (POST, mismo origen). Solo sesión humana. No toca Shopify.
+// Excel. Escribe solo dos cosas (POST, mismo origen): adjuntar la factura o la foto del remito a una
+// tarjeta del tablero, y pasar una tarjeta a otra lista del tablero. Solo sesión humana. No toca Shopify.
 import { allowedOrigin, identity, noStore } from '../server/access.js';
-import { adjuntarArchivo, bajarAdjunto, listarTarjetas, trelloConfigurado } from '../server/trello.js';
+import { adjuntarArchivo, bajarAdjunto, listarTarjetas, moverTarjeta, trelloConfigurado } from '../server/trello.js';
 import { mensajeSeguro } from '../server/secretos.js';
 
 export const maxDuration = 60; // un Excel grande de iD (con fotos) se baja y se aliviana acá
@@ -17,8 +17,9 @@ export default async function handler(req, res) {
     if (req.method === 'POST') {
       if (!String(req.headers?.['content-type'] || '').toLowerCase().startsWith('application/json')) return res.status(415).json({ error: 'Se requiere JSON.' });
       const b = req.body || {};
-      if (b.accion !== 'adjuntar') return res.status(400).json({ error: 'Acción inválida.' });
-      return res.status(200).json(await adjuntarArchivo(b.tarjeta, b.archivo));
+      if (b.accion === 'adjuntar') return res.status(200).json(await adjuntarArchivo(b.tarjeta, b.archivo));
+      if (b.accion === 'mover') return res.status(200).json(await moverTarjeta(b.tarjeta, b.lista));
+      return res.status(400).json({ error: 'Acción inválida.' });
     }
     const q = req.query || {};
     if (q.accion === 'tarjetas') return res.status(200).json(await listarTarjetas());

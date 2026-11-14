@@ -1,7 +1,8 @@
 // Lectura del tablero de Trello «COMPRAS Y ENTREGAS» (una tarjeta = un pedido).
-// Lee tarjetas y Excel. La ÚNICA escritura es adjuntar la factura o la foto del remito a una tarjeta
-// del tablero (adjuntarArchivo, 14-nov-2026, gax); nunca borra, mueve ni edita tarjetas. Para eso el
-// token necesita scope=read,write; con uno de solo lectura, adjuntar avisa y lo demás sigue andando. Claves en Vercel:
+// Lee tarjetas y Excel. Escribe SOLO dos cosas (14-nov-2026, gax): adjuntar la factura o la foto del
+// remito a una tarjeta del tablero (adjuntarArchivo) y pasar una tarjeta de una lista a otra del mismo
+// tablero (moverTarjeta). Nunca borra, archiva ni edita tarjetas. Para eso el token necesita
+// scope=read,write; con uno de solo lectura, escribir avisa y lo demás sigue andando. Claves en Vercel:
 // TRELLO_KEY y TRELLO_TOKEN (nunca en el código); TRELLO_BOARD opcional.
 // Las claves viajan en el encabezado Authorization, no en la URL.
 import * as XLSX from 'xlsx';
@@ -227,10 +228,10 @@ export function nombreAdjunto(nombre, tipo) {
   return `${base}.${ext}`;
 }
 
-async function post(ruta, cuerpo, fetchImpl) {
+async function post(ruta, cuerpo, fetchImpl, method = 'POST') {
   for (let esperas = 0; ;) {
     let r;
-    try { r = await fetchImpl(`${API}${ruta}`, { method: 'POST', headers: { Authorization: auth(), Accept: 'application/json' }, body: cuerpo(), redirect: 'error' }); }
+    try { r = await fetchImpl(`${API}${ruta}`, { method, headers: { Authorization: auth(), Accept: 'application/json' }, body: cuerpo ? cuerpo() : undefined, redirect: 'error' }); }
     catch (e) {
       const m = e instanceof Error ? e.message : String(e);
       if (/header/i.test(m)) throw error('Las claves de Trello en Vercel tienen un carácter que no va. Copialas de nuevo y pegalas sin espacios ni saltos de línea.', 503);
@@ -240,7 +241,7 @@ async function post(ruta, cuerpo, fetchImpl) {
     if (!r.ok) {
       const por = await detalle(r);
       // Con el token de solo lectura Trello contesta 401 «unauthorized permission requested».
-      if (r.status === 401) throw error('Trello no deja adjuntar: la clave TRELLO_TOKEN de Vercel es de solo lectura. Generá una con permiso de escritura y cambiala en Vercel.', 403);
+      if (r.status === 401) throw error('Trello no deja escribir: la clave TRELLO_TOKEN de Vercel es de solo lectura. Generá una con permiso de escritura y cambiala en Vercel.', 403);
       if (r.status === 404) throw error('Trello no encontró la tarjeta.', 404);
       throw error(`Trello respondió ${r.status}${por ? ` (${por})` : ''}.`);
     }
@@ -274,4 +275,26 @@ export async function adjuntarArchivo(tarjetaId, archivo, fetchImpl = fetch) {
     return form;
   }, fetchImpl);
   return { nombre, yaEstaba: false, ...(RE_ID.test(String(adj?.id || '')) ? { id: adj.id } : {}) };
+}
+
+// ---------------------------------------------------------------------------
+// MOVER UNA TARJETA DE LISTA (14-nov-2026, gax: «que haga todo automático»). La app pasa la tarjeta
+// de pedidos pendientes a «RECIBIDO / CONTROL / CARGA» al subir la factura, y de ahí a «FINALIZADO» o
+// a pendientes de indumentaria/calzado al cerrar la entrega. La tarjeta y la lista tienen que ser del
+// tablero de compras; la tarjeta queda arriba de la lista. No cambia nada más de la tarjeta.
+// ---------------------------------------------------------------------------
+export async function moverTarjeta(tarjetaId, listaId, fetchImpl = fetch) {
+  if (!RE_ID.test(String(tarjetaId)) || !RE_ID.test(String(listaId))) throw error('Identificador inválido.', 400);
+  const [tarjeta, lista, idTab] = await Promise.all([
+    get(`/cards/${tarjetaId}?fields=idBoard,idList,closed`, fetchImpl),
+    get(`/lists/${listaId}?fields=idBoard,closed,name`, fetchImpl),
+    idTablero(fetchImpl),
+  ]);
+  if (!tarjeta || !idTab || tarjeta.idBoard !== idTab) throw error('La tarjeta no es del tablero de compras.', 403);
+  if (!lista || lista.idBoard !== idTab) throw error('La lista no es del tablero de compras.', 403);
+  if (lista.closed) throw error('Esa lista de Trello está archivada.', 400);
+  if (tarjeta.closed) throw error('La tarjeta está archivada.', 400);
+  if (tarjeta.idList === listaId) return { yaEstaba: true };
+  await post(`/cards/${tarjetaId}?idList=${listaId}&pos=top`, null, fetchImpl, 'PUT');
+  return { yaEstaba: false };
 }
