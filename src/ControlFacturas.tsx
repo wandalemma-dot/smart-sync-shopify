@@ -30,7 +30,7 @@ import { accionesElegidas, ejecutarCargaFamily, resumenCarga, textoCarga, type C
 import { cambiosDePrecio, enlacesMail, textoAvisoPrecio, type CambioPrecio, type MailsAviso } from './utils/avisoPrecio';
 import { diferenciasDeTalles, netosDeCarga, textoAvisoTalles } from './utils/avisoTalles';
 import { planCargaDistrinando } from './utils/cargaDistrinando';
-import { estadoCargaFactura, leerEstadoCargaId, ordenesQueSalen, planCargaId, type OrdenQueSale, precioYCostoAntes, SUCURSAL_CARGA_ID, type EstadoCargaId } from './utils/cargaId';
+import { entregaArchivada, estadoCargaFactura, leerEstadoCargaId, ordenesQueSalen, planCargaId, type OrdenQueSale, precioYCostoAntes, SUCURSAL_CARGA_ID, type EstadoCargaId } from './utils/cargaId';
 import { actualizarPreciosManualmente, shopifyGraphQL } from './utils/shopify';
 import {
   apiControl, boton, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, nombreArchivoPlanilla, slug, td, th,
@@ -56,6 +56,10 @@ interface Datos {
   mailsAviso?: MailsAviso;
   /** iD: qué artículos de cada entrega ya se cargaron en Shopify («{facturaId}|{código}»). */
   cargas?: Record<string, CargaFamily>;
+  /** Artículos sacados de la carga porque no llegaron («{facturaId}|{código}»): cuentan como terminados. */
+  noLlego?: Record<string, { fecha?: string }>;
+  /** Entregas dadas por cerradas o vueltas a abrir a mano (si no, se cierran solas al terminar la carga). */
+  archivo?: Record<string, { estado: 'cerrada' | 'abierta'; fecha?: string }>;
 }
 /** Versión del lector de Excel de Trello. Subirla cuando cambie: los descartados se revisan de nuevo. */
 const LECTOR_TRELLO = 5; // 4: 12-nov-2026, una copia en una tarjeta de pendientes de una nota cargada desde otra lista; 5: lee el verde
@@ -189,6 +193,8 @@ export default function ControlFacturas() {
   const [ordenesCarga, setOrdenesCarga] = useState<OrdenQueSale[]>([]);
   const [fechaPedido, setFechaPedido] = useState(hoy());
   const [abierta, setAbierta] = useState<string | null>(null);
+  /** Entrega cerrada que se está mirando completa (en el apartado verde se ve en una línea). */
+  const [verCerrada, setVerCerrada] = useState<string | null>(null);
   const [facturaDeposito, setFacturaDeposito] = useState('');
   const [condiciones, setCondiciones] = useState('');
   const [ocupado, setOcupado] = useState('');
@@ -675,7 +681,9 @@ export default function ControlFacturas() {
       const estado = await leerEstadoCargaId(r.checklist.map((c) => c.codigo), shopifyGraphQL, dis ? { ventasId: false, pos: true } : {});
       if (!sigue(p)) return;
       setDatos({ ...VACIO, ...d });
-      baseCarga.current = { prov: p, r, estado, cargas: d.cargas ?? {}, modos: new Map(), cantidades: new Map(), pedidos: d.pedidos ?? [], tablas: new Map(), destinos: new Map(), skus: new Map(), quitados: new Set(), packs: new Map() };
+      // Lo que ya se sacó antes porque no llegó sigue sacado (queda guardado).
+      const quitados = new Set(Object.keys(d.noLlego ?? {}).filter((k) => k.startsWith(`${r.factura.id}|`)).map((k) => k.slice(r.factura.id.length + 1)));
+      baseCarga.current = { prov: p, r, estado, cargas: d.cargas ?? {}, modos: new Map(), cantidades: new Map(), pedidos: d.pedidos ?? [], tablas: new Map(), destinos: new Map(), skus: new Map(), quitados, packs: new Map() };
       rearmar();
     } catch (e) { if (sigue(p)) setAvisos([`No pude armar la carga: ${mensaje(e)} No se cargó nada.`]); }
     finally { setOcupado(''); }
@@ -687,7 +695,7 @@ export default function ControlFacturas() {
     if (!b) return;
     setPlanCarga(b.prov === 'distrinando'
       ? { ...planCargaDistrinando(b.r, b.estado, b.cargas, b.pedidos, new Map(b.tablas), new Map(b.cantidades), new Map(b.destinos), new Map(b.skus)), quitados: [...b.quitados] }
-      : planCargaId(b.r, b.estado, b.cargas, new Map(b.modos), new Map(b.cantidades), new Map(b.packs)));
+      : { ...planCargaId(b.r, b.estado, b.cargas, new Map(b.modos), new Map(b.cantidades), new Map(b.packs)), quitados: [...b.quitados] });
   }
 
   /** Lo vendido en iD: separarlo (por defecto), cargarlo igual (si ya se separó antes) o cargarlo y pasar la venta a Martínez. */
@@ -758,12 +766,33 @@ export default function ControlFacturas() {
     rearmar();
   }
 
-  /** Distrinando: sacar un artículo de la carga porque no llegó (entra en el mail), o volver a agregarlo. */
-  function quitarArticulo(codigo: string, quitar: boolean) {
+  /**
+   * Sacar un artículo de la carga porque no llegó (entra en el mail), o volver a agregarlo. Queda guardado
+   * (14-nov-2026): la entrega lo cuenta como terminado y, si todo lo demás está cargado, pasa a las cerradas.
+   */
+  async function quitarArticulo(facturaId: string, codigo: string, quitar: boolean) {
+    const p = prov;
+    setError('');
+    try { await api({ proveedor: p, accion: 'marcarNoLlego', entregaId: facturaId, codigo, noLlego: quitar }); }
+    catch (e) { if (sigue(p)) setError(`No pude guardar que ${codigo} ${quitar ? 'no llegó' : 'llegó'}: ${mensaje(e)}`); return; }
+    if (!sigue(p)) return;
+    setDatos((d) => {
+      const x = { ...(d.noLlego ?? {}) };
+      if (quitar) x[`${facturaId}|${codigo}`] = { fecha: new Date().toISOString() }; else delete x[`${facturaId}|${codigo}`];
+      return { ...d, noLlego: x };
+    });
     const b = baseCarga.current;
-    if (!b) return;
+    if (!b || b.r.factura.id !== facturaId) return;
     if (quitar) b.quitados.add(codigo); else b.quitados.delete(codigo);
     rearmar();
+  }
+
+  /** Dar una entrega por cerrada (pasa al apartado verde) o volver a abrirla. */
+  async function archivar(r: ResultadoFactura, estado: 'cerrada' | 'abierta') {
+    if (estado === 'cerrada' && !confirm(`¿Dar por cerrada la entrega de la factura ${r.factura.numero}? Pasa al apartado verde de cargadas; la podés volver a abrir cuando quieras. No cambia nada en Shopify.`)) return;
+    if (estado === 'cerrada') { soltarPlan(r.factura.id); setAbierta(null); }
+    setVerCerrada(null);
+    await guardar({ accion: 'archivarEntrega', entregaId: r.factura.id, estado });
   }
 
   /** El mail de diferencias con el remito (talles distintos y lo que no llegó). */
@@ -895,6 +924,35 @@ export default function ControlFacturas() {
   // Las notas subidas a mano y borradas también se anotan ahí (con «P:»), pero no son Excel de Trello.
   const excelTrello = Object.entries(datos.trelloVistos).filter(([k]) => /^[a-f0-9]{24}$/.test(k)).map(([, v]) => v);
   const facturasRes = [...res.facturas].reverse();
+  // Entregas con la carga terminada: van al apartado verde (14-nov-2026, gax: «que quede como en archivadas»).
+  const cargaEnt = prov === 'id' || prov === 'distrinando';
+  const esCerrada = (r: ResultadoFactura) => cargaEnt && planCarga?.entregaId !== r.factura.id
+    && entregaArchivada(r, estadoCargaFactura(r, datos.cargas ?? {}, datos.noLlego), datos.archivo?.[r.factura.id]?.estado);
+  const cerradasEnt = facturasRes.filter(esCerrada);
+  const abiertas = facturasRes.filter((r) => !esCerrada(r));
+  const tarjeta = (r: ResultadoFactura) => <TarjetaEntrega key={r.factura.id} r={r} abierta={abierta === r.factura.id}
+      onAbrir={() => setAbierta(abierta === r.factura.id ? null : r.factura.id)} pedidos={pedidosOrd} cerradas={cerradas} nombrePedido={nombrePedido}
+      manual={datos.asignaciones[r.factura.id] || []} condiciones={condiciones} ocupado={!!ocupado}
+      onAsignar={(ids) => guardar({ accion: 'guardarAsignacion', facturaId: r.factura.id, pedidos: ids })}
+      onBorrar={() => confirm(`¿Borrar la entrega de la factura ${r.factura.numero}? Se borran también el remito y lo que contó el depósito.`) && guardar({ accion: 'borrarFactura', id: r.factura.id })}
+      onDeposito={() => { setFacturaDeposito(r.factura.id); setVista('deposito'); }}
+      onFotos={(f) => { soltarPlan(r.factura.id); fotosParaFactura(r.factura.id, f); }}
+      onGuardarRemito={(remito) => { soltarPlan(r.factura.id); return guardar({ accion: 'guardarRemito', facturaId: r.factura.id, remito }); }}
+      onBorrarRemito={() => { if (confirm('¿Borrar el remito de esta entrega?')) { soltarPlan(r.factura.id); guardar({ accion: 'borrarRemito', facturaId: r.factura.id }); } }}
+      onNota={(f) => subirPedidos(f, r.factura.fecha, r.factura.id)}
+      onTrello={() => buscarEnTrelloParaFactura(r.factura)} res={res} todas={pedidosControl} consejos={consejos}
+      informe={informe?.prov === prov && informe.facturaId === r.factura.id ? informe : null} onRecargarBorrada={recargarBorrada}
+      carga={prov === 'id' || prov === 'distrinando' ? {
+        cargas: datos.cargas ?? {}, noLlego: datos.noLlego ?? {}, plan: planCarga?.entregaId === r.factura.id ? planCarga : null,
+        cerrada: esCerrada(r), onArchivar: (estado) => archivar(r, estado),
+        onQuitar: (codigo, quitar) => quitarArticulo(r.factura.id, codigo, quitar),
+        onArmar: () => armarCarga(r), onConfirmar: (e) => planCarga && confirmarCarga(r, planCarga, e),
+        onCancelar: () => setPlanCarga(null), onLiberar: (codigo, c) => liberarCarga(r.factura.id, codigo, c), onCantidad: cantidadCarga,
+        ...(prov === 'id' ? { onModoVenta: modoVenta, onPack: packCarga, explicacion: EXPLICA_ID } : {
+          onTabla: tablaCarga, onDestino: destinoCarga, onSku: skuCarga, onQuitarTalle: quitarTalle,
+          onMailSolo: () => planCarga && armarMailTalles(r, planCarga, [], prov), explicacion: EXPLICA_DISTRINANDO,
+        }),
+      } : undefined} />;
   const cambiarProv = (p: Prov) => { setPlanCarga(null); setAvisoPrecio(null); setAvisoTalles(null); setOrdenesCarga([]); setVerRegistro(false); provRef.current = p; setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
 
   const cabecera = (<>
@@ -964,27 +1022,18 @@ export default function ControlFacturas() {
           </div>
 
           {!facturasRes.length && !cargando && <p style={{ opacity: 0.7, fontSize: '0.85rem' }}>Todavía no hay entregas cargadas de este proveedor.</p>}
-          {facturasRes.map((r) => <TarjetaEntrega key={r.factura.id} r={r} abierta={abierta === r.factura.id}
-            onAbrir={() => setAbierta(abierta === r.factura.id ? null : r.factura.id)} pedidos={pedidosOrd} cerradas={cerradas} nombrePedido={nombrePedido}
-            manual={datos.asignaciones[r.factura.id] || []} condiciones={condiciones} ocupado={!!ocupado}
-            onAsignar={(ids) => guardar({ accion: 'guardarAsignacion', facturaId: r.factura.id, pedidos: ids })}
-            onBorrar={() => confirm(`¿Borrar la entrega de la factura ${r.factura.numero}? Se borran también el remito y lo que contó el depósito.`) && guardar({ accion: 'borrarFactura', id: r.factura.id })}
-            onDeposito={() => { setFacturaDeposito(r.factura.id); setVista('deposito'); }}
-            onFotos={(f) => { soltarPlan(r.factura.id); fotosParaFactura(r.factura.id, f); }}
-            onGuardarRemito={(remito) => { soltarPlan(r.factura.id); return guardar({ accion: 'guardarRemito', facturaId: r.factura.id, remito }); }}
-            onBorrarRemito={() => { if (confirm('¿Borrar el remito de esta entrega?')) { soltarPlan(r.factura.id); guardar({ accion: 'borrarRemito', facturaId: r.factura.id }); } }}
-            onNota={(f) => subirPedidos(f, r.factura.fecha, r.factura.id)}
-            onTrello={() => buscarEnTrelloParaFactura(r.factura)} res={res} todas={pedidosControl} consejos={consejos}
-            informe={informe?.prov === prov && informe.facturaId === r.factura.id ? informe : null} onRecargarBorrada={recargarBorrada}
-            carga={prov === 'id' || prov === 'distrinando' ? {
-              cargas: datos.cargas ?? {}, plan: planCarga?.entregaId === r.factura.id ? planCarga : null,
-              onArmar: () => armarCarga(r), onConfirmar: (e) => planCarga && confirmarCarga(r, planCarga, e),
-              onCancelar: () => setPlanCarga(null), onLiberar: (codigo, c) => liberarCarga(r.factura.id, codigo, c), onCantidad: cantidadCarga,
-              ...(prov === 'id' ? { onModoVenta: modoVenta, onPack: packCarga, explicacion: EXPLICA_ID } : {
-                onTabla: tablaCarga, onDestino: destinoCarga, onSku: skuCarga, onQuitarTalle: quitarTalle, onQuitar: quitarArticulo,
-                onMailSolo: () => planCarga && armarMailTalles(r, planCarga, [], prov), explicacion: EXPLICA_DISTRINANDO,
-              }),
-            } : undefined} />)}
+          {abiertas.map(tarjeta)}
+          {cerradasEnt.length > 0 && <details style={{ marginTop: 14, border: '1px solid rgba(52,211,153,0.45)', borderRadius: 10, padding: '8px 12px', background: 'rgba(52,211,153,0.07)' }}>
+            <summary style={{ cursor: 'pointer', color: '#34d399', fontWeight: 'bold' }}>✅ Cargadas y cerradas ({cerradasEnt.length})</summary>
+            <div style={{ fontSize: '0.8rem', opacity: 0.75, margin: '6px 0' }}>Entregas con todo cargado en Shopify (o dadas por cerradas a mano). «Ver» muestra todo el detalle.</div>
+            {cerradasEnt.map((r) => verCerrada === r.factura.id
+              ? <div key={r.factura.id}>
+                <button style={{ ...enlace, margin: '4px 0' }} onClick={() => setVerCerrada(null)}>▴ Achicar</button>
+                {tarjeta(r)}
+              </div>
+              : <FilaCerrada key={r.factura.id} r={r} enShopify={estadoCargaFactura(r, datos.cargas ?? {}, datos.noLlego)} manual={datos.archivo?.[r.factura.id]?.estado === 'cerrada'}
+                ocupado={!!ocupado} onVer={() => setVerCerrada(r.factura.id)} onAbrir={() => archivar(r, 'abierta')} />)}
+          </details>}
 
           <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', marginTop: 16, paddingTop: 10, borderTop: '1px solid rgba(255,255,255,0.08)' }}>
             <button style={enlace} onClick={() => setVista('pedidos')}>📋 Notas de pedido cargadas ({pedidosVigentes.length})</button>
@@ -1087,6 +1136,8 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
   /** iD: carga en Shopify (Martínez). */
   carga?: {
     cargas: Record<string, CargaFamily>; plan: PlanCarga | null; onArmar: () => void; onConfirmar: (e: EleccionesCarga) => void;
+    /** Lo que no llegó (guardado) y si la entrega está en el apartado de cerradas. */
+    noLlego: Record<string, unknown>; cerrada: boolean; onArchivar: (estado: 'cerrada' | 'abierta') => void;
     onCancelar: () => void; onLiberar: (codigo: string, c: CargaFamily) => void; onCantidad: (codigo: string, talle: string, n: number) => void;
     explicacion: string;
     /** iD: lo vendido en iD y las unidades por pack escritas a mano. */
@@ -1094,13 +1145,15 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
     onPack?: (codigo: string, n: number | undefined) => void;
     /** Distrinando: tabla de talle y talle de destino. */
     onTabla?: (codigo: string, tabla: string) => void; onDestino?: (codigo: string, talle: string, destino: string) => void;
-    /** Distrinando: SKU a mano, quitar un talle agregado, sacar un artículo que no llegó y armar el mail sin cargar. */
+    /** Distrinando: SKU a mano, quitar un talle agregado y armar el mail sin cargar. */
     onSku?: (codigo: string, talle: string, sku: string) => void; onQuitarTalle?: (codigo: string, talle: string) => void;
-    onQuitar?: (codigo: string, quitar: boolean) => void; onMailSolo?: () => void;
+    onMailSolo?: () => void;
+    /** Sacar un artículo que no llegó, o volver a agregarlo (queda guardado). */
+    onQuitar: (codigo: string, quitar: boolean) => void;
   };
 }) {
   const f = r.factura;
-  const enShopify = carga ? estadoCargaFactura(r, carga.cargas) : null;
+  const enShopify = carga ? estadoCargaFactura(r, carga.cargas, carga.noLlego) : null;
   // Marcas que no terminaron bien (o quedaron «en curso» si se cerró la página): se revisan en Shopify y se liberan a mano.
   const aRevisar = carga ? Object.entries(carga.cargas).filter(([k, c]) => k.startsWith(`${f.id}|`) && c.estado !== 'cargada').map(([k, c]) => [k.slice(f.id.length + 1), c] as const) : [];
   const s = SEMAFORO[r.semaforo];
@@ -1150,12 +1203,20 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
             <Archivo etiqueta="📎 Subir nota" accept=".xlsx,.xls" multiple disabled={ocupado} estilo={botonChico} onArchivos={onNota} />
           </>}
         </Parte>
-        {carga && enShopify && <Parte ok={enShopify.completa} titulo="Shopify" detalle={enShopify.cargados ? `${enShopify.cargados} de ${enShopify.total} cargados en Martínez` : 'sin cargar'}>
+        {carga && enShopify && <Parte ok={enShopify.completa} titulo="Shopify" detalle={textoShopify(enShopify)}>
           {!enShopify.completa && !carga.plan && <button style={{ ...botonChico, opacity: r.remito && !ocupado ? 1 : 0.5 }} disabled={ocupado}
             title={r.remito ? 'Suma lo que llegó en DEPOSITO MARTINEZ, con vista previa y confirmación' : 'Primero subí o escribí el remito'}
             onClick={carga.onArmar}>⬆️ Cargar en Shopify</button>}
+          {!carga.plan && (carga.cerrada
+            ? <button style={botonChico} disabled={ocupado} onClick={() => carga.onArchivar('abierta')}>Volver a abrir</button>
+            : <button style={botonChico} disabled={ocupado} title="Pasa la entrega al apartado verde de cargadas (por ejemplo, si lo que falta lo cargaste a mano). La podés volver a abrir."
+              onClick={() => carga.onArchivar('cerrada')}>✅ Dar por cerrada</button>)}
         </Parte>}
       </div>
+      {carga && enShopify && enShopify.noLlego.length > 0 && <div style={{ marginTop: 6, fontSize: '0.84rem', opacity: 0.85 }}>
+        No llegó (lo sacaste de la carga): {enShopify.noLlego.map((c) => <span key={c} style={{ marginRight: 8 }}>{c}{' '}
+          <button style={{ ...botonChico, padding: '1px 7px' }} disabled={ocupado} onClick={() => carga.onQuitar(c, false)}>Llegó: volver a agregarlo</button></span>)}
+      </div>}
       {editando && (
         <div style={{ marginTop: 10, padding: 10, borderRadius: 8, background: 'rgba(0,0,0,0.2)' }}>
           <div style={{ fontSize: '0.82rem', opacity: 0.85, marginBottom: 6 }}>
@@ -1247,6 +1308,33 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** Lo que dice el recuadro «Shopify»: cargados, lo que no llegó y el total. */
+function textoShopify(e: { cargados: number; noLlego: string[]; total: number }): string {
+  if (!e.cargados && !e.noLlego.length) return 'sin cargar';
+  return `${e.cargados} de ${e.total} cargados en Martínez${e.noLlego.length ? ` · ${e.noLlego.length} no llegó` : ''}`;
+}
+
+/** Una entrega cerrada, en una línea (14-nov-2026, gax: «menos explicación… en un apartado en verde»). */
+function FilaCerrada({ r, enShopify, manual, ocupado, onVer, onAbrir }: {
+  r: ResultadoFactura; enShopify: { cargados: number; noLlego: string[]; total: number; completa: boolean }; manual: boolean; ocupado: boolean;
+  onVer: () => void; onAbrir: () => void;
+}) {
+  const f = r.factura;
+  const s = SEMAFORO[r.semaforo];
+  return (
+    <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', padding: '6px 0', borderTop: '1px solid rgba(52,211,153,0.2)', fontSize: '0.86rem' }}>
+      <strong style={{ color: '#34d399' }}>✅ Factura {f.numero}</strong>
+      <span style={{ opacity: 0.8 }}>{fechaAr(f.fecha)} · {r.unidades} u. · {fmt(f.total)}</span>
+      <span style={{ opacity: 0.8 }}>Shopify: {textoShopify(enShopify)}{manual && !enShopify.completa ? ' · cerrada a mano' : ''}</span>
+      {r.semaforo !== 'ok' && <span style={{ color: s.color, opacity: 0.85 }} title={r.motivos.join('\n')}>{s.icono} {s.texto}</span>}
+      <span style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
+        <button style={botonChico} onClick={onVer}>Ver</button>
+        <button style={{ ...botonChico, background: 'transparent' }} disabled={ocupado} onClick={onAbrir}>Volver a abrir</button>
+      </span>
     </div>
   );
 }

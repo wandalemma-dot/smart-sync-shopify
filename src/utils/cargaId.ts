@@ -548,11 +548,27 @@ export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: 
   return { entregaId: f.id, locationId: estado.locationId, posId: null, items, avisos, sucursal: SUCURSAL_CARGA_ID, ...(estado.ordenesId ? { ordenesId: estado.ordenesId } : {}), ...(estado.idLocationId ? { idLocationId: estado.idLocationId } : {}) };
 }
 
-/** Cuántos artículos de la factura ya están cargados en Shopify. */
-export function estadoCargaFactura(r: ResultadoFactura, cargas: Record<string, CargaFamily>): { cargados: number; total: number; completa: boolean } {
+/**
+ * Cuántos artículos de la factura ya están cargados en Shopify. Lo que se sacó de la carga porque no llegó
+ * (guardado en «noLlego», 14-nov-2026) también cuenta como terminado: no queda nada por cargar de eso.
+ */
+export function estadoCargaFactura(r: ResultadoFactura, cargas: Record<string, CargaFamily>, noLlego: Record<string, unknown> = {}): { cargados: number; noLlego: string[]; total: number; completa: boolean } {
   const codigos = [...new Set(r.checklist.map((c) => c.codigo))];
-  const cargados = codigos.filter((c) => cargas[`${r.factura.id}|${c}`]?.estado === 'cargada').length;
-  return { cargados, total: codigos.length, completa: codigos.length > 0 && cargados === codigos.length };
+  const cargados = codigos.filter((c) => cargas[`${r.factura.id}|${c}`]?.estado === 'cargada');
+  const faltan = codigos.filter((c) => !cargados.includes(c) && noLlego[`${r.factura.id}|${c}`]);
+  return { cargados: cargados.length, noLlego: faltan, total: codigos.length, completa: codigos.length > 0 && cargados.length + faltan.length === codigos.length };
+}
+
+/**
+ * ¿La entrega va al apartado verde de cargadas? (14-nov-2026, gax: «la carga la terminé… me gustaría que aparezca como
+ * ya cerrado, en un apartado en verde, como archivadas»). Sola, cuando todo está cargado (o no llegó) y no hay nada que
+ * reclamar al proveedor; las observaciones (faltante, adelanto) no la dejan abierta. A mano manda lo que se eligió:
+ * «cerrada» (por ejemplo, Kappa o Crocs cargados a mano) o «abierta» (volver a abrirla aunque esté toda cargada).
+ */
+export function entregaArchivada(r: ResultadoFactura, carga: { completa: boolean } | null, manual?: 'cerrada' | 'abierta'): boolean {
+  if (manual === 'cerrada') return true;
+  if (manual === 'abierta' || !carga) return false;
+  return carga.completa && r.semaforo !== 'reclamar' && r.semaforo !== 'incompleta';
 }
 
 /** Una orden de iD que se lleva algo de esta entrega: si ya puede salir o qué le falta de iD. */
