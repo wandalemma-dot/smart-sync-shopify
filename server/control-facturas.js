@@ -264,7 +264,9 @@ const parsear = (hash) => {
 };
 
 export async function leerTodo(kv, prov) {
-  const extra = CARGAN.includes(prov) ? [['HGETALL', clave(prov, 'cargas')]] : [];
+  // nollego: artículos sacados de la carga porque no llegaron; archivo: entregas dadas por cerradas o
+  // vueltas a abrir a mano (14-nov-2026, gax: «que quede como en archivadas»).
+  const extra = CARGAN.includes(prov) ? [['HGETALL', clave(prov, 'cargas')], ['HGETALL', clave(prov, 'nollego')], ['HGETALL', clave(prov, 'archivo')]] : [];
   const res = await kv([
     ...TIPOS.map((t) => ['HGETALL', clave(prov, t)]), ['HGET', 'cf:config', prov], ['HGETALL', clave(prov, 'trello')],
     ['HGETALL', clave(prov, 'tarjetas')], ['HGET', 'cf:config', 'listasTrello'], ['HGET', 'cf:config', 'mailsAviso'], ...extra,
@@ -282,7 +284,11 @@ export async function leerTodo(kv, prov) {
     listasTrello: Array.isArray(listas) ? listas.filter((x) => RE_TRELLO.test(String(x))) : [],
     mailsAviso: leerMails(json(res[TIPOS.length + 4])),
   };
-  if (CARGAN.includes(prov)) out.cargas = parsear(res[TIPOS.length + 5]);
+  if (CARGAN.includes(prov)) {
+    out.cargas = parsear(res[TIPOS.length + 5]);
+    out.noLlego = parsear(res[TIPOS.length + 6]);
+    out.archivo = parsear(res[TIPOS.length + 7]);
+  }
   return out;
 }
 
@@ -438,7 +444,7 @@ export async function aplicar(kv, body) {
     }
     case 'borrarFactura': {
       const fid = id(body.id);
-      await kv([['HDEL', clave(prov, 'facturas'), fid], ['HDEL', clave(prov, 'asignaciones'), fid], ['HDEL', clave(prov, 'recepciones'), fid], ['HDEL', clave(prov, 'remitos'), fid]]);
+      await kv([['HDEL', clave(prov, 'facturas'), fid], ['HDEL', clave(prov, 'asignaciones'), fid], ['HDEL', clave(prov, 'recepciones'), fid], ['HDEL', clave(prov, 'remitos'), fid], ['HDEL', clave(prov, 'archivo'), fid]]);
       return { ok: true };
     }
     case 'guardarAsignacion': {
@@ -519,6 +525,21 @@ export async function aplicar(kv, body) {
         cmds.push(...agregarAlRegistro({ ...ev, mensaje: txt(`Marca liberada a mano: la app deja cargar este artículo otra vez. Antes estaba «${previa.estado}».`, 600) }));
       }
       await kv(cmds);
+      return { ok: true };
+    }
+    case 'marcarNoLlego': {
+      // «Sacar de la carga (no llegó)»: queda guardado, así la entrega cuenta ese artículo como terminado.
+      if (!CARGAN.includes(prov)) throw new Error('Acción inválida.');
+      const campo = campoCarga(body);
+      if (body.noLlego === true) await kv([['HSET', clave(prov, 'nollego'), campo, JSON.stringify({ fecha: new Date().toISOString() })]]);
+      else await kv([['HDEL', clave(prov, 'nollego'), campo]]);
+      return { ok: true };
+    }
+    case 'archivarEntrega': {
+      // «cerrada»: pasa al apartado de cargadas aunque falte algo; «abierta»: vuelve a las abiertas aunque esté toda cargada.
+      if (!CARGAN.includes(prov)) throw new Error('Acción inválida.');
+      if (!['cerrada', 'abierta'].includes(body.estado)) throw new Error('Estado inválido.');
+      await kv([['HSET', clave(prov, 'archivo'), id(body.entregaId), JSON.stringify({ estado: body.estado, fecha: new Date().toISOString() })]]);
       return { ok: true };
     }
     case 'marcarTrelloVisto': {

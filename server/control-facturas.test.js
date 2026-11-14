@@ -99,6 +99,33 @@ describe('Family: entregas sin factura (11-nov-2026)', () => {
   });
 });
 
+describe('Entregas cerradas (14-nov-2026)', () => {
+  it('«no llegó» queda guardado por entrega y código, y se puede deshacer', async () => {
+    const { fn } = memoria();
+    const c = { proveedor: 'distrinando', entregaId: 'F-0039-00283124', codigo: 'RBK1100033527' };
+    expect((await leerTodo(fn, 'distrinando')).noLlego).toEqual({});
+    expect(await aplicar(fn, { ...c, accion: 'marcarNoLlego', noLlego: true })).toEqual({ ok: true });
+    expect(Object.keys((await leerTodo(fn, 'distrinando')).noLlego)).toEqual(['F-0039-00283124|RBK1100033527']);
+    expect((await leerTodo(fn, 'id')).noLlego).toEqual({});
+    await aplicar(fn, { ...c, accion: 'marcarNoLlego', noLlego: false });
+    expect((await leerTodo(fn, 'distrinando')).noLlego).toEqual({});
+    await expect(aplicar(fn, { ...c, codigo: 'mal código', accion: 'marcarNoLlego', noLlego: true })).rejects.toThrow(/Código inválido/);
+  });
+
+  it('dar por cerrada o volver a abrir una entrega; borrar la factura lo borra', async () => {
+    const { fn } = memoria();
+    const c = { proveedor: 'id', entregaId: 'F-0016-00006405' };
+    await aplicar(fn, { ...c, accion: 'archivarEntrega', estado: 'cerrada' });
+    expect((await leerTodo(fn, 'id')).archivo[c.entregaId]).toMatchObject({ estado: 'cerrada' });
+    await aplicar(fn, { ...c, accion: 'archivarEntrega', estado: 'abierta' });
+    expect((await leerTodo(fn, 'id')).archivo[c.entregaId]).toMatchObject({ estado: 'abierta' });
+    await expect(aplicar(fn, { ...c, accion: 'archivarEntrega', estado: 'otra' })).rejects.toThrow(/Estado inválido/);
+    await expect(aplicar(fn, { ...c, accion: 'archivarEntrega', entregaId: '../x', estado: 'cerrada' })).rejects.toThrow();
+    await aplicar(fn, { proveedor: 'id', accion: 'borrarFactura', id: c.entregaId });
+    expect((await leerTodo(fn, 'id')).archivo).toEqual({});
+  });
+});
+
 describe('Registro de cargas en Shopify (11-nov-2026)', () => {
   const entrega = { id: 'E-2026-11-10-x', nombre: 'Planilla (foto)', fecha: '2026-11-10', origen: 'foto', renglones: [] };
   const base = { proveedor: 'family', entregaId: entrega.id };
