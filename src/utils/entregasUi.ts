@@ -60,6 +60,44 @@ export function nombreArchivoPlanilla(p: { nroProveedor?: string; nombre: string
 
 export const mensaje = (e: unknown) => (e instanceof Error ? e.message : 'Error inesperado.');
 
+/** Un archivo listo para adjuntar a una tarjeta de Trello (base64, ≤ 3 MB). */
+export interface ArchivoTrello { nombre: string; tipo: 'application/pdf' | 'image/jpeg' | 'image/png'; datos: string }
+const MAX_TRELLO = 3_000_000;
+const base64 = (buf: ArrayBuffer) => {
+  const b = new Uint8Array(buf);
+  let s = '';
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+
+/**
+ * Prepara la factura (PDF, tal cual) y las fotos del remito (achicadas a 2000 px, JPG) para Trello
+ * (14-nov-2026). Nombres: «Factura 0039-00283124.pdf», «Remito 0085-00206200 (1).jpg».
+ */
+export async function archivosParaTrello(files: File[], factura: string, remito: string): Promise<ArchivoTrello[]> {
+  const out: ArchivoTrello[] = [];
+  const fotos = files.filter((f) => f.type !== 'application/pdf' && !/\.pdf$/i.test(f.name));
+  const pdfs = files.filter((f) => !fotos.includes(f));
+  for (const [i, f] of pdfs.entries()) {
+    if (f.size > MAX_TRELLO) throw new Error(`${f.name} pesa más de 3 MB: subilo a mano a Trello.`);
+    out.push({ nombre: `Factura ${factura}${pdfs.length > 1 ? ` (${i + 1})` : ''}`, tipo: 'application/pdf', datos: base64(await f.arrayBuffer()) });
+  }
+  const achicadas = fotos.length ? await prepararFotos(fotos) : [];
+  for (const [i, f] of achicadas.entries()) {
+    if (f.datos.length * 0.75 > MAX_TRELLO) throw new Error('Una foto pesa más de 3 MB: subila a mano a Trello.');
+    out.push({ nombre: `Remito ${remito || factura}${achicadas.length > 1 ? ` (${i + 1})` : ''}`, tipo: 'image/jpeg', datos: f.datos });
+  }
+  return out;
+}
+
+/** Adjunta un archivo a una tarjeta del tablero de compras. */
+export async function adjuntarATrello(tarjeta: string, archivo: ArchivoTrello): Promise<{ nombre: string; yaEstaba: boolean }> {
+  const r = await fetch('/api/trello', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accion: 'adjuntar', tarjeta, archivo }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || `Error ${r.status}`);
+  return d;
+}
+
 /** Lee fotos con IA (api/leer-remito.js): el remito, o la planilla de entrega de Family. */
 export async function leerFotos<T>(files: File[], tipo: 'remito' | 'entrega' = 'remito'): Promise<T> {
   const fotos = await prepararFotos(files);

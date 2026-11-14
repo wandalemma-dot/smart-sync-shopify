@@ -1,5 +1,7 @@
 // Lectura del tablero de Trello «COMPRAS Y ENTREGAS» (una tarjeta = un pedido).
-// SOLO LECTURA: el token se generó con scope=read. Claves en Vercel:
+// Lee tarjetas y Excel. La ÚNICA escritura es adjuntar la factura o la foto del remito a una tarjeta
+// del tablero (adjuntarArchivo, 14-nov-2026, gax); nunca borra, mueve ni edita tarjetas. Para eso el
+// token necesita scope=read,write; con uno de solo lectura, adjuntar avisa y lo demás sigue andando. Claves en Vercel:
 // TRELLO_KEY y TRELLO_TOKEN (nunca en el código); TRELLO_BOARD opcional.
 // Las claves viajan en el encabezado Authorization, no en la URL.
 import * as XLSX from 'xlsx';
@@ -209,4 +211,67 @@ export function sinFotos(datos) {
   const nuevo = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(nuevo, wb.Sheets[hoja], hoja.slice(0, 31));
   return Buffer.from(XLSX.write(nuevo, { type: 'buffer', bookType: 'xlsx', compression: true }));
+}
+
+// ---------------------------------------------------------------------------
+// ADJUNTAR A UNA TARJETA (14-nov-2026, gax: «que escriba las tarjetas y ponga las fotos de los
+// remitos y la factura»). Solo PDF, JPG o PNG, de hasta 3 MB, a tarjetas del tablero de compras.
+// Si la tarjeta ya tiene un adjunto con el mismo nombre, no se sube otra vez.
+// ---------------------------------------------------------------------------
+const TIPOS_ADJUNTO = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png' };
+
+/** Nombre prolijo para el adjunto: sin caracteres raros, con la extensión del tipo. */
+export function nombreAdjunto(nombre, tipo) {
+  const ext = TIPOS_ADJUNTO[tipo];
+  const base = String(nombre ?? '').replace(/\.[a-z0-9]{2,4}$/i, '').replace(/[^\p{L}\p{N} ._()-]+/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 100) || 'archivo';
+  return `${base}.${ext}`;
+}
+
+async function post(ruta, cuerpo, fetchImpl) {
+  for (let esperas = 0; ;) {
+    let r;
+    try { r = await fetchImpl(`${API}${ruta}`, { method: 'POST', headers: { Authorization: auth(), Accept: 'application/json' }, body: cuerpo(), redirect: 'error' }); }
+    catch (e) {
+      const m = e instanceof Error ? e.message : String(e);
+      if (/header/i.test(m)) throw error('Las claves de Trello en Vercel tienen un carácter que no va. Copialas de nuevo y pegalas sin espacios ni saltos de línea.', 503);
+      throw error(`No me pude conectar con Trello (${m.slice(0, 120)}). Probá de nuevo en un rato.`);
+    }
+    if (r.status === 429 && esperas < 3) { esperas++; await esperar(1000 * 2 ** esperas); continue; }
+    if (!r.ok) {
+      const por = await detalle(r);
+      // Con el token de solo lectura Trello contesta 401 «unauthorized permission requested».
+      if (r.status === 401) throw error('Trello no deja adjuntar: la clave TRELLO_TOKEN de Vercel es de solo lectura. Generá una con permiso de escritura y cambiala en Vercel.', 403);
+      if (r.status === 404) throw error('Trello no encontró la tarjeta.', 404);
+      throw error(`Trello respondió ${r.status}${por ? ` (${por})` : ''}.`);
+    }
+    return r.json();
+  }
+}
+
+/** Adjunta un archivo (base64) a una tarjeta del tablero de compras. */
+export async function adjuntarArchivo(tarjetaId, archivo, fetchImpl = fetch) {
+  if (!RE_ID.test(String(tarjetaId))) throw error('Identificador inválido.', 400);
+  const tipo = String(archivo?.tipo || '');
+  if (!TIPOS_ADJUNTO[tipo]) throw error('Solo se pueden adjuntar PDF, JPG o PNG.', 400);
+  const b64 = String(archivo?.datos || '');
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) throw error('Archivo inválido.', 400);
+  const datos = Buffer.from(b64, 'base64');
+  if (!datos.length) throw error('Archivo vacío.', 400);
+  if (datos.length > MAX_ADJUNTO) throw error('El archivo pesa más de 3 MB: subilo a mano a Trello.', 413);
+  const nombre = nombreAdjunto(archivo?.nombre, tipo);
+  const [tarjeta, idTab, previos] = await Promise.all([
+    get(`/cards/${tarjetaId}?fields=idBoard,closed`, fetchImpl),
+    idTablero(fetchImpl),
+    get(`/cards/${tarjetaId}/attachments?fields=name`, fetchImpl),
+  ]);
+  if (!tarjeta || !idTab || tarjeta.idBoard !== idTab) throw error('La tarjeta no es del tablero de compras.', 403);
+  if (Array.isArray(previos) && previos.some((a) => String(a?.name) === nombre)) return { nombre, yaEstaba: true };
+  const adj = await post(`/cards/${tarjetaId}/attachments`, () => {
+    const form = new FormData();
+    form.append('name', nombre);
+    form.append('mimeType', tipo);
+    form.append('file', new Blob([datos], { type: tipo }), nombre);
+    return form;
+  }, fetchImpl);
+  return { nombre, yaEstaba: false, ...(RE_ID.test(String(adj?.id || '')) ? { id: adj.id } : {}) };
 }

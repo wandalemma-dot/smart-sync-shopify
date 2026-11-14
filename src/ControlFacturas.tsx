@@ -10,7 +10,7 @@
 // pasa a texto con api/leer-remito.js y se puede corregir o escribir a mano.
 // No toca Shopify.
 // ============================================================================
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as XLSX from 'xlsx';
 import Asistente from './Asistente';
 import {
@@ -33,7 +33,7 @@ import { planCargaDistrinando } from './utils/cargaDistrinando';
 import { entregaArchivada, estadoCargaFactura, leerEstadoCargaId, ordenesQueSalen, planCargaId, type OrdenQueSale, precioYCostoAntes, SUCURSAL_CARGA_ID, type EstadoCargaId } from './utils/cargaId';
 import { actualizarPreciosManualmente, shopifyGraphQL } from './utils/shopify';
 import {
-  apiControl, boton, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, nombreArchivoPlanilla, slug, td, th,
+  adjuntarATrello, apiControl, archivosParaTrello, boton, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, nombreArchivoPlanilla, slug, td, th,
 } from './utils/entregasUi';
 
 type Prov = 'distrinando' | 'id' | 'family';
@@ -208,6 +208,15 @@ export default function ControlFacturas() {
   const [planCarga, setPlanCarga] = useState<PlanCarga | null>(null);
   // Lo leído para armar la carga: «cargarlo igual» (no separar lo vendido en iD) rearma sin volver a leer.
   // Distrinando (13-nov-2026): además la tabla de talle y el talle de destino que se eligen en la vista previa.
+  /** La factura y las fotos del remito que se subieron en esta pantalla, para mandarlas a Trello sin elegirlas de nuevo. */
+  const archivosEntrega = useRef(new Map<string, File[]>());
+  const [, setRecordados] = useState(0);
+  const recordar = (facturaId: string, files: File[], reemplazarFotos: boolean) => {
+    const antes = archivosEntrega.current.get(facturaId) ?? [];
+    const quedan = reemplazarFotos ? antes.filter((f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name)) : [];
+    archivosEntrega.current.set(facturaId, [...quedan, ...files]);
+    setRecordados((n) => n + 1);
+  };
   const baseCarga = useRef<{
     prov: Prov; r: ResultadoFactura; estado: EstadoCargaId; cargas: Record<string, CargaFamily>; modos: Map<string, ModoVenta>; cantidades: Map<string, Record<string, number>>;
     pedidos: Pedido[]; tablas: Map<string, string>; destinos: Map<string, Record<string, string>>;
@@ -787,6 +796,32 @@ export default function ControlFacturas() {
     rearmar();
   }
 
+  /**
+   * Adjunta la factura y las fotos del remito a la(s) tarjeta(s) de Trello de la entrega (14-nov-2026, gax:
+   * «que escriba las tarjetas y ponga las fotos de los remitos y la factura»). Sin archivos elegidos, usa los
+   * que se subieron en esta pantalla. Lo que la tarjeta ya tiene con el mismo nombre no se sube otra vez.
+   */
+  async function subirATrello(r: ResultadoFactura, elegidos?: File[]) {
+    const files = elegidos?.length ? elegidos : archivosEntrega.current.get(r.factura.id) ?? [];
+    const tarjetas = [...new Set(r.pedidosCubiertos.map((id) => tarjetaDeNota(datos.pedidos.find((p) => p.id === id))).filter(Boolean))];
+    if (!files.length || !tarjetas.length) return;
+    const nombres = tarjetas.map((t) => datos.pedidos.find((p) => tarjetaDeNota(p) === t)?.nombre || t);
+    if (!confirm(`Se ${files.length === 1 ? 'adjunta 1 archivo' : `adjuntan ${files.length} archivos`} (${files.map((f) => f.name).join(', ')}) a ${tarjetas.length === 1 ? 'la tarjeta' : 'las tarjetas'} de Trello: ${nombres.join(', ')}. ¿Confirmás?`)) return;
+    setError(''); setAvisos([]);
+    setOcupado('Subiendo a Trello…');
+    const hechos: string[] = [];
+    try {
+      const archivos = await archivosParaTrello(files, r.factura.numero, r.remito?.numero || r.factura.remito || '');
+      for (const [i, t] of tarjetas.entries()) {
+        const subidos: string[] = [], ya: string[] = [];
+        for (const a of archivos) { const x = await adjuntarATrello(t, a); (x.yaEstaba ? ya : subidos).push(x.nombre); }
+        hechos.push(`Trello «${nombres[i]}»: ${subidos.length ? `adjunté ${subidos.join(', ')}` : 'no subí nada nuevo'}${ya.length ? ` (ya tenía ${ya.join(', ')})` : ''}.`);
+      }
+      setAvisos(hechos);
+    } catch (e) { setAvisos([...hechos, `No pude subir a Trello: ${mensaje(e)}`]); }
+    finally { setOcupado(''); }
+  }
+
   /** Dar una entrega por cerrada (pasa al apartado verde) o volver a abrirla. */
   async function archivar(r: ResultadoFactura, estado: 'cerrada' | 'abierta') {
     if (estado === 'cerrada' && !confirm(`¿Dar por cerrada la entrega de la factura ${r.factura.numero}? Pasa al apartado verde de cargadas; la podés volver a abrir cuando quieras. No cambia nada en Shopify.`)) return;
@@ -852,6 +887,7 @@ export default function ControlFacturas() {
 
   async function fotosParaFactura(facturaId: string, files: File[]) {
     const p = prov;
+    recordar(facturaId, files, true);
     const m = await remitoDeFotos(facturaId, files);
     if (!sigue(p)) return;
     await recargar();
@@ -883,6 +919,7 @@ export default function ControlFacturas() {
       await api({ proveedor: p, accion: 'guardarFactura', factura });
       nuevos.push(`Factura ${factura.numero} ${ya ? 'actualizada (ya estaba cargada)' : 'guardada'}: ${factura.renglones.length} renglones.`, ...av);
     } catch (e) { setAvisos([`${nuevaFactura.name}: ${mensaje(e)}`]); return; }
+    recordar(factura.id, [nuevaFactura, ...nuevasFotos], false);
     if (nuevasFotos.length) nuevos.push(...await remitoDeFotos(factura.id, nuevasFotos));
     if (!sigue(p)) return;
     setNuevaFactura(null); setNuevasFotos([]);
@@ -940,7 +977,8 @@ export default function ControlFacturas() {
       onGuardarRemito={(remito) => { soltarPlan(r.factura.id); return guardar({ accion: 'guardarRemito', facturaId: r.factura.id, remito }); }}
       onBorrarRemito={() => { if (confirm('¿Borrar el remito de esta entrega?')) { soltarPlan(r.factura.id); guardar({ accion: 'borrarRemito', facturaId: r.factura.id }); } }}
       onNota={(f) => subirPedidos(f, r.factura.fecha, r.factura.id)}
-      onTrello={() => buscarEnTrelloParaFactura(r.factura)} res={res} todas={pedidosControl} consejos={consejos}
+      onTrello={() => buscarEnTrelloParaFactura(r.factura)} recordados={archivosEntrega.current.get(r.factura.id)?.length ?? 0}
+      onSubirTrello={(f) => subirATrello(r, f)} res={res} todas={pedidosControl} consejos={consejos}
       informe={informe?.prov === prov && informe.facturaId === r.factura.id ? informe : null} onRecargarBorrada={recargarBorrada}
       carga={prov === 'id' || prov === 'distrinando' ? {
         cargas: datos.cargas ?? {}, noLlego: datos.noLlego ?? {}, plan: planCarga?.entregaId === r.factura.id ? planCarga : null,
@@ -1127,11 +1165,13 @@ function estadoRenglon(x: ControlRenglon, nombrePedido: (id: string) => string):
 const EXPLICA_ID = 'Lo que llegó (el remito, menos lo que salió para órdenes y lo que ya está vendido en iD, que se separa) se SUMA al stock de Martínez; el stock de iD lo lleva la sincronización. Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (si un talle que llega ya tenía stock, lleva el promedio ponderado), y si el margen no llega al 50% hay que poner un precio nuevo para toda la curva. Lo que viene en packs (X6 en la factura, en el nombre de Shopify o en la lista de packs de la plantilla de iD) se carga por unidad, con el costo dividido. Los productos que no están en Shopify se crean desde Sincronización.';
 const EXPLICA_DISTRINANDO = 'Lo que llegó (el remito) se SUMA al stock de Martínez. Cada talle US entra en el talle de Shopify que da el SKU del proveedor, el AR que informa la nota o la tabla de talle que elijas; al lado de cada talle podés escribir otro si entró en otro. La tabla elegida se agrega a las etiquetas. Los talles que no existen se crean (SKU del proveedor, precio de la curva, costo de la factura) y los modelos nuevos se crean con precio Reebok (Mayorista × 1,8755, terminado en 999). Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (con stock: promedio ponderado). Por ahora solo Reebok calzado.';
 
-function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, informe, onRecargarBorrada, res, todas, consejos, carga }: {
+function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, recordados, onSubirTrello, informe, onRecargarBorrada, res, todas, consejos, carga }: {
   r: ResultadoFactura; abierta: boolean; onAbrir: () => void; pedidos: PedidoGuardado[]; cerradas: Set<string>; nombrePedido: (id: string) => string;
   res: ResultadoGeneral; todas: PedidoGuardado[]; consejos: Map<string, ConsejoNota>;
   manual: string[]; condiciones: string; ocupado: boolean; onAsignar: (ids: string[]) => void; onBorrar: () => void; onDeposito: () => void;
   onFotos: (f: File[]) => void; onGuardarRemito: (r: Remito) => Promise<boolean>; onBorrarRemito: () => void; onNota: (f: File[]) => void; onTrello: () => void;
+  /** Factura y fotos subidas en esta pantalla, y adjuntarlas (o las elegidas) a la tarjeta de Trello. */
+  recordados: number; onSubirTrello: (f?: File[]) => void;
   informe: InformeTrello | null; onRecargarBorrada: (f: FilaTrello) => void;
   /** iD: carga en Shopify (Martínez). */
   carga?: {
@@ -1250,7 +1290,12 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
         onModoVenta={carga.onModoVenta} onCantidad={carga.onCantidad} onTabla={carga.onTabla} onDestino={carga.onDestino} sinTildar
         onSku={carga.onSku} onQuitarTalle={carga.onQuitarTalle} onQuitar={carga.onQuitar} onMailSolo={carga.onMailSolo} onPack={carga.onPack}
         explicacion={carga.explicacion} />}
-      <TarjetasTrello ids={r.pedidosCubiertos} pedidos={pedidos} />
+      <TarjetasTrello ids={r.pedidosCubiertos} pedidos={pedidos}>
+        {recordados > 0 && <button style={{ ...botonChico, padding: '1px 8px' }} disabled={ocupado} title="Adjunta la factura y las fotos del remito que subiste recién a la tarjeta de Trello"
+          onClick={() => onSubirTrello()}>📎 Subir factura y remito a Trello ({recordados})</button>}
+        <Archivo etiqueta={recordados ? '📎 Elegir otros' : '📎 Subir factura y remito a Trello'} accept=".pdf,image/*" multiple disabled={ocupado}
+          estilo={{ ...botonChico, padding: '1px 8px' }} onArchivos={(f) => onSubirTrello(f)} />
+      </TarjetasTrello>
       {r.semaforo !== 'incompleta' && r.pedidosCubiertos.length > 0 && <PlanillasMarcadas r={r} res={res} pedidos={todas} nombrePedido={nombrePedido} ocupado={ocupado} consejos={consejos} />}
       {informe && <InformeTrelloCaja informe={informe} ocupado={ocupado} onRecargar={onRecargarBorrada} />}
 
@@ -1636,7 +1681,7 @@ function InformeTrelloCaja({ informe, ocupado, onRecargar }: { informe: InformeT
   );
 }
 
-function TarjetasTrello({ ids, pedidos }: { ids: string[]; pedidos: PedidoGuardado[] }) {
+function TarjetasTrello({ ids, pedidos, children }: { ids: string[]; pedidos: PedidoGuardado[]; children?: ReactNode }) {
   const tarjetas = ids.map((id) => pedidos.find((p) => p.id === id)).filter((p): p is PedidoGuardado => !!enlaceTrello(p));
   const vistas = new Set<string>();
   const unicas = tarjetas.filter((p) => !vistas.has(enlaceTrello(p)) && vistas.add(enlaceTrello(p)));
@@ -1644,6 +1689,7 @@ function TarjetasTrello({ ids, pedidos }: { ids: string[]; pedidos: PedidoGuarda
   return (
     <div style={{ fontSize: '0.84rem', marginTop: 6 }}>
       🗂️ En Trello: {unicas.map((p, i) => <Fragment key={p.id}>{i ? ' + ' : ''}<a href={enlaceTrello(p)} target="_blank" rel="noreferrer" style={{ color: '#60a5fa' }}>{p.nombre}</a></Fragment>)}
+      {unicas.some((p) => tarjetaDeNota(p)) && children && <span style={{ marginLeft: 8, display: 'inline-flex', gap: 6, flexWrap: 'wrap', verticalAlign: 'middle' }}>{children}</span>}
     </div>
   );
 }
