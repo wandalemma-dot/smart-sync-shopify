@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import * as XLSX from 'xlsx';
 import { unzipSync, zipSync } from 'fflate';
-import { bajarAdjunto, esVerde, fechaCreacion, listarTarjetas, MAX_ADJUNTO, verdesDe } from './trello.js';
+import { adjuntarArchivo, bajarAdjunto, esVerde, fechaCreacion, listarTarjetas, MAX_ADJUNTO, nombreAdjunto, verdesDe } from './trello.js';
 import { esVerde as esVerdeApp } from '../src/utils/planillaVerde.ts';
 import { NOTA_1522, VERDES_1522, planillaFalsa } from '../src/utils/__tests__/planillaFalsa.ts';
 import { leerPedidoAuto } from '../src/utils/lectoresFacturas.ts';
@@ -288,5 +288,84 @@ describe('Trello (solo lectura)', () => {
       expect(e.message).toMatch(/Las claves de Trello en Vercel tienen un carácter que no va/);
       expect(e.message).not.toContain(TOKEN);
     });
+  });
+});
+
+describe('Adjuntar la factura y el remito a la tarjeta (14-nov-2026)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+  const PDF = Buffer.from('%PDF-1.4 factura').toString('base64');
+  /** Trello falso: la tarjeta, el tablero, los adjuntos que ya tiene y lo que se sube. */
+  function trello({ board = BOARD_ID, previos = [], estadoPost = 200 } = {}) {
+    const subidos = [];
+    const f = vi.fn(async (url, opts = {}) => {
+      const ruta = url.replace('https://api.trello.com/1', '');
+      if (opts.method === 'POST') {
+        subidos.push({ ruta, form: opts.body, auth: opts.headers.Authorization });
+        return estadoPost === 200 ? Response.json({ id: 'd'.repeat(24) }) : new Response('unauthorized permission requested', { status: estadoPost });
+      }
+      if (ruta.startsWith(`/cards/${CARD}/attachments`)) return Response.json(previos);
+      if (ruta.startsWith(`/cards/${CARD}`)) return Response.json({ idBoard: board, closed: false });
+      if (ruta.startsWith('/boards/')) return Response.json({ id: BOARD_ID });
+      return new Response('', { status: 404 });
+    });
+    return { f, subidos };
+  }
+
+  it('sube el PDF a la tarjeta del tablero, con las claves en el encabezado', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    const { f, subidos } = trello();
+    const r = await adjuntarArchivo(CARD, { nombre: 'Factura 0039-00283124.pdf', tipo: 'application/pdf', datos: PDF }, f);
+    expect(r).toMatchObject({ nombre: 'Factura 0039-00283124.pdf', yaEstaba: false });
+    expect(subidos).toHaveLength(1);
+    expect(subidos[0].ruta).toBe(`/cards/${CARD}/attachments`);
+    expect(subidos[0].auth).toBe('OAuth oauth_consumer_key="k", oauth_token="t"');
+    expect(subidos[0].form.get('name')).toBe('Factura 0039-00283124.pdf');
+    expect(Buffer.from(await subidos[0].form.get('file').arrayBuffer()).toString()).toBe('%PDF-1.4 factura');
+    for (const [url] of f.mock.calls) expect(url).not.toMatch(/key=|token=/);
+  });
+
+  it('no sube dos veces el mismo archivo', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    const { f, subidos } = trello({ previos: [{ name: 'Factura 0039-00283124.pdf' }] });
+    expect(await adjuntarArchivo(CARD, { nombre: 'Factura 0039-00283124.pdf', tipo: 'application/pdf', datos: PDF }, f)).toMatchObject({ yaEstaba: true });
+    expect(subidos).toHaveLength(0);
+  });
+
+  it('solo tarjetas del tablero de compras, solo PDF/JPG/PNG de hasta 3 MB', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    const otra = trello({ board: 'e'.repeat(24) });
+    await expect(adjuntarArchivo(CARD, { nombre: 'x', tipo: 'application/pdf', datos: PDF }, otra.f)).rejects.toThrow(/no es del tablero/);
+    expect(otra.subidos).toHaveLength(0);
+    const { f } = trello();
+    await expect(adjuntarArchivo('../x', { nombre: 'x', tipo: 'application/pdf', datos: PDF }, f)).rejects.toThrow(/inválido/);
+    await expect(adjuntarArchivo(CARD, { nombre: 'x.exe', tipo: 'application/x-msdownload', datos: PDF }, f)).rejects.toThrow(/PDF, JPG o PNG/);
+    await expect(adjuntarArchivo(CARD, { nombre: 'x', tipo: 'image/jpeg', datos: 'no es base64!' }, f)).rejects.toThrow(/inválido/);
+    const grande = Buffer.alloc(MAX_ADJUNTO + 1).toString('base64');
+    await expect(adjuntarArchivo(CARD, { nombre: 'x', tipo: 'image/jpeg', datos: grande }, f)).rejects.toThrow(/3 MB/);
+    expect(f.mock.calls.length).toBe(0);
+  });
+
+  it('con la clave de solo lectura avisa que hay que cambiarla', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    const { f } = trello({ estadoPost: 401 });
+    await expect(adjuntarArchivo(CARD, { nombre: 'Remito', tipo: 'image/jpeg', datos: PDF }, f)).rejects.toThrow(/solo lectura/);
+  });
+
+  it('nombre del adjunto prolijo y con la extensión de su tipo', () => {
+    expect(nombreAdjunto('Remito 0085-00206200 (1).jpeg', 'image/jpeg')).toBe('Remito 0085-00206200 (1).jpg');
+    expect(nombreAdjunto('fac<tu>ra/../x.pdf', 'application/pdf')).toBe('fac tu ra .. x.pdf');
+    expect(nombreAdjunto('', 'image/png')).toBe('archivo.png');
+  });
+
+  it('endpoint: adjuntar solo por POST, con sesión y mismo origen', async () => {
+    const res = () => { const r = { code: 0, setHeader() {}, status(c) { r.code = c; return r; }, json() { return r; } }; return r; };
+    vi.stubEnv('APP_ACCESS_KEY', 's'.repeat(40));
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    const r1 = res();
+    await handler({ method: 'POST', headers: { 'content-type': 'application/json' }, body: { accion: 'adjuntar' } }, r1);
+    expect(r1.code).toBe(401);
+    const r2 = res();
+    await handler({ method: 'POST', headers: { cookie: `${COOKIE}=${makeSession()}`, origin: 'https://otro.example', host: 'app.example', 'content-type': 'application/json' }, body: { accion: 'adjuntar' } }, r2);
+    expect(r2.code).toBe(403);
   });
 });

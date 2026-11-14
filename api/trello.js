@@ -1,7 +1,8 @@
-// Trello para el control de facturas: lista las tarjetas del tablero de compras y
-// baja sus Excel. Solo sesión humana; solo lectura. No toca Shopify.
-import { identity, noStore } from '../server/access.js';
-import { bajarAdjunto, listarTarjetas, trelloConfigurado } from '../server/trello.js';
+// Trello para el control de facturas: lista las tarjetas del tablero de compras y baja sus
+// Excel. La única escritura: adjuntar la factura o la foto del remito a una tarjeta del tablero
+// (POST, mismo origen). Solo sesión humana. No toca Shopify.
+import { allowedOrigin, identity, noStore } from '../server/access.js';
+import { adjuntarArchivo, bajarAdjunto, listarTarjetas, trelloConfigurado } from '../server/trello.js';
 import { mensajeSeguro } from '../server/secretos.js';
 
 export const maxDuration = 60; // un Excel grande de iD (con fotos) se baja y se aliviana acá
@@ -9,9 +10,16 @@ export const maxDuration = 60; // un Excel grande de iD (con fotos) se baja y se
 export default async function handler(req, res) {
   noStore(res);
   if (identity(req) !== 'user') return res.status(401).json({ error: 'Iniciá sesión en la app.' });
-  if (req.method !== 'GET') return res.status(405).json({ error: 'Method Not Allowed' });
+  if (req.method !== 'GET' && req.method !== 'POST') return res.status(405).json({ error: 'Method Not Allowed' });
+  if (req.method === 'POST' && !allowedOrigin(req)) return res.status(403).json({ error: 'Origen no permitido.' });
   if (!trelloConfigurado()) return res.status(503).json({ error: 'Faltan TRELLO_KEY y TRELLO_TOKEN en Vercel.', sinTrello: true });
   try {
+    if (req.method === 'POST') {
+      if (!String(req.headers?.['content-type'] || '').toLowerCase().startsWith('application/json')) return res.status(415).json({ error: 'Se requiere JSON.' });
+      const b = req.body || {};
+      if (b.accion !== 'adjuntar') return res.status(400).json({ error: 'Acción inválida.' });
+      return res.status(200).json(await adjuntarArchivo(b.tarjeta, b.archivo));
+    }
     const q = req.query || {};
     if (q.accion === 'tarjetas') return res.status(200).json(await listarTarjetas());
     if (q.accion === 'adjunto') return res.status(200).json(await bajarAdjunto(q.tarjeta, q.adjunto));
