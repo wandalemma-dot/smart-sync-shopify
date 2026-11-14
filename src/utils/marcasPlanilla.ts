@@ -188,7 +188,7 @@ const todoTipo = { calzado: 'todo el calzado', indumentaria: 'toda la indumentar
  * indumentaria/calzado»). Solo es un aviso: la app no mueve tarjetas.
  * `listaActual` = lista donde está la tarjeta; `listaParcial` = la lista de entregas parciales del tablero.
  */
-export function consejoNota(m: MarcasNota, opts: { listaActual?: string; listaParcial?: string } = {}): ConsejoNota {
+export function consejoNota(m: MarcasNota, opts: { listaActual?: string; listaParcial?: string; listaFinal?: string } = {}): ConsejoNota {
   const pedido = m.codigos.reduce((s, c) => s + c.pedido, 0);
   const llegaron = m.codigos.reduce((s, c) => s + c.llegaron, 0);
   const falta = m.codigos.filter((c) => c.llegaron < c.pedido).map((c) => ({ codigo: c.codigo, descripcion: c.descripcion, unidades: c.pedido - c.llegaron }));
@@ -197,7 +197,8 @@ export function consejoNota(m: MarcasNota, opts: { listaActual?: string; listaPa
     return {
       tipo: 'finalizar', corto: '✅ llegó todo: finalizar', falta,
       texto: `✅ Pedido completo: llegó todo (${pedido} u.).`,
-      tarjeta: `Podés darlo por finalizado${actual ? ` y sacar la tarjeta de «${actual}»` : ''}.`,
+      tarjeta: actual && actual === opts.listaFinal ? `La tarjeta ya está en «${actual}».`
+        : `Podés darlo por finalizado${actual ? ` y sacar la tarjeta de «${actual}»` : ''}.`,
     };
   }
   if (llegaron <= 0) return { tipo: 'nada', corto: 'todavía no llegó nada', texto: `Todavía no llegó nada de esta nota (${pedido} u.).`, tarjeta: '', falta };

@@ -98,6 +98,14 @@ export async function adjuntarATrello(tarjeta: string, archivo: ArchivoTrello): 
   return d;
 }
 
+/** Pasa una tarjeta del tablero de compras a otra lista (la app lo hace sola al avanzar la entrega). */
+export async function moverEnTrello(tarjeta: string, lista: string): Promise<{ yaEstaba: boolean }> {
+  const r = await fetch('/api/trello', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accion: 'mover', tarjeta, lista }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || `Error ${r.status}`);
+  return d;
+}
+
 /** Lee fotos con IA (api/leer-remito.js): el remito, o la planilla de entrega de Family. */
 export async function leerFotos<T>(files: File[], tipo: 'remito' | 'entrega' = 'remito'): Promise<T> {
   const fotos = await prepararFotos(files);
