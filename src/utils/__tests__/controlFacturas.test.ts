@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { analizarFacturas, compararRecepcion, conImpuestos, fmt, huellaPedido, mensajePagos, mismoTalle, reporteReclamo, resumenPedidos } from '../controlFacturas';
+import { analizarFacturas, compararRecepcion, conImpuestos, fmt, huellaPedido, mailPagos, mensajePagos, mismoTalle, reporteReclamo, resumenPedidos } from '../controlFacturas';
 import type { Factura, Pedido, RenglonFactura } from '../controlFacturas';
 import { numero, leerFacturaId, leerPedidoExcel, leerPedidoAuto, leerPedidoId, leerTextoRemito, textoRemito } from '../lectoresFacturas';
 
@@ -81,7 +81,7 @@ describe('control de facturas contra pedidos', () => {
     expect(numero('63,982.40')).toBe(63982.4);
     expect(numero('8.837.577,37')).toBe(8837577.37);
     const r = analizarFacturas([pA], [factura('1', '2026-10-05', [ren('X1', 5), ren('ROJO', 2)])]);
-    expect(mensajePagos(r.facturas[0])).toMatch(/✅ OK: pedido/);
+    expect(mensajePagos(r.facturas[0])).toMatch(/Factura 0001-00000001 del 05\/10\/2026: total .*\nPedido A: 7 u\., entrega completa\.\n✅ Coincide con la nota de pedido: OK\./);
   });
 
   it('mensaje a administración: informa las diferencias, sin pedir reclamos, y primero lo que no se pidió', () => {
@@ -89,12 +89,25 @@ describe('control de facturas contra pedidos', () => {
     const r = analizarFacturas([pA], [factura('1', '2026-10-05', [ren('X1', 5, 110000), ren('ZZ9', 1)])]);
     const m = mensajePagos(r.facturas[0]);
     expect(r.facturas[0].semaforo).toBe('reclamar');
-    expect(m).toMatch(/⚠️ NO COINCIDE CON LA NOTA DE PEDIDO/);
+    expect(m).toMatch(/⚠️ Diferencias con la nota de pedido:\nVino algo que no se pidió:\n- FACTURADO SIN PEDIR: ZZ9 \(1\)/);
     expect(m).not.toMatch(/RECLAMAR|nota de crédito|revisar|¿/i);
-    expect(m).toMatch(/Vino algo que no se pidió:\n- FACTURADO SIN PEDIR: ZZ9 \(1\)/);
     expect(m).toMatch(/- ZZ9 no figura en ninguna nota de pedido\./);
-    expect(m).toMatch(/Otras diferencias encontradas:\n- PRECIO: 1 artículo\(s\) más caros que en el pedido: \$ 30\.000,00 neto/);
-    expect(m.indexOf('no se pidió')).toBeLessThan(m.indexOf('PRECIO'));
+    expect(m).toMatch(/Precio distinto al del pedido:\n- X1 X1: facturado a \$ 110\.000,00 con 40%; en el pedido, \$ 100\.000,00 con 40% \(5 u\.\): \$ 30\.000,00 neto de más\./);
+    expect(m).toMatch(/Facturado de más por precio: \$ 30\.000,00 neto \+ IVA \$ 6\.300,00/);
+    expect(m.indexOf('no se pidió')).toBeLessThan(m.indexOf('Precio distinto'));
+  });
+
+  it('mail a administración: lo interno (otra nota, faltante, adelanto) no va; con eso solo, es OK', () => {
+    // X1: 9 u. toma 5 de A y adelanta 4 de B (OTRA NOTA / ADELANTO): para administración no es una diferencia.
+    const r = analizarFacturas([pA, pB], [factura('1', '2026-10-21', [ren('X1', 9)])]);
+    expect(r.facturas[0].motivos.some((x) => /^(OTRA NOTA|ADELANTO|FALTANTE)/.test(x))).toBe(true);
+    const { asunto, cuerpo } = mailPagos(r.facturas[0], 'ID');
+    expect(asunto).toBe('Fac. OK ID - 0001-00000001');
+    expect(cuerpo).toMatch(/^Hola,\n\nFactura 0001-00000001 del 21\/10\/2026: total/);
+    expect(cuerpo).toContain('✅ Coincide con la nota de pedido: OK.');
+    expect(cuerpo).not.toMatch(/OTRA NOTA|ADELANTO|FALTANTE/);
+    const conDif = analizarFacturas([pA], [factura('1', '2026-10-05', [ren('ZZ9', 1)])]);
+    expect(mailPagos(conDif.facturas[0], 'Distrinando').asunto).toMatch(/^Fac\. Distrinando - 0001-00000001 \((con diferencias|control incompleto)\)$/);
   });
 
   it('pedido Excel: packs pasan a pares con precio por par', () => {
@@ -147,7 +160,7 @@ describe('semáforo, estado de pedidos y recepción', () => {
     const r = analizarFacturas([ped], [fac]);
     expect(r.facturas[0].semaforo).toBe('ok');
     expect(r.facturas[0].pedidosCompletos).toBe(true);
-    expect(mensajePagos(r.facturas[0], 'contado 7% desc')).toMatch(/3 pares, total \$ 356,40, sin vencimiento, completa\.\nRecordar: contado 7% desc\./);
+    expect(mensajePagos(r.facturas[0], 'contado 7% desc')).toMatch(/total \$ 356,40, sin vencimiento\.\nPedido P1: 3 u\., entrega completa\.\n✅ Coincide con la nota de pedido: OK\.\nRecordar: contado 7% desc\./);
     expect(resumenPedidos([ped], r)[0].estado).toBe('completo');
     const rec = compararRecepcion(r.facturas[0].checklist, { recibido: { 'A|40': 2, 'A|41': 0 }, extras: [{ codigo: 'B', talle: '41', cantidad: 1 }] });
     expect(rec.ok).toBe(false);
@@ -385,7 +398,7 @@ describe('tres partes obligatorias y remito', () => {
     const sinRemito = analizarFacturas([ped], [f], {}, {}).facturas[0];
     expect(sinRemito.semaforo).toBe('incompleta');
     expect(sinRemito.faltaRemito).toBe(true);
-    expect(mensajePagos(sinRemito)).toMatch(/⏳ INCOMPLETA \(FALTA EL REMITO O LA NOTA\)/);
+    expect(mensajePagos(sinRemito)).toMatch(/⏳ Control incompleto: falta el remito o la nota de pedido\./);
     const sinNota = analizarFacturas([], [f], {}, { 1: rem('571818C 6\nA12744C 4') }).facturas[0];
     expect(sinNota.semaforo).toBe('incompleta');
     expect(sinNota.faltaNota).toBe(true);
