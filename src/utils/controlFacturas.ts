@@ -958,14 +958,36 @@ export function fmt(n: number): string {
 }
 
 /** Mensaje corto para el grupo de pagos: «Factura X ✅ OK: pedido Y, N pares, total $Z, vence DD/MM, completa». */
+/** Lo que se encontró, sin indicaciones de qué hacer (gax, 16-nov-2026: el mensaje a administración solo informa la diferencia). */
+export function motivoInformativo(m: string): string {
+  return m
+    .replace(/ Pedir nota de crédito por .*$/, '')
+    .replace(/: revisar\.$/, '.')
+    .replace(/ no figura en ninguna nota de pedido pendiente: ¿falta cargar un pedido\?$/, ' no figura en ninguna nota de pedido.')
+    .replace(/: ¿es el remito correcto\?$/, '.')
+    .replace(/: subila o tildala a mano\.$/, '.');
+}
+
+/** Lo que vino sin pedirse: lo único que no tiene que pasar (va primero en el mensaje). */
+const esNoPedido = (m: string) => /^(FACTURADO SIN PEDIR|DOBLE COBRO|TALLES):/.test(m) || / no figura en ninguna nota de pedido/.test(m);
+
+/** Las diferencias encontradas, como información: primero lo que vino sin pedirse. */
+export function diferenciasInformativas(motivos: string[]): string[] {
+  const noPedido = motivos.filter(esNoPedido), resto = motivos.filter((m) => !esNoPedido(m));
+  const out: string[] = [];
+  if (noPedido.length) out.push('Vino algo que no se pidió:', ...noPedido.map((m) => `- ${motivoInformativo(m)}`));
+  if (resto.length) out.push(noPedido.length ? 'Otras diferencias encontradas:' : 'Diferencias encontradas:', ...resto.map((m) => `- ${motivoInformativo(m)}`));
+  return out;
+}
+
 export function mensajePagos(r: ResultadoFactura, condicionesPago = '', nombrePedido: (id: string) => string = (id) => id): string {
   const f = r.factura;
   const ped = r.pedidosCubiertos.length ? `pedido ${r.pedidosCubiertos.map(nombrePedido).join(' + ')}` : 'sin pedido asociado';
-  const icono = { ok: '✅ OK', observaciones: '⚠️ CON OBSERVACIONES', reclamar: '❌ NO COINCIDE, RECLAMAR', incompleta: '⏳ INCOMPLETA (FALTA EL REMITO O LA NOTA)' }[r.semaforo];
+  const icono = { ok: '✅ OK', observaciones: '⚠️ CON OBSERVACIONES', reclamar: '⚠️ NO COINCIDE CON LA NOTA DE PEDIDO', incompleta: '⏳ INCOMPLETA (FALTA EL REMITO O LA NOTA)' }[r.semaforo];
   const vence = f.vencimiento ? `vence ${fechaAr(f.vencimiento).slice(0, 5)}` : f.condicionVenta ? f.condicionVenta : 'sin vencimiento';
   const partes = [ped, `${r.unidades} pares`, `total ${fmt(f.total)}`, vence, r.pedidosCompletos ? 'completa' : 'parcial'];
   const lineas = [`Factura ${f.numero} ${icono}: ${partes.join(', ')}.`];
-  if (r.semaforo !== 'ok') lineas.push(...r.motivos.map((m) => `- ${m}`));
+  if (r.semaforo !== 'ok') lineas.push(...diferenciasInformativas(r.motivos));
   if (condicionesPago.trim()) lineas.push(`Recordar: ${condicionesPago.trim()}.`);
   return lineas.join('\n');
 }
