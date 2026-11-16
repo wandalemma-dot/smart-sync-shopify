@@ -980,16 +980,57 @@ export function diferenciasInformativas(motivos: string[]): string[] {
   return out;
 }
 
+/**
+ * Lo que le importa a administración (16-nov-2026, gax: «tocar el botón y que se abra solo»; «solamente tiene que
+ * informar la diferencia… que no manden algo que no se pidió»). Afuera lo interno del control: a qué nota
+ * corresponde cada artículo (OTRA NOTA), lo que falta entregar, adelantos y avisos de carga.
+ */
+const PARA_ADMIN = /^(FACTURADO SIN PEDIR|DOBLE COBRO|TALLES|REMITO: facturaron|REMITO: llegó|CUENTAS):| no figura en ninguna nota de pedido/;
+
+function lineasPrecio(r: ResultadoFactura): string[] {
+  const out: string[] = [];
+  for (const x of r.renglones) for (const d of x.difPrecio) {
+    if (!d.diferencia) continue;
+    out.push(`- ${x.codigo} ${x.descripcion}: facturado a ${fmt(d.precioFactura)} con ${d.bonificacionFactura}%; en el pedido, ${fmt(d.precioPedido)} con ${d.descuentoPedido}% (${d.cantidad} u.): ${fmt(Math.abs(d.diferencia))} neto ${d.diferencia > 0 ? 'de más' : 'de menos'}.`);
+  }
+  const mas = Math.round(r.renglones.flatMap((x) => x.difPrecio).reduce((t, d) => t + (d.diferencia > 0 ? Math.round(d.diferencia * 100) : 0), 0)) / 100;
+  if (mas > 0) {
+    const x = conImpuestos(mas, r.factura);
+    out.push(`  Facturado de más por precio: ${fmt(x.neto)} neto + IVA ${fmt(x.iva)} + percepciones ${fmt(x.percepciones)} = ${fmt(x.total)}.`);
+  }
+  return out;
+}
+
+/** Texto para administración: la factura, el remito y si coincide con la nota de pedido. Solo informa. */
 export function mensajePagos(r: ResultadoFactura, condicionesPago = '', nombrePedido: (id: string) => string = (id) => id): string {
   const f = r.factura;
-  const ped = r.pedidosCubiertos.length ? `pedido ${r.pedidosCubiertos.map(nombrePedido).join(' + ')}` : 'sin pedido asociado';
-  const icono = { ok: '✅ OK', observaciones: '⚠️ CON OBSERVACIONES', reclamar: '⚠️ NO COINCIDE CON LA NOTA DE PEDIDO', incompleta: '⏳ INCOMPLETA (FALTA EL REMITO O LA NOTA)' }[r.semaforo];
+  const remito = r.remito?.numero || f.remito;
   const vence = f.vencimiento ? `vence ${fechaAr(f.vencimiento).slice(0, 5)}` : f.condicionVenta ? f.condicionVenta : 'sin vencimiento';
-  const partes = [ped, `${r.unidades} pares`, `total ${fmt(f.total)}`, vence, r.pedidosCompletos ? 'completa' : 'parcial'];
-  const lineas = [`Factura ${f.numero} ${icono}: ${partes.join(', ')}.`];
-  if (r.semaforo !== 'ok') lineas.push(...diferenciasInformativas(r.motivos));
+  const lineas = [
+    `Factura ${f.numero} del ${fechaAr(f.fecha)}${remito ? `, remito ${remito}` : ''}: total ${fmt(f.total)}, ${vence}.`,
+    r.pedidosCubiertos.length
+      ? `Pedido ${r.pedidosCubiertos.map(nombrePedido).join(' + ')}: ${r.unidades} u., entrega ${r.pedidosCompletos ? 'completa' : 'parcial'}.`
+      : `${r.unidades} u., sin pedido asociado.`,
+  ];
+  const motivos = r.motivos.filter((m) => PARA_ADMIN.test(m));
+  const precio = lineasPrecio(r);
+  if (r.semaforo === 'incompleta') lineas.push('⏳ Control incompleto: falta el remito o la nota de pedido.');
+  else if (!motivos.length && !precio.length) lineas.push('✅ Coincide con la nota de pedido: OK.');
+  else {
+    lineas.push('⚠️ Diferencias con la nota de pedido:');
+    lineas.push(...diferenciasInformativas(motivos));
+    if (precio.length) lineas.push('Precio distinto al del pedido:', ...precio);
+  }
   if (condicionesPago.trim()) lineas.push(`Recordar: ${condicionesPago.trim()}.`);
   return lineas.join('\n');
+}
+
+/** El mail a administración, listo para abrir en Gmail con un toque. */
+export function mailPagos(r: ResultadoFactura, proveedor: string, condicionesPago = '', nombrePedido: (id: string) => string = (id) => id): { asunto: string; cuerpo: string } {
+  const texto = mensajePagos(r, condicionesPago, nombrePedido);
+  const ok = texto.includes('✅ Coincide');
+  const asunto = `Fac. ${ok ? 'OK ' : ''}${proveedor} - ${r.factura.numero}${ok ? '' : r.semaforo === 'incompleta' ? ' (control incompleto)' : ' (con diferencias)'}`;
+  return { asunto, cuerpo: ['Hola,', '', texto, '', 'Saludos.'].join('\n') };
 }
 
 export interface ResumenPedido {

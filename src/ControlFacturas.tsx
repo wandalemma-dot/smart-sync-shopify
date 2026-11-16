@@ -14,7 +14,7 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type React
 import * as XLSX from 'xlsx';
 import Asistente from './Asistente';
 import {
-  analizarFacturas, claveCodigo, notaDisponible, claveRecepcion, huellaPedido, compararRecepcion, fmt, mensajePagos, reporteReclamo, resumenPedidos,
+  analizarFacturas, claveCodigo, notaDisponible, claveRecepcion, huellaPedido, compararRecepcion, fmt, mailPagos, mensajePagos, reporteReclamo, resumenPedidos,
   type ControlRenglon, type CopiaPlanilla, type Factura, type Pedido, type Recepcion, type Remito, type ResultadoFactura, type ResultadoGeneral,
 } from './utils/controlFacturas';
 import { leerFacturaDistrinando, leerFacturaId, leerPedidoAuto, leerTextoRemito, textoRemito, type HojaMarcada, type ItemPdf } from './utils/lectoresFacturas';
@@ -1084,6 +1084,7 @@ export default function ControlFacturas() {
   const tarjeta = (r: ResultadoFactura) => <TarjetaEntrega key={r.factura.id} r={r} abierta={abierta === r.factura.id}
       onAbrir={() => setAbierta(abierta === r.factura.id ? null : r.factura.id)} pedidos={pedidosOrd} cerradas={cerradas} nombrePedido={nombrePedido}
       manual={datos.asignaciones[r.factura.id] || []} condiciones={condiciones} ocupado={!!ocupado}
+      mailsAdmin={datos.mailsAdmin ?? { para: [], copia: [] }} proveedor={prov === 'distrinando' ? 'Distrinando' : 'ID'}
       onAsignar={async (ids) => { const p = prov; if (await guardar({ accion: 'guardarAsignacion', facturaId: r.factura.id, pedidos: ids })) await avanzarYAvisar(p, r.factura.id); }}
       onBorrar={() => confirm(`¿Borrar la entrega de la factura ${r.factura.numero}? Se borran también el remito y lo que contó el depósito.`) && guardar({ accion: 'borrarFactura', id: r.factura.id })}
       onDeposito={() => { setFacturaDeposito(r.factura.id); setVista('deposito'); }}
@@ -1284,7 +1285,9 @@ function estadoRenglon(x: ControlRenglon, nombrePedido: (id: string) => string):
 const EXPLICA_ID = 'Lo que llegó (el remito, menos lo que salió para órdenes y lo que ya está vendido en iD, que se separa) se SUMA al stock de Martínez; el stock de iD lo lleva la sincronización. Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (si un talle que llega ya tenía stock, lleva el promedio ponderado), y si el margen no llega al 50% hay que poner un precio nuevo para toda la curva. Lo que viene en packs (X6 en la factura, en el nombre de Shopify o en la lista de packs de la plantilla de iD) se carga por unidad, con el costo dividido. Los productos que no están en Shopify se crean desde Sincronización.';
 const EXPLICA_DISTRINANDO = 'Lo que llegó (el remito) se SUMA al stock de Martínez. Cada talle US entra en el talle de Shopify que da el SKU del proveedor, el AR que informa la nota o la tabla de talle que elijas; al lado de cada talle podés escribir otro si entró en otro. La tabla elegida se agrega a las etiquetas. Los talles que no existen se crean (SKU del proveedor, precio de la curva, costo de la factura) y los modelos nuevos se crean con precio Reebok (Mayorista × 1,8755, terminado en 999). Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (con stock: promedio ponderado). Por ahora solo Reebok calzado.';
 
-function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, recordados, onSubirTrello, informe, onRecargarBorrada, res, todas, consejos, carga }: {
+function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, recordados, onSubirTrello, informe, onRecargarBorrada, res, todas, consejos, carga, mailsAdmin, proveedor }: {
+  /** Para el mail a administración (se abre en Gmail con un toque). */
+  mailsAdmin: MailsAviso; proveedor: string;
   r: ResultadoFactura; abierta: boolean; onAbrir: () => void; pedidos: PedidoGuardado[]; cerradas: Set<string>; nombrePedido: (id: string) => string;
   res: ResultadoGeneral; todas: PedidoGuardado[]; consejos: Map<string, ConsejoNota>;
   manual: string[]; condiciones: string; ocupado: boolean; onAsignar: (ids: string[]) => void; onBorrar: () => void; onDeposito: () => void;
@@ -1461,7 +1464,13 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
             </label>)}
           </details>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
-            <Copiar etiqueta="📋 Mensaje para pagos" texto={mensajePagos(r, condiciones, nombrePedido)} />
+            {(() => {
+              const m = mailPagos(r, proveedor, condiciones, nombrePedido);
+              return <a href={enlacesMail(mailsAdmin, m.asunto, m.cuerpo).gmail} target="_blank" rel="noreferrer"
+                title={mailsAdmin.para.length ? `Para ${mailsAdmin.para.join(', ')}` : 'Sin destinatario guardado: lo completás en Gmail'}
+                style={{ ...botonChico, textDecoration: 'none' }}>✉️ Mail a administración</a>;
+            })()}
+            <Copiar etiqueta="📋 Copiar" texto={mensajePagos(r, condiciones, nombrePedido)} />
             {reclamo && <Copiar etiqueta="📋 Texto de reclamo" texto={reclamo} />}
             <button style={botonChico} onClick={onDeposito}>📦 Checklist del depósito</button>
             {carga && Object.entries(carga.cargas).filter(([k, c]) => k.startsWith(`${f.id}|`) && c.estado === 'cargada').map(([k, c]) => (
