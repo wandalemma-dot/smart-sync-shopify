@@ -269,6 +269,8 @@ describe('iD: carga después de confirmar (precio y costo ANTES del stock)', () 
     expect(porTalle.S.inventoryItem).toEqual({ cost: '27000.00' });
     expect(porTalle.L.inventoryItem).toBeUndefined();
     expect(res.mensaje).toMatch(/Cambiado precio de toda la curva/);
+    expect(res.detalle?.precio?.nuevo).toBe(69900);
+    expect(res.detalle?.costos.join(' ')).toMatch(/27\.000,00 en S, M, XL/);
   });
   it('el promedio viaja con el stock y el costo que se leyeron, para que el servidor los vuelva a comprobar', async () => {
     const gql = shopify({ inventorySetQuantities: setOk });
@@ -282,6 +284,8 @@ describe('iD: carga después de confirmar (precio y costo ANTES del stock)', () 
       ponderado: { stock: 2, costoAnterior: '20000', unidades: 2, costoNuevo: '22500' },
     });
     expect(res.mensaje).toMatch(/costo promedio en L/);
+    expect(res.detalle?.costos).toContain('L $ 21.250,00 (promedio)');
+    expect(res.detalle?.precio).toBeUndefined();
   });
   it('si Shopify rechaza el precio o el costo, no se suma el stock y la marca se libera', async () => {
     const gql = shopify({ inventorySetQuantities: setOk });
@@ -486,6 +490,9 @@ describe('iD: cargar y pasar la venta de iD a Martínez (gax, 12-nov-2026)', () 
     const llamada = gql.mock.calls.find(([q]) => q.includes('fulfillmentOrderMove('))!;
     expect(llamada[1]).toEqual({ id: 'F1', loc: LOC, items: [{ id: 'F1-linea', quantity: 1 }, { id: 'L-M', quantity: 1 }] });
     expect(res.mensaje).toMatch(/Venta pasada de iD a .*S #210855, M #210855/);
+    // Resultado ordenado (gax, 16-nov-2026): unidades sumadas por talle y ventas que quedaron en Martínez.
+    expect(res.detalle?.sumados.map((t) => [t.talle, t.suma])).toEqual([['S', 1], ['M', 1]]);
+    expect(res.detalle?.pasadas).toEqual([{ talle: 'S', cantidad: 1, orden: '#210855' }, { talle: 'M', cantidad: 1, orden: '#210855' }]);
   });
 
   it('el disponible de iD queda como estaba: la unidad que Shopify libera al mover no se suma (gax, 12-nov-2026)', async () => {
@@ -521,6 +528,8 @@ describe('iD: cargar y pasar la venta de iD a Martínez (gax, 12-nov-2026)', () 
     });
     const [c] = await ejecutarCargaFamily(plan, {}, deps(sinLeer));
     expect(c.mensaje).toMatch(/Venta pasada.*Revisá el stock de iD de S/);
+    expect(c.detalle?.pasadas).toHaveLength(1);
+    expect(c.detalle?.notas.join(' ')).toMatch(/Revisá el stock de iD de S/);
   });
 
   it('sin el permiso de Shopify avisa qué falta; si el stock no se sumó, no mueve nada', async () => {

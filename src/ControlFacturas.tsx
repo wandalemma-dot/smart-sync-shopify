@@ -26,7 +26,8 @@ import RegistroCargas from './RegistroCargas';
 import EnlacesRapidos from './EnlacesRapidos';
 import { Archivo, Copiar, Parte } from './EntregasPartes';
 import { OrdenesQueSalen, PanelCarga } from './PanelCarga';
-import { accionesElegidas, ejecutarCargaFamily, resumenCarga, textoCarga, type CargaFamily, type EleccionesCarga, type ModoVenta, type PlanCarga } from './utils/cargaFamily';
+import { accionesElegidas, ejecutarCargaFamily, resumenCarga, textoCarga, type CargaFamily, type EleccionesCarga, type ModoVenta, type PlanCarga, type ResultadoCarga } from './utils/cargaFamily';
+import { ResultadosCarga } from './ResultadosCarga';
 import { cambiosDePrecio, enlacesMail, textoAvisoPrecio, type CambioPrecio, type MailsAviso } from './utils/avisoPrecio';
 import { diferenciasDeTalles, netosDeCarga, textoAvisoTalles } from './utils/avisoTalles';
 import { planCargaDistrinando } from './utils/cargaDistrinando';
@@ -192,6 +193,7 @@ export default function ControlFacturas() {
   const [avisoTalles, setAvisoTalles] = useState<{ asunto: string; cuerpo: string } | null>(null);
   /** Órdenes de iD que se llevaron algo de la última carga: cuáles ya pueden salir (12-nov-2026, gax). */
   const [ordenesCarga, setOrdenesCarga] = useState<OrdenQueSale[]>([]);
+  const [resultadoCarga, setResultadoCarga] = useState<{ resultados: ResultadoCarga[]; conVentas: boolean } | null>(null);
   const [fechaPedido, setFechaPedido] = useState(hoy());
   const [abierta, setAbierta] = useState<string | null>(null);
   /** Entrega cerrada que se está mirando completa (en el apartado verde se ve en una línea). */
@@ -910,7 +912,7 @@ export default function ControlFacturas() {
     const p = prov, eid = plan.entregaId, factura = r.factura.numero;
     const elegidas = accionesElegidas(plan, elecciones);
     const salen = ordenesQueSalen(plan, elecciones);
-    setAvisoPrecio(null); setAvisoTalles(null); setOrdenesCarga([]);
+    setAvisoPrecio(null); setAvisoTalles(null); setOrdenesCarga([]); setResultadoCarga(null); setAvisos([]);
     setOcupado('Cargando en Shopify… no cierres esta página.');
     try {
       const resultados = await ejecutarCargaFamily(plan, elecciones, {
@@ -922,9 +924,8 @@ export default function ControlFacturas() {
         onProgreso: (h, t) => setOcupado(`Cargando en Shopify… ${h} de ${t}. No cierres esta página.`),
         antes: precioYCostoAntes(actualizarPreciosManualmente),
       });
-      const icono = { cargada: '✅', parcial: '⚠️', dudosa: '❓', error: '❌', saltado: '↷' } as const;
       if (sigue(p)) {
-        setAvisos(resultados.map((x) => `${icono[x.estado]} ${x.codigo}: ${x.mensaje}`));
+        setResultadoCarga({ resultados, conVentas: p === 'id' });
         setOrdenesCarga(salen);
         const cambios = cambiosDePrecio(elegidas, resultados);
         const fecha = hoyAr().split('-').reverse().join('/');
@@ -1056,7 +1057,7 @@ export default function ControlFacturas() {
           onMailSolo: () => planCarga && armarMailTalles(r, planCarga, [], prov), explicacion: EXPLICA_DISTRINANDO,
         }),
       } : undefined} />;
-  const cambiarProv = (p: Prov) => { setPlanCarga(null); setAvisoPrecio(null); setAvisoTalles(null); setOrdenesCarga([]); setVerRegistro(false); provRef.current = p; setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
+  const cambiarProv = (p: Prov) => { setResultadoCarga(null); setPlanCarga(null); setAvisoPrecio(null); setAvisoTalles(null); setOrdenesCarga([]); setVerRegistro(false); provRef.current = p; setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
 
   const cabecera = (<>
     <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
@@ -1094,6 +1095,7 @@ export default function ControlFacturas() {
       {sinBase && <p style={{ color: '#fbbf24', fontSize: '0.9rem' }}>⚠ Falta conectar la base de datos al proyecto en Vercel. Sin ella no se pueden guardar las entregas.</p>}
       {error && !sinBase && <p style={{ color: '#f87171', fontWeight: 'bold' }}>⚠ {error}</p>}
       {ocupado && <p style={{ fontSize: '0.88rem', color: '#93c5fd' }}>⏳ {ocupado}</p>}
+      {resultadoCarga && <ResultadosCarga resultados={resultadoCarga.resultados} sucursal={SUCURSAL_CARGA_ID} conVentas={resultadoCarga.conVentas} onCerrar={() => setResultadoCarga(null)} />}
       {avisos.length > 0 && <div style={{ fontSize: '0.84rem', margin: '6px 0 12px', padding: '8px 10px', background: 'rgba(255,255,255,0.04)', borderRadius: 8 }}>
         {avisos.map((a, i) => <div key={i}>• {a}</div>)}
       </div>}
