@@ -22,8 +22,9 @@ import {
 } from './utils/controlFamily';
 import {
   cargasDeEntrega, ejecutarCargaFamily, estadoShopifyEntrega, leerEstadoCarga, planCargaFamily, resumenCarga, SUCURSAL_FAMILY, textoCarga,
-  type CargaFamily, type EleccionesCarga, type PlanCarga,
+  type CargaFamily, type EleccionesCarga, type PlanCarga, type ResultadoCarga,
 } from './utils/cargaFamily';
+import { ResultadosCarga } from './ResultadosCarga';
 import { leerTextoRemito, textoRemito } from './utils/lectoresFacturas';
 import { shopifyGraphQL } from './utils/shopify';
 import {
@@ -64,6 +65,7 @@ export default function ControlFamily() {
   const [error, setError] = useState('');
   const [sinBase, setSinBase] = useState(false);
   const [avisos, setAvisos] = useState<string[]>([]);
+  const [resultadoCarga, setResultadoCarga] = useState<ResultadoCarga[] | null>(null);
   const [ocupado, setOcupado] = useState('');
   const [abierta, setAbierta] = useState<string | null>(null);
   const [planilla, setPlanilla] = useState<File[]>([]);
@@ -182,6 +184,7 @@ export default function ControlFamily() {
       'Los precios de los productos que ya existen no se tocan. ¿Confirmás?'].join('\n');
     if (!confirm(texto)) return;
     const eid = plan.entregaId;
+    setResultadoCarga(null);
     setOcupado('Cargando en Shopify… no cierres esta página.');
     try {
       const resultados = await ejecutarCargaFamily(plan, elecciones, {
@@ -192,8 +195,8 @@ export default function ControlFamily() {
         clave: () => crypto.randomUUID(),
         onProgreso: (h, t) => setOcupado(`Cargando en Shopify… ${h} de ${t}. No cierres esta página.`),
       });
-      const icono = { cargada: '✅', parcial: '⚠️', dudosa: '❓', error: '❌', saltado: '↷' } as const;
-      setAvisos(resultados.map((x) => `${icono[x.estado]} ${x.codigo}: ${x.mensaje}`));
+      setAvisos([]);
+      setResultadoCarga(resultados);
       setArmado(null);
     } catch (e) { setAvisos([`La carga se cortó: ${mensaje(e)} Revisá en Shopify qué quedó cargado antes de volver a intentar.`]); }
     finally { setOcupado(''); await recargar(); }
@@ -220,6 +223,7 @@ export default function ControlFamily() {
       {error && !sinBase && <p style={{ color: '#f87171', fontWeight: 'bold' }}>⚠ {error}</p>}
       {ocupado && <p style={{ fontSize: '0.88rem', color: '#93c5fd' }}>⏳ {ocupado}</p>}
       {cargando && <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>Cargando…</p>}
+      {resultadoCarga && <ResultadosCarga resultados={resultadoCarga} sucursal={SUCURSAL_FAMILY} conVentas={false} onCerrar={() => setResultadoCarga(null)} />}
       {avisos.length > 0 && <div style={{ fontSize: '0.84rem', margin: '6px 0 12px', padding: '8px 10px', background: 'rgba(255,255,255,0.04)', borderRadius: 8 }}>
         {avisos.map((a, i) => <div key={i}>• {a}</div>)}
       </div>}

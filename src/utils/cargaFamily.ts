@@ -652,9 +652,25 @@ export interface DepsCarga {
   /** iD: precio y costo antes de sumar el stock. Si falla, el stock no se suma. */
   antes?: (codigo: string, accion: ReposicionFamily) => Promise<{ estado: 'ok'; mensaje: string } | { estado: 'error' | 'dudosa'; mensaje: string }>;
 }
-export interface ResultadoCarga { codigo: string; estado: 'cargada' | 'parcial' | 'dudosa' | 'error' | 'saltado'; mensaje: string; productoId?: string }
+/** Un talle que Shopify confirmó: antes null = se dio de alta en la sucursal; nuevo = talle (o producto) creado. */
+export interface TalleSumado { talle: string; antes: number | null; suma: number; nuevo?: boolean }
+/** Venta de iD que quedó en Martínez. */
+export interface VentaPasada { talle: string; cantidad: number; orden: string }
+/**
+ * Lo que quedó hecho, para mostrarlo ordenado (16-nov-2026, gax: «que se vean las unidades que realmente se
+ * cargaron y se pasaron de sucursal»). Solo lo que Shopify confirmó; lo demás va en `notas`.
+ */
+export interface DetalleResultado {
+  titulo?: string;
+  sumados: TalleSumado[];
+  precio?: { antes: number | null; nuevo: number };
+  costos: string[];
+  pasadas: VentaPasada[];
+  notas: string[];
+}
+export interface ResultadoCarga { codigo: string; estado: 'cargada' | 'parcial' | 'dudosa' | 'error' | 'saltado'; mensaje: string; productoId?: string; detalle?: DetalleResultado }
 /** talles: lo mandado a Shopify por talle, sin lo que Shopify rechazó (para el registro de cargas). */
-type Paso = { estado: 'cargada' | 'parcial' | 'dudosa' | 'error'; mensaje: string; productoId?: string; titulo?: string; unidades?: number; talles?: { talle: string; cantidad: number }[] };
+type Paso = { estado: 'cargada' | 'parcial' | 'dudosa' | 'error'; mensaje: string; productoId?: string; titulo?: string; unidades?: number; talles?: { talle: string; cantidad: number }[]; sumados?: TalleSumado[]; extra?: string };
 
 const errores = (ue: { message?: string }[]) => ue.map((x) => x.message).filter(Boolean).join('; ') || 'error de Shopify';
 const NO_SE_SABE = 'la respuesta de Shopify no llegó completa. Revisá en Shopify antes de volver a intentar';
@@ -723,17 +739,18 @@ async function crearAlta(codigo: string, a: AltaFamily, plan: PlanCarga, deps: D
       if (!Array.isArray(me) || me.length) tabla = ` No pude guardar la tabla ${a.tabla.nombre} en «Size Conversion»: completala a mano (no lo vuelvas a crear).`;
     } catch { tabla = ` No pude guardar la tabla ${a.tabla.nombre} en «Size Conversion»: completala a mano (no lo vuelvas a crear).`; }
   }
-  return { estado: 'cargada', productoId: pid, titulo: a.titulo, unidades, talles, mensaje: `Creado «${a.titulo}» con ${unidades} u. en ${plan.sucursal ?? SUCURSAL_FAMILY} (${a.variantes.map((v) => `${v.talle}:${v.cantidad}`).join(' ')}).${publicado}${tabla}` };
+  return { estado: 'cargada', productoId: pid, titulo: a.titulo, unidades, talles, sumados: a.variantes.map((v) => ({ talle: v.talle, antes: null, suma: v.cantidad, nuevo: true })), extra: `${publicado}${tabla}`.trim(), mensaje: `Creado «${a.titulo}» con ${unidades} u. en ${plan.sucursal ?? SUCURSAL_FAMILY} (${a.variantes.map((v) => `${v.talle}:${v.cantidad}`).join(' ')}).${publicado}${tabla}` };
 }
 
 async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga, deps: DepsCarga): Promise<Paso> {
   // iD: todo lo que llegó estaba vendido en iD; solo se cambiaron precio y costo (antes de este paso).
-  if (!rep.lineas.length && !rep.crear?.length) return { estado: 'cargada', mensaje: 'No se sumó stock: todo lo que llegó está vendido en iD.', productoId: rep.productoId, titulo: rep.titulo, unidades: 0, talles: [] };
+  if (!rep.lineas.length && !rep.crear?.length) return { estado: 'cargada', mensaje: 'No se sumó stock: todo lo que llegó está vendido en iD.', productoId: rep.productoId, titulo: rep.titulo, unidades: 0, talles: [], sumados: [], extra: 'No se sumó stock: todo lo que llegó está vendido en iD.' };
   // Distrinando: primero las etiquetas (código, tabla, SKU de los talles nuevos). Sin ellas no se crean talles.
   const etiquetas = await etiquetasDistrinando(rep, deps);
   const activas = rep.lineas.filter((l) => l.actual !== null);
   const sinAlta = rep.lineas.filter((l) => l.actual === null);
   const hechas: string[] = [];
+  const sumados: TalleSumado[] = [];
   let unidades = 0;
   const talles = (ls: LineaReposicion[]) => ls.map((l) => ({ talle: l.talle, cantidad: l.suma }));
   if (activas.length) {
@@ -758,14 +775,14 @@ async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga
         : `Shopify no sumó el stock en «${rep.titulo}»: ${errores(ue)}. No se sumó nada.` };
     }
     if (!data?.inventorySetQuantities?.inventoryAdjustmentGroup) return { estado: 'dudosa', mensaje: `No sé si se sumó el stock en «${rep.titulo}»: ${NO_SE_SABE}.`, productoId: rep.productoId, titulo: rep.titulo, talles: talles(activas) };
-    for (const l of activas) { hechas.push(`${l.talle} ${l.actual}→${l.actual! + l.suma}`); unidades += l.suma; }
+    for (const l of activas) { hechas.push(`${l.talle} ${l.actual}→${l.actual! + l.suma}`); sumados.push({ talle: l.talle, antes: l.actual, suma: l.suma }); unidades += l.suma; }
   }
-  const fallas: string[] = [], dudas: string[] = [];
+  const fallas: string[] = [], dudas: string[] = [], avisosCrear: string[] = [];
   const enviadas: LineaReposicion[] = [...activas];
   if (rep.crear?.length) {
     if (etiquetas.ok) {
       const c = await crearTalles(rep, plan, deps);
-      hechas.push(...c.hechas); fallas.push(...c.fallas); dudas.push(...c.dudas); unidades += c.unidades;
+      hechas.push(...c.hechas); fallas.push(...c.fallas); dudas.push(...c.dudas); unidades += c.unidades; sumados.push(...c.sumados); avisosCrear.push(...c.avisos);
       enviadas.push(...c.enviadas);
     } else fallas.push(...rep.crear.map((x) => `${x.talle} (no se creó: sin las etiquetas del proveedor)`));
   }
@@ -776,10 +793,10 @@ async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga
       const ue = d?.inventoryActivate?.userErrors;
       if (!Array.isArray(ue) || (!ue.length && !d?.inventoryActivate?.inventoryLevel?.id)) { dudas.push(l.talle); enviadas.push(l); }
       else if (ue.length) fallas.push(`${l.talle} (${errores(ue)})`);
-      else { hechas.push(`${l.talle} alta con ${l.suma}`); unidades += l.suma; enviadas.push(l); }
+      else { hechas.push(`${l.talle} alta con ${l.suma}`); sumados.push({ talle: l.talle, antes: null, suma: l.suma }); unidades += l.suma; enviadas.push(l); }
     } catch (e) { if (noSeEjecuto(e)) fallas.push(`${l.talle} (${motivo(e)})`); else { dudas.push(l.talle); enviadas.push(l); } }
   }
-  let etiqueta = etiquetas.mensaje;
+  let etiqueta = etiquetas.mensaje + avisosCrear.map((a) => ` ${a}`).join('');
   if (rep.etiquetar && hechas.length) {
     try {
       const t = (await deps.gql(ETIQUETAR, { id: rep.productoId, tags: [codigo] })) as { tagsAdd?: { node?: { id?: string } | null; userErrors?: { message?: string }[] } } | null;
@@ -788,12 +805,18 @@ async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga
   }
   // SKU escaneado a mano: solo si se sumó algo (si no, se arma la carga de nuevo con todo).
   if (rep.cambiarSku?.length && (hechas.length || dudas.length)) etiqueta += await cambiarSkus(rep, deps);
-  const comun = { productoId: rep.productoId, titulo: rep.titulo, unidades, talles: talles(enviadas) };
+  const comun = { productoId: rep.productoId, titulo: rep.titulo, unidades, talles: talles(enviadas), sumados };
   if (!hechas.length && !dudas.length) return { estado: 'error', mensaje: `Shopify no dio de alta el stock en «${rep.titulo}»: ${fallas.join(', ')}. No se sumó nada.${etiqueta}` };
   const resumen = hechas.length ? `Sumado en «${rep.titulo}»: ${hechas.join(', ')}.` : '';
-  if (dudas.length) return { ...comun, estado: 'dudosa', mensaje: `${resumen} No sé si se dio de alta el talle ${dudas.join(', ')}: ${NO_SE_SABE}.${fallas.length ? ` Falló: ${fallas.join(', ')}.` : ''}${etiqueta}`.trim() };
-  if (fallas.length) return { ...comun, estado: 'parcial', mensaje: `${resumen} No se pudo dar de alta: ${fallas.join(', ')}; cargalo a mano.${etiqueta}`.trim() };
-  return { ...comun, estado: 'cargada', mensaje: `${resumen}${etiqueta}` };
+  if (dudas.length) {
+    const extra = `No sé si se dio de alta el talle ${dudas.join(', ')}: ${NO_SE_SABE}.${fallas.length ? ` Falló: ${fallas.join(', ')}.` : ''}${etiqueta}`;
+    return { ...comun, estado: 'dudosa', mensaje: `${resumen} ${extra}`.trim(), extra: extra.trim() };
+  }
+  if (fallas.length) {
+    const extra = `No se pudo dar de alta: ${fallas.join(', ')}; cargalo a mano.${etiqueta}`;
+    return { ...comun, estado: 'parcial', mensaje: `${resumen} ${extra}`.trim(), extra: extra.trim() };
+  }
+  return { ...comun, estado: 'cargada', mensaje: `${resumen}${etiqueta}`, extra: etiqueta.trim() };
 }
 
 /** Distrinando: el SKU nuevo de los talles que ya existían (y el código de barras si es un EAN). Devuelve el texto para el mensaje. */
@@ -906,9 +929,9 @@ async function etiquetasDistrinando(rep: ReposicionFamily, deps: DepsCarga): Pro
  * Distrinando: crea los talles que faltan, con su stock en la sucursal, el precio de la curva y el costo de
  * la factura. Antes relee el producto: si el talle o el SKU ya aparecieron, no se crea nada (se arma de nuevo).
  */
-async function crearTalles(rep: ReposicionFamily, plan: PlanCarga, deps: DepsCarga): Promise<{ hechas: string[]; fallas: string[]; dudas: string[]; unidades: number; enviadas: LineaReposicion[] }> {
+async function crearTalles(rep: ReposicionFamily, plan: PlanCarga, deps: DepsCarga): Promise<{ hechas: string[]; fallas: string[]; dudas: string[]; unidades: number; enviadas: LineaReposicion[]; sumados: TalleSumado[]; avisos: string[] }> {
   const crear = rep.crear ?? [];
-  const out = { hechas: [] as string[], fallas: [] as string[], dudas: [] as string[], unidades: 0, enviadas: [] as LineaReposicion[] };
+  const out = { hechas: [] as string[], fallas: [] as string[], dudas: [] as string[], unidades: 0, enviadas: [] as LineaReposicion[], sumados: [] as TalleSumado[], avisos: [] as string[] };
   const todos = (m: string) => { out.fallas.push(...crear.map((x) => `${x.talle} (${m})`)); return out; };
   const precio = rep.ajuste ? rep.ajuste.precio ?? rep.ajuste.precioActual : null;
   if (!rep.ajuste || precio === null || !(precio > 0)) return todos('sin precio para el talle nuevo');
@@ -943,18 +966,20 @@ async function crearTalles(rep: ReposicionFamily, plan: PlanCarga, deps: DepsCar
   if (!Array.isArray(ue)) { out.dudas.push(...crear.map((x) => `${x.talle} (talle nuevo)`)); out.enviadas.push(...lineas); return out; }
   if (ue.length) return todos(errores(ue));
   if (!Array.isArray(creadas) || creadas.length !== crear.length) { out.dudas.push(...crear.map((x) => `${x.talle} (talle nuevo)`)); out.enviadas.push(...lineas); return out; }
-  for (const x of crear) { out.hechas.push(`${x.talle} nuevo con ${x.suma}`); out.unidades += x.suma; }
+  for (const x of crear) { out.hechas.push(`${x.talle} nuevo con ${x.suma}`); out.sumados.push({ talle: x.talle, antes: null, suma: x.suma, nuevo: true }); out.unidades += x.suma; }
   out.enviadas.push(...lineas);
   // Que queden en su lugar (35, 36.5, 37…). Si no se puede, igual quedaron creados.
   const orden = ordenarTalles([...live.map((v) => v.title), ...crear.map((x) => x.talle)]);
   if (orden) {
     try {
       const r = (await deps.gql(ORDENAR_TALLES, { productId: rep.productoId, options: [{ name: opcion, values: orden.map((name) => ({ name })) }] })) as { productOptionsReorder?: { userErrors?: unknown[] } } | null;
-      if (!r?.productOptionsReorder || r.productOptionsReorder.userErrors?.length) out.hechas.push('(no pude ordenar los talles: quedan al final)');
-    } catch { out.hechas.push('(no pude ordenar los talles: quedan al final)'); }
+      if (!r?.productOptionsReorder || r.productOptionsReorder.userErrors?.length) out.avisos.push('No pude ordenar los talles nuevos: quedan al final.');
+    } catch { out.avisos.push('No pude ordenar los talles nuevos: quedan al final.'); }
   }
   return out;
 }
+
+const soloNota = (titulo: string, nota: string): DetalleResultado => ({ titulo, sumados: [], costos: [], pasadas: [], notas: [nota] });
 
 /**
  * Carga en Shopify lo elegido, artículo por artículo. Cada uno se marca en la base
@@ -970,13 +995,20 @@ export async function ejecutarCargaFamily(plan: PlanCarga, elecciones: Eleccione
     const detalle = { accion: accion.tipo, titulo: accion.titulo, ...(accion.tipo === 'reposicion' ? { productoId: accion.productoId } : {}) };
     let reserva: { ok: boolean; existente?: CargaFamily | null };
     try { reserva = await deps.reservar(codigo, firma, detalle); }
-    catch (e) { out.push({ codigo, estado: 'error', mensaje: `No pude anotar la carga en la base (${e instanceof Error ? e.message : 'error'}): no se cargó nada.` }); deps.onProgreso?.(i + 1, acciones.length); continue; }
+    catch (e) {
+      const m = `No pude anotar la carga en la base (${e instanceof Error ? e.message : 'error'}): no se cargó nada.`;
+      out.push({ codigo, estado: 'error', mensaje: m, detalle: soloNota(accion.titulo, m) });
+      deps.onProgreso?.(i + 1, acciones.length); continue;
+    }
     if (!reserva.ok) {
-      out.push({ codigo, estado: 'saltado', mensaje: reserva.existente ? `No se cargó otra vez. ${textoCarga(reserva.existente)}` : 'Ya estaba cargado (o se está cargando en otra pantalla): no se cargó otra vez.' });
+      const m = reserva.existente ? `No se cargó otra vez. ${textoCarga(reserva.existente)}` : 'Ya estaba cargado (o se está cargando en otra pantalla): no se cargó otra vez.';
+      out.push({ codigo, estado: 'saltado', mensaje: m, detalle: soloNota(accion.titulo, m) });
       deps.onProgreso?.(i + 1, acciones.length);
       continue;
     }
     let paso: Paso;
+    let renombrado = '';
+    let precioOk = false;
     try {
       if (accion.tipo === 'alta') paso = await crearAlta(codigo, accion, plan, deps);
       else {
@@ -987,10 +1019,11 @@ export async function ejecutarCargaFamily(plan: PlanCarga, elecciones: Eleccione
           const previo = deps.antes ? await deps.antes(codigo, accion) : null;
           if (previo && previo.estado !== 'ok') paso = { estado: previo.estado, mensaje: `${previo.mensaje} No se sumó el stock.`, productoId: accion.productoId, titulo: accion.titulo };
           else {
+            precioOk = !!previo?.mensaje;
             paso = await sumarStock(codigo, accion, plan, deps);
             if (previo?.mensaje) paso = { ...paso, mensaje: `${previo.mensaje} ${paso.mensaje}`.trim() };
           }
-          if (renombre.mensaje) paso = { ...paso, mensaje: `${renombre.mensaje} ${paso.mensaje}`.trim() };
+          if (renombre.mensaje) { renombrado = renombre.mensaje; paso = { ...paso, mensaje: `${renombre.mensaje} ${paso.mensaje}`.trim() }; }
         }
       }
     }
@@ -1003,17 +1036,38 @@ export async function ejecutarCargaFamily(plan: PlanCarga, elecciones: Eleccione
       try { await deps.terminar(codigo, paso.estado, { accion: accion.tipo, productoId: paso.productoId, titulo: paso.titulo ?? accion.titulo, unidades: paso.unidades, mensaje: paso.mensaje.slice(0, 600), ...(paso.talles ? { talles: paso.talles } : {}) }); }
       catch { mensaje += ' (No pude anotar el resultado en la base: NO lo vuelvas a cargar.)'; }
     }
-    out.push({ codigo, estado: paso.estado, mensaje, ...(paso.productoId ? { productoId: paso.productoId } : {}) });
+    const hecho: DetalleResultado = { titulo: paso.titulo ?? accion.titulo, sumados: paso.sumados ?? [], costos: [], pasadas: [], notas: [] };
+    if (renombrado) hecho.notas.push(renombrado);
+    if (precioOk && accion.tipo === 'reposicion' && accion.ajuste) {
+      const a = accion.ajuste;
+      if (a.precio !== undefined && a.precio !== a.precioActual) hecho.precio = { antes: a.precioActual, nuevo: a.precio };
+      if (a.costos.length) hecho.costos.push(`${fmt(a.costoNuevo)} en ${a.costos.map((c) => c.talle).join(', ')}`);
+      for (const c of a.ponderados) hecho.costos.push(`${c.talle} ${fmt(c.costo)} (promedio)`);
+    }
+    if (paso.extra) hecho.notas.push(paso.extra);
+    else if (paso.estado !== 'cargada') hecho.notas.push((renombrado ? paso.mensaje.replace(renombrado, '') : paso.mensaje).trim());
+    if (accion.tipo === 'alta' && paso.estado !== 'error') { hecho.precio = { antes: null, nuevo: accion.precio }; hecho.costos.push(fmt(accion.costo)); }
+    if (mensaje !== paso.mensaje) hecho.notas.push(mensaje.slice(paso.mensaje.length).trim());
+    out.push({ codigo, estado: paso.estado, mensaje, ...(paso.productoId ? { productoId: paso.productoId } : {}), detalle: hecho });
     if (accion.tipo === 'reposicion' && accion.mover?.length) {
       if (paso.estado === 'cargada') mover.push({ codigo, ventas: accion.mover });
-      else if (paso.estado !== 'error') out[out.length - 1].mensaje += ` No pasé a Martínez la venta de ${accion.mover.map((m) => m.orden).join(', ')} porque la carga no terminó bien: revisala y pasala a mano en la orden.`;
+      else if (paso.estado !== 'error') {
+        const m = `No pasé a Martínez la venta de ${accion.mover.map((m) => m.orden).join(', ')} porque la carga no terminó bien: revisala y pasala a mano en la orden.`;
+        out[out.length - 1].mensaje += ` ${m}`;
+        hecho.notas.push(m);
+      }
     }
     deps.onProgreso?.(i + 1, acciones.length);
   }
   // Al final, con todo el stock ya sumado: una preparación de iD puede tener artículos de varios códigos.
   if (mover.length) {
     const textos = await pasarVentas(mover, plan, deps);
-    for (const r of out) if (textos[r.codigo]) r.mensaje = `${r.mensaje} ${textos[r.codigo]}`.trim();
+    for (const r of out) {
+      const t = textos[r.codigo];
+      if (!t) continue;
+      if (t.texto) r.mensaje = `${r.mensaje} ${t.texto}`.trim();
+      if (r.detalle) { r.detalle.pasadas.push(...t.pasadas); r.detalle.notas.push(...t.avisos); }
+    }
   }
   return out;
 }
@@ -1067,7 +1121,7 @@ async function dejarIdComoEstaba(antes: Map<string, number | null>, loc: string,
   return { ok, mal };
 }
 
-export async function pasarVentas(xs: { codigo: string; ventas: MoverVenta[] }[], plan: PlanCarga, deps: Pick<DepsCarga, 'gql' | 'clave'>): Promise<Record<string, string>> {
+export async function pasarVentas(xs: { codigo: string; ventas: MoverVenta[] }[], plan: PlanCarga, deps: Pick<DepsCarga, 'gql' | 'clave'>): Promise<Record<string, { texto: string; pasadas: VentaPasada[]; avisos: string[] }>> {
   const porFO = new Map<string, { codigo: string; v: MoverVenta }[]>();
   for (const x of xs) for (const v of x.ventas) {
     const g = porFO.get(v.foId) ?? [];
@@ -1075,6 +1129,7 @@ export async function pasarVentas(xs: { codigo: string; ventas: MoverVenta[] }[]
     porFO.set(v.foId, g);
   }
   const bien: Record<string, string[]> = {}, mal: Record<string, string[]> = {}, revisar: Record<string, string[]> = {};
+  const pasadas: Record<string, VentaPasada[]> = {};
   const loc = plan.idLocationId;
   const anotar = (destino: Record<string, string[]>, g: { codigo: string; v: MoverVenta }[], extra = '') => {
     for (const { codigo, v } of g) (destino[codigo] ??= []).push(`${v.talle} ${v.orden}${extra}`);
@@ -1092,6 +1147,7 @@ export async function pasarVentas(xs: { codigo: string; ventas: MoverVenta[] }[]
       else if (!d?.fulfillmentOrderMove?.movedFulfillmentOrder?.id) anotar(mal, g, DUDA);
       else {
         anotar(bien, g);
+        for (const { codigo, v } of g) (pasadas[codigo] ??= []).push({ talle: v.talle, cantidad: v.cantidad, orden: v.orden });
         const r = loc ? await dejarIdComoEstaba(antes, loc, deps) : { ok: [], mal: articulos };
         for (const x of g) if (!x.v.inventoryItemId || r.mal.includes(x.v.inventoryItemId)) (revisar[x.codigo] ??= []).push(x.v.talle);
       }
@@ -1101,13 +1157,13 @@ export async function pasarVentas(xs: { codigo: string; ventas: MoverVenta[] }[]
         : noSeEjecuto(e) ? ` (${motivo(e)})` : DUDA);
     }
   }
-  const out: Record<string, string> = {};
+  const out: Record<string, { texto: string; pasadas: VentaPasada[]; avisos: string[] }> = {};
   for (const codigo of new Set(xs.map((x) => x.codigo))) {
-    const t: string[] = [];
-    if (bien[codigo]) t.push(`🔀 Venta pasada de iD a ${plan.sucursal ?? 'Martínez'}: ${bien[codigo].join(', ')}.`);
-    if (revisar[codigo]) t.push(`⚠️ Revisá el stock de iD de ${[...new Set(revisar[codigo])].join(', ')}: al pasar la venta, Shopify pudo dejar una unidad libre en iD y no la pude volver a dejar como estaba. Si el proveedor no la tiene, ponela a mano como estaba.`);
-    if (mal[codigo]) t.push(`⚠️ No pude pasar la venta a ${plan.sucursal ?? 'Martínez'}: ${mal[codigo].join(', ')}. El stock ya quedó sumado: pasala a mano en la orden («⋯» → «Cambiar ubicación»).`);
-    out[codigo] = t.join(' ');
+    const avisos: string[] = [];
+    if (revisar[codigo]) avisos.push(`⚠️ Revisá el stock de iD de ${[...new Set(revisar[codigo])].join(', ')}: al pasar la venta, Shopify pudo dejar una unidad libre en iD y no la pude volver a dejar como estaba. Si el proveedor no la tiene, ponela a mano como estaba.`);
+    if (mal[codigo]) avisos.push(`⚠️ No pude pasar la venta a ${plan.sucursal ?? 'Martínez'}: ${mal[codigo].join(', ')}. El stock ya quedó sumado: pasala a mano en la orden («⋯» → «Cambiar ubicación»).`);
+    const t = [...(bien[codigo] ? [`🔀 Venta pasada de iD a ${plan.sucursal ?? 'Martínez'}: ${bien[codigo].join(', ')}.`] : []), ...avisos];
+    out[codigo] = { texto: t.join(' '), pasadas: pasadas[codigo] ?? [], avisos };
   }
   return out;
 }
