@@ -1,5 +1,8 @@
 // PLANILLA «CONTROL INGRESO MERCADERIA» — recibe de la app de INDY una fila por carga y la agrega abajo.
 // Se pega UNA vez en la planilla: Extensiones → Apps Script (reemplazar todo lo que haya en Código.gs).
+// O, si quien lo publica no es dueña de la planilla, en un proyecto propio de script.google.com: en ese
+// caso, en Configuración del proyecto → Propiedades de la secuencia de comandos, agregar PLANILLA con el
+// ID de la planilla (lo que está entre /d/ y /edit en su dirección).
 // Pasos completos en CLAUDE.md («Fila en la planilla de ingreso»). Este archivo NO tiene claves:
 // la clave se crea con crearClave() y queda guardada en las propiedades del script.
 //
@@ -26,8 +29,16 @@ function normalizar(s) {
   return String(s || '').toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Z0-9]/g, '');
 }
 
+function libro() {
+  var id = String(PropertiesService.getScriptProperties().getProperty('PLANILLA') || '').trim();
+  if (id) return SpreadsheetApp.openById(id);
+  var activa = SpreadsheetApp.getActiveSpreadsheet();
+  if (!activa) throw new Error('Falta la propiedad PLANILLA con el ID de la planilla.');
+  return activa;
+}
+
 function hoja() {
-  var hojas = SpreadsheetApp.getActiveSpreadsheet().getSheets();
+  var hojas = libro().getSheets();
   for (var i = 0; i < hojas.length; i++) {
     var h = hojas[i];
     if (h.getLastColumn() < 1) continue;
