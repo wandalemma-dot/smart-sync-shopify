@@ -1,6 +1,6 @@
 // Aviso de carga a administración y comentario en Trello (16-nov-2026, gax).
 import { describe, expect, it } from 'vitest';
-import { comentarioTrello, fechaCorta, observacionesPlanilla, proveedorPlanilla, textoAvisoAdmin } from '../avisoAdmin';
+import { comentarioTrello, fechaCorta, filaPlanilla, observacionesPlanilla, proveedorPlanilla, textoAvisoAdmin } from '../avisoAdmin';
 import type { ResultadoCarga } from '../cargaFamily';
 import type { ResultadoFactura } from '../controlFacturas';
 
@@ -42,5 +42,18 @@ describe('Aviso de carga a administración', () => {
     const { cuerpo } = textoAvisoAdmin({ ...o, resultados: muchos });
     expect(cuerpo.length).toBeLessThan(2000);
     expect(cuerpo).toMatch(/… y \d+ artículo\(s\) más\./);
+  });
+});
+
+describe('Fila para la planilla de ingreso (16-nov-2026)', () => {
+  it('como las filas que ya están en CONTROL INGRESO MERCADERIA', () => {
+    expect(filaPlanilla(o)).toEqual({
+      fecha: '10/11/26', proveedor: 'ID LE COQ', numero: '0011-00139953', factura: 'FAC.OK - 0011-00139953',
+      remito: '0013-00125274', monto: 1215508.21, observaciones: 'APP - ok', ok: true, carga: '16/11/26',
+    });
+  });
+  it('con algo para revisar: «FAC. -» y la observación', () => {
+    const f = filaPlanilla({ ...o, prov: 'distrinando', r: { ...r, totalDifPrecio: 1500 } as ResultadoFactura });
+    expect(f).toMatchObject({ proveedor: 'DISTRINANDO', factura: 'FAC. - 0011-00139953', observaciones: 'APP - Facturado más caro ($ 1.500 de más)', ok: false });
   });
 });

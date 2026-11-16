@@ -113,6 +113,24 @@ export async function comentarEnTrello(tarjeta: string, texto: string): Promise<
   if (!r.ok) throw new Error(d.error || `Error ${r.status}`);
 }
 
+/** Agrega la fila de la carga en la planilla de ingreso (Apps Script de Google, vía /api/planilla). */
+export async function anotarEnPlanilla(fila: unknown): Promise<{ fila?: number; yaEstaba?: boolean; sinPlanilla?: boolean }> {
+  const r = await fetch('/api/planilla', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accion: 'anotar', fila }) });
+  const d = await r.json().catch(() => ({}));
+  if (r.status === 503 && d.sinPlanilla) return { sinPlanilla: true };
+  if (!r.ok) throw new Error(d.error || `Error ${r.status}`);
+  return d;
+}
+
+/** Prueba la conexión con la planilla de ingreso, sin escribir nada. */
+export async function probarPlanilla(): Promise<{ hoja?: string; sinPlanilla?: boolean }> {
+  const r = await fetch('/api/planilla?accion=probar');
+  const d = await r.json().catch(() => ({}));
+  if (r.status === 503 && d.sinPlanilla) return { sinPlanilla: true };
+  if (!r.ok) throw new Error(d.error || `Error ${r.status}`);
+  return d;
+}
+
 /** Lee fotos con IA (api/leer-remito.js): el remito, o la planilla de entrega de Family. */
 export async function leerFotos<T>(files: File[], tipo: 'remito' | 'entrega' = 'remito'): Promise<T> {
   const fotos = await prepararFotos(files);
