@@ -258,7 +258,7 @@ describe('¿se cerró el pedido? qué hacer con la tarjeta', () => {
     expect(c.tipo).toBe('parcial');
     expect(c.texto).toBe('Solo entró la indumentaria; falta todo el calzado (8 u.).');
     expect(c.corto).toBe('🟡 solo entró la indumentaria');
-    expect(c.tarjeta).toBe('Pasá la tarjeta a «PENDIENDE DE INDUMENTARIA/CALZADO».');
+    expect(c.tarjeta).toBe('Al cerrar la entrega, la app pasa la tarjeta a «PENDIENDE DE INDUMENTARIA/CALZADO».');
     expect(c.falta.map((x) => [x.codigo, x.unidades])).toEqual([['LFN9924069', 4], ['LFO0125210', 4]]);
     // Si ya está en esa lista, se deja ahí.
     expect(consejoNota(marcasDeNota(analizarFacturas([nota], []), null, [nota], 'N1522'), { ...listas, listaActual: listas.listaParcial }).tarjeta).toMatch(/ya está en «PENDIENDE/);
@@ -279,12 +279,12 @@ describe('¿se cerró el pedido? qué hacer con la tarjeta', () => {
     expect(c.falta).toEqual([{ codigo: 'LFN9924069', descripcion: 'BREAKPOINT CLASSIC', unidades: 1 }]);
   });
 
-  it('llegó todo (facturas + verde): pedido completo, darlo por finalizado', () => {
+  it('llegó todo (facturas + verde): pedido completo, la tarjeta va a FINALIZADO', () => {
     const res = analizarFacturas([nota], [factura('F1', '2026-11-06', [['LFN9924069', 2]]), factura('F2', '2026-11-10', [['LFN9924069', 2], ['LFO0125210', 4]])]);
     const c = consejoNota(marcasDeNota(res, null, [nota], 'N1522'), listas);
     expect(c.tipo).toBe('finalizar');
     expect(c.texto).toBe('✅ Pedido completo: llegó todo (9 u.).');
-    expect(c.tarjeta).toBe('Podés darlo por finalizado y sacar la tarjeta de «PEDIDOS PENDIENTES».');
+    expect(c.tarjeta).toBe('Al cerrar la entrega, la app pasa la tarjeta a «FINALIZADO».');
     // Con solo la primera factura, todavía no.
     expect(consejoNota(marcasDeNota(res, 'F1', [nota], 'N1522')).tipo).toBe('parcial');
   });

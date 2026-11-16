@@ -18,7 +18,7 @@ import {
   type ControlRenglon, type CopiaPlanilla, type Factura, type Pedido, type Recepcion, type Remito, type ResultadoFactura, type ResultadoGeneral,
 } from './utils/controlFacturas';
 import { leerFacturaDistrinando, leerFacturaId, leerPedidoAuto, leerTextoRemito, textoRemito, type HojaMarcada, type ItemPdf } from './utils/lectoresFacturas';
-import { celdasVerdes, hojaVisible, marcarPlanilla } from './utils/planillaVerde';
+import { celdasVerdes, hojaVisible } from './utils/planillaVerde';
 import { consejoNota, fusionarPlanilla, marcasDeNota, type ConsejoNota, type MarcasNota } from './utils/marcasPlanilla';
 import { conEstadoTrello, estadosTarjetas, listaDeParciales, listaFinalizado, listasDePendientes, movimientosTarjetas, tarjetaDeNota, type EstadoTarjeta, type ListaTrello } from './utils/listasTrello';
 import ControlFamily from './ControlFamily';
@@ -33,7 +33,7 @@ import { planCargaDistrinando } from './utils/cargaDistrinando';
 import { entregaArchivada, estadoCargaFactura, leerEstadoCargaId, ordenesQueSalen, planCargaId, type OrdenQueSale, precioYCostoAntes, SUCURSAL_CARGA_ID, type EstadoCargaId } from './utils/cargaId';
 import { actualizarPreciosManualmente, shopifyGraphQL } from './utils/shopify';
 import {
-  adjuntarATrello, apiControl, archivosParaTrello, boton, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, nombreArchivoPlanilla, slug, td, th,
+  adjuntarATrello, apiControl, archivosParaTrello, boton, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, slug, td, th,
   moverEnTrello,
 } from './utils/entregasUi';
 
@@ -1361,7 +1361,7 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
         <Archivo etiqueta={recordados ? '📎 Elegir otros' : '📎 Subir factura y remito a Trello'} accept=".pdf,image/*" multiple disabled={ocupado}
           estilo={{ ...botonChico, padding: '1px 8px' }} onArchivos={(f) => onSubirTrello(f)} />
       </TarjetasTrello>
-      {r.semaforo !== 'incompleta' && r.pedidosCubiertos.length > 0 && <PlanillasMarcadas r={r} res={res} pedidos={todas} nombrePedido={nombrePedido} ocupado={ocupado} consejos={consejos} />}
+      {r.semaforo !== 'incompleta' && r.pedidosCubiertos.length > 0 && <NotasEntrega r={r} res={res} pedidos={todas} nombrePedido={nombrePedido} consejos={consejos} />}
       {informe && <InformeTrelloCaja informe={informe} ocupado={ocupado} onRecargar={onRecargarBorrada} />}
 
       {r.motivos.length > 0 && <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: '0.84rem' }}>{r.motivos.map((m, i) => <li key={i}>{m}</li>)}</ul>}
@@ -1474,104 +1474,46 @@ function Controles({ r, unidadesRemito, pendiente }: { r: ResultadoFactura; unid
   return <div style={{ marginTop: 8, fontSize: '0.86rem' }}>{remito}{nota}</div>;
 }
 
-/** La copia más nueva de la planilla en Trello (la original si no hay otras). */
-function planillaBase(p: PedidoGuardado): { tarjeta: string; adjunto: string } | null {
-  const ultima = p.copias?.[p.copias.length - 1];
-  if (ultima) return ultima;
-  const adj = /^T-([a-f0-9]{24})$/.exec(p.id)?.[1];
-  const tarjeta = tarjetaDeNota(p);
-  return adj && tarjeta ? { tarjeta, adjunto: adj } : null;
-}
-
 /**
- * Planillas de las notas de esta entrega con lo que llegó pintado en verde (12-nov-2026, gax: «que la
- * app devuelva las planillas de Excel marcadas; mi empleado las sube a Trello»). La app no escribe en
- * Trello: baja la última planilla de la tarjeta, la pinta y la descarga.
+ * Cómo quedó cada nota de la entrega, en pocas líneas (16-nov-2026, gax: «tiene demasiada información que no
+ * se llega a leer»; la planilla marcada ya no hace falta porque la app mueve la tarjeta sola). Lo que llegó
+ * talle por talle queda plegado.
  */
-function PlanillasMarcadas({ r, res, pedidos, nombrePedido, ocupado, consejos }: {
-  r: ResultadoFactura; res: ResultadoGeneral; pedidos: PedidoGuardado[]; nombrePedido: (id: string) => string; ocupado: boolean; consejos: Map<string, ConsejoNota>;
+function NotasEntrega({ r, res, pedidos, nombrePedido, consejos }: {
+  r: ResultadoFactura; res: ResultadoGeneral; pedidos: PedidoGuardado[]; nombrePedido: (id: string) => string; consejos: Map<string, ConsejoNota>;
 }) {
-  const [mensajes, setMensajes] = useState<Record<string, string>>({});
-  const [trabajando, setTrabajando] = useState('');
-  const [pedirArchivo, setPedirArchivo] = useState<Record<string, boolean>>({});
   const notas = useMemo(() => r.pedidosCubiertos.map((id) => {
     const p = pedidos.find((x) => x.id === id);
     let m: MarcasNota | null;
     try { m = p ? marcasDeNota(res, r.factura.id, pedidos, id) : null; } catch { m = null; }
     return { id, p, m };
   }), [r, res, pedidos]);
-  const decir = (id: string, t: string) => setMensajes((x) => ({ ...x, [id]: t }));
-
-  async function descargar(p: PedidoGuardado, archivo?: File) {
-    setTrabajando(p.id);
-    decir(p.id, '');
-    try {
-      let buf: ArrayBuffer;
-      if (archivo) buf = await archivo.arrayBuffer();
-      else {
-        const base = planillaBase(p);
-        if (!base) { setPedirArchivo((x) => ({ ...x, [p.id]: true })); decir(p.id, 'Esta nota se subió a mano: elegí la planilla para marcarla.'); return; }
-        const b = await bajarAdjunto(base.tarjeta, base.adjunto);
-        if (!b.completo) {
-          setPedirArchivo((x) => ({ ...x, [p.id]: true }));
-          decir(p.id, 'La planilla de Trello pesa mucho para bajarla desde la app: descargala de la tarjeta y elegila acá.');
-          return;
-        }
-        buf = b.buf;
-      }
-      // Las celdas salen de la misma planilla (las notas cargadas antes del 12-nov no las tienen guardadas).
-      const { filas, hoja } = leerHoja(buf, hoyAr());
-      const leida = leerPedidoAuto(filas, p.id, p.nombre, p.fecha, hoja);
-      const conCeldas = fusionarPlanilla(p, leida.pedido.lineas) ?? p;
-      const m = marcasDeNota(res, r.factura.id, pedidos.map((x) => (x.id === p.id ? conCeldas : x)), p.id);
-      if (!m.celdas.length) throw new Error('No encontré en la planilla las celdas de lo que llegó: marcalo a mano.');
-      const out = marcarPlanilla(new Uint8Array(buf), m.celdas, { nro: p.nroProveedor, cantidades: m.cantidades });
-      const url = URL.createObjectURL(new Blob([new Uint8Array(out)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = nombreArchivoPlanilla(p, hoyAr());
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
-      setPedirArchivo((x) => ({ ...x, [p.id]: false }));
-      decir(p.id, `✔ Descargada${m.sinTalle.length ? `. Ojo: ${m.sinTalle.map((x) => `${x.codigo} (${x.unidades})`).join(', ')} llegó sin saber el talle: pintalo a mano` : ''}. Subila a la tarjeta de Trello.`);
-    } catch (e) { decir(p.id, `⚠ ${mensaje(e)}`); }
-    finally { setTrabajando(''); }
-  }
 
   return (
-    <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, background: 'rgba(52,211,153,0.07)', border: '1px solid rgba(52,211,153,0.3)', fontSize: '0.83rem' }}>
-      <strong>📥 Planilla para Trello con lo que llegó en verde</strong>
+    <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.12)', fontSize: '0.83rem' }}>
+      <strong>🗂️ Notas de pedido de esta entrega</strong>
       {notas.map(({ id, p, m }) => {
         if (!p || !m) return null;
-        const pedido = m.codigos.reduce((s, c) => s + c.pedido, 0);
-        const llegaron = m.codigos.reduce((s, c) => s + c.llegaron, 0);
         const c = consejos.get(id);
+        const color = c?.tipo === 'finalizar' ? '#34d399' : c?.tipo === 'parcial' ? '#fbbf24' : undefined;
         return (
           <div key={id} style={{ marginTop: 6 }}>
             <div>
               <strong>{nombrePedido(id)}</strong>
-              {(p.nroProveedor || p.fecha) && <span style={{ opacity: 0.85 }}>
-                {p.nroProveedor && p.nombre ? <> · {p.origen?.startsWith('trello:') ? 'tarjeta' : 'archivo'} {p.enlace ? <a href={p.enlace} target="_blank" rel="noreferrer" style={{ color: '#93c5fd' }}>«{p.nombre}»</a> : `«${p.nombre}»`}</> : ''}
-                {p.fecha ? ` · del ${fechaAr(p.fecha)}` : ''}
-              </span>}
-              : {m.estaEntrega.length ? `en esta entrega llegó ${m.estaEntrega.map((x) => `${x.codigo} ${x.talle}×${x.cantidad}`).join(', ')}` : 'en esta entrega no se sabe de qué talles'}
-              {' · '}hasta acá llegaron {llegaron} de {pedido} u.
-              {m.facturas.length > 1 ? ` (con ${m.facturas.length - 1} entrega(s) anterior(es))` : ''}
+              {p.nroProveedor && p.nombre && <> · {p.enlace ? <a href={p.enlace} target="_blank" rel="noreferrer" style={{ color: '#93c5fd' }}>{p.nombre}</a> : p.nombre}</>}
+              {c && c.tipo !== 'nada' && <span style={{ color }}> · {c.texto}</span>}
             </div>
-            {c && c.tipo !== 'nada' && <div style={{ marginTop: 3, padding: '4px 8px', borderRadius: 6, background: c.tipo === 'finalizar' ? 'rgba(52,211,153,0.15)' : 'rgba(251,191,36,0.13)' }}>
-              <strong>Hoy:</strong> {c.texto} <strong>{c.tarjeta}</strong>
-              {c.tipo === 'parcial' && c.falta.length > 0 && <div style={{ opacity: 0.85 }}>Falta: {c.falta.slice(0, 8).map((x) => `${x.codigo} ${x.descripcion} (${x.unidades} u.)`).join(' · ')}{c.falta.length > 8 ? ` y ${c.falta.length - 8} más` : ''}</div>}
+            {c && c.tipo !== 'nada' && <div style={{ opacity: 0.75 }}>{c.tarjeta}
+              {c.tipo === 'parcial' && c.falta.length > 0 && <> Falta: {c.falta.slice(0, 3).map((x) => `${x.codigo} ${x.descripcion} (${x.unidades})`).join(' · ')}{c.falta.length > 3 ? ` y ${c.falta.length - 3} más` : ''}.</>}
             </div>}
-            {m.sinTalle.length > 0 && <div style={{ color: '#fbbf24' }}>Sin talle identificado: {m.sinTalle.map((x) => `${x.codigo} (${x.unidades})`).join(', ')}. Cargá los talles en el remito o pintalos a mano.</div>}
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 4 }}>
-              <button style={botonChico} disabled={ocupado || !!trabajando} onClick={() => descargar(p)}>{trabajando === id ? 'Preparando…' : '📥 Descargar planilla marcada'}</button>
-              {pedirArchivo[id] && <Archivo etiqueta="📎 Elegir la planilla" accept=".xlsx" disabled={!!trabajando} estilo={botonChico} onArchivos={(f) => f[0] && descargar(p, f[0])} />}
-              {mensajes[id] && <span style={{ color: mensajes[id].startsWith('⚠') ? '#f87171' : undefined }}>{mensajes[id]}</span>}
-            </div>
+            {m.sinTalle.length > 0 && <div style={{ color: '#fbbf24' }}>Sin talle identificado: {m.sinTalle.map((x) => `${x.codigo} (${x.unidades})`).join(', ')}.</div>}
+            {m.estaEntrega.length > 0 && <details style={{ opacity: 0.8 }}>
+              <summary style={{ cursor: 'pointer' }}>Qué llegó de esta nota en esta entrega ({m.estaEntrega.reduce((s, x) => s + x.cantidad, 0)} u.)</summary>
+              {m.estaEntrega.map((x) => `${x.codigo} ${x.talle}×${x.cantidad}`).join(', ')}
+            </details>}
           </div>
         );
       })}
-      <div style={{ opacity: 0.7, marginTop: 6 }}>Se baja la última planilla de la tarjeta y se pintan en verde los talles que llegaron (también los de entregas anteriores). Las fotos y el formato quedan iguales. La app no la sube: la sube tu empleado a la tarjeta.</div>
     </div>
   );
 }
