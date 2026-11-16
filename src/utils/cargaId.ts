@@ -161,7 +161,8 @@ export async function leerEstadoCargaId(codigos: string[], gql: Gql, opts: { ven
         const nivel = v.inventoryItem?.inventoryLevel;
         const q = nivel?.quantities.find((x) => x.name === 'available');
         return {
-          id: v.id, talle: v.title, sku: v.sku || '', inventoryItemId: v.inventoryItem?.id || '', seguimiento: !!v.inventoryItem?.tracked,
+          // Producto sin talles (mochilas, gorras): su variante única se muestra como TU, igual que en el remito.
+          id: v.id, talle: v.title === 'Default Title' ? 'TU' : v.title, sku: v.sku || '', inventoryItemId: v.inventoryItem?.id || '', seguimiento: !!v.inventoryItem?.tracked,
           // Sin nivel = la variante no está dada de alta en Martínez (no es cero).
           disponible: nivel ? (Number.isFinite(Number(q?.quantity)) ? Number(q!.quantity) : null) : null,
           precio: v.price != null && Number.isFinite(Number(v.price)) ? Number(v.price) : null,
@@ -296,9 +297,17 @@ export function talleEnShopify(marca: Marca, talle: string, codigo: string, etiq
   return ar ? { talle: ar } : { error: `el US ${fmtNum(n)} no está en su tabla de talle` };
 }
 /** El mismo talle en Shopify: «39» = «39.0», «xl» = «XL». */
+/**
+ * Talle único (16-nov-2026, gax: MA5672FF7, mochila con «TU» en el remito y sin talles en Shopify): TU, U, ÚNICO,
+ * talle único u OS del remito es el mismo que la variante única de un producto sin talles («Default Title»).
+ */
+const SIN_TALLE = new Set(['TU', 'T.U.', 'U', 'UNICO', 'TALLEUNICO', 'OS', 'ONESIZE', 'DEFAULTTITLE']);
+export const esSinTalle = (t: string) => SIN_TALLE.has(String(t ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toUpperCase().replace(/\s+/g, ''));
+
 function igualTalle(a: string, b: string): boolean {
   const A = String(a ?? '').trim().toUpperCase().replace(',', '.'), B = String(b ?? '').trim().toUpperCase().replace(',', '.');
   if (A === B) return true;
+  if (esSinTalle(A) && esSinTalle(B)) return true;
   return esNumero(A) && esNumero(B) && Number(A) === Number(B);
 }
 

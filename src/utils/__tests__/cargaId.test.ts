@@ -180,6 +180,16 @@ describe('iD: vista previa de la carga', () => {
       expect(it.motivo).toMatch(motivo);
     }
   });
+  it('talle único (16-nov-2026, gax: MA5672FF7): «TU» del remito va a la variante única de un producto sin talles', () => {
+    const mochila = remera([variante('Default Title', 4)]);
+    const [it] = planCargaId(resultado([fila([{ talle: 'TU', cantidad: 2 }])]), estado(mochila), {}).items;
+    expect(it.estado).toBe('listo');
+    const a = it.opciones[0].accion!;
+    if (a.tipo !== 'reposicion') throw new Error('esperaba reposición');
+    expect(a.lineas).toEqual([{ talle: 'Default Title', inventoryItemId: 'gid://shopify/InventoryItem/Default Title', actual: 4, suma: 2 }]);
+    // Un producto con talles de verdad sigue sin aceptar TU.
+    expect(planCargaId(resultado([fila([{ talle: 'TU', cantidad: 2 }])]), estado(), {}).items[0].motivo).toMatch(/no existe el talle TU/);
+  });
   it('una sola vez: lo ya cargado no se vuelve a cargar, ni desde otra entrega con la misma mercadería', () => {
     const r = resultado([fila([{ talle: 'S', cantidad: 2 }])]);
     const marca: CargaFamily = { estado: 'cargada', fecha: '2026-11-12T15:00:00Z', firma: firmaCargaId('2026-11-10', '0013-00125274', r.checklist[0]) };
