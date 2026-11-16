@@ -57,6 +57,9 @@ export function listaDeParciales(listas: ListaTrello[]): string {
 }
 const listaParciales = (listas: ListaTrello[]) => listas.find((x) => { const n = norm(x.nombre); return n.includes('PENDIEN') && (n.includes('INDUMENTARIA') || n.includes('CALZADO')); });
 
+/** Nombre que se guarda como «lista» de una tarjeta que ya no está abierta en el tablero. */
+export const ARCHIVADA = 'archivada o borrada';
+
 /** Tarjeta de Trello de una nota importada desde ahí ('' si se subió a mano). */
 export const tarjetaDeNota = (p?: { origen?: string }) => /^trello:([a-f0-9]{24})$/.exec(p?.origen || '')?.[1] || '';
 
@@ -82,7 +85,7 @@ export function estadosTarjetas(
       pendiente,
       visto: pendiente || !!prev?.visto,
       fuera: pendiente ? '' : (prev && !prev.pendiente && prev.fuera) || hoy,
-      lista: t ? String(t.lista || '') : 'archivada o borrada',
+      lista: t ? String(t.lista || '') : ARCHIVADA,
     };
     if (!prev || prev.pendiente !== nuevo.pendiente || !!prev.visto !== nuevo.visto || (prev.fuera || '') !== nuevo.fuera || (prev.lista || '') !== nuevo.lista) cambios[id] = nuevo;
   }
@@ -94,7 +97,8 @@ export function conEstadoTrello<T extends Pedido & { origen?: string }>(pedidos:
   return pedidos.map((p) => {
     const e = estados[tarjetaDeNota(p)];
     if (!e || e.pendiente) return p;
-    return { ...p, cerradaDesde: e.visto ? e.fuera || hoy : NUNCA_PENDIENTE };
+    const archivada = e.lista === ARCHIVADA;
+    return { ...p, cerradaDesde: e.visto ? e.fuera || hoy : NUNCA_PENDIENTE, ...(archivada ? { archivada } : {}) };
   });
 }
 

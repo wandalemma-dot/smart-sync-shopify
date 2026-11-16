@@ -82,6 +82,11 @@ export interface Pedido {
    * NUNCA_PENDIENTE = nunca estuvo en esas listas. Sin el campo, la nota está pendiente.
    */
   cerradaDesde?: string;
+  /**
+   * La tarjeta de Trello de la nota está archivada o borrada (16-nov-2026, gax: «esta tarjeta yo la archivé»):
+   * no se elige sola para ninguna entrega abierta, aunque la factura sea de antes. Las cargadas y cerradas no cambian.
+   */
+  archivada?: boolean;
   /** Copias de la planilla en Trello (la original y las que se subieron marcadas), la más nueva al final. */
   copias?: CopiaPlanilla[];
   /** Versión del lector con que se leyó (5 = ya lee el verde). */
@@ -89,9 +94,9 @@ export interface Pedido {
 }
 /** cerradaDesde de una nota cuya tarjeta nunca estuvo en las listas de pedidos pendientes. */
 export const NUNCA_PENDIENTE = '0000-00-00';
-/** La nota se puede elegir sola para una factura de esta fecha. */
-export const notaDisponible = (p: Pedido, fechaFactura: string) =>
-  !p.cerradaDesde || (p.cerradaDesde !== NUNCA_PENDIENTE && (!fechaFactura || fechaFactura <= p.cerradaDesde));
+/** La nota se puede elegir sola para una factura de esta fecha (`abierta`: la entrega no está cargada y cerrada). */
+export const notaDisponible = (p: Pedido, fechaFactura: string, abierta = false) =>
+  !(abierta && p.archivada) && (!p.cerradaDesde || (p.cerradaDesde !== NUNCA_PENDIENTE && (!fechaFactura || fechaFactura <= p.cerradaDesde)));
 
 /**
  * `retirado`: lo que el depósito marcó a mano en el remito con «-1», «-2»… (12-nov-2026, gax):
@@ -394,7 +399,7 @@ function porCodigo(pedidos: Pedido[]): Map<string, LineaCodigo[]> {
  *   7. la más vieja (el proveedor entrega primero lo más viejo).
  * Se sigue hasta cubrir todo o hasta que ninguna nota tenga saldo de lo que falta. Las demás notas no se tocan.
  */
-function elegirNotas(f: Factura, mapa: Map<string, LineaCodigo[]>, manual: string[], fechaPedido: Map<string, string>): string[] {
+function elegirNotas(f: Factura, mapa: Map<string, LineaCodigo[]>, manual: string[], fechaPedido: Map<string, string>, abierta = false): string[] {
   const falta = new Map<string, number>();
   const precio = new Map<string, RenglonFactura>();
   for (const r of f.renglones) {
@@ -407,7 +412,7 @@ function elegirNotas(f: Factura, mapa: Map<string, LineaCodigo[]>, manual: strin
   for (const cod of falta.keys()) {
     for (const g of mapa.get(cod) ?? []) {
       const libre = libreDe(g, f.fecha);
-      if (libre <= 0 || !(manual.includes(g.pedido.id) || notaDisponible(g.pedido, f.fecha))) continue;
+      if (libre <= 0 || !(manual.includes(g.pedido.id) || notaDisponible(g.pedido, f.fecha, abierta))) continue;
       if (!saldo.has(g.pedido.id)) saldo.set(g.pedido.id, new Map());
       const m = saldo.get(g.pedido.id)!;
       m.set(cod, (m.get(cod) ?? 0) + libre);
@@ -587,6 +592,8 @@ export function analizarFacturas(
   facturasIn: Factura[],
   asignacionManual: Record<string, string[]> = {},
   remitosIn?: Record<string, Remito | undefined>,
+  /** Entregas abiertas (no cargadas y cerradas): para ellas no cuentan las notas de tarjetas archivadas. */
+  abiertas: Set<string> = new Set(),
 ): ResultadoGeneral {
   // La O y el 0 se confunden (en el PDF, en la foto del remito o al tipear: CTN0225003O / CTN02250030).
   // Se comparan como iguales y se muestra la escritura de la factura (o, si no está, la del pedido).
@@ -616,7 +623,8 @@ export function analizarFacturas(
     // 1. Notas de esta factura: las que eligió la usuaria y, después, las que mejor la explican
     //    (elegirNotas). El pedido principal es la primera.
     const manual = asignacionManual[f.id] ?? [];
-    const orden = elegirNotas(f, mapa, manual, fechaPedido);
+    const abierta = abiertas.has(f.id);
+    const orden = elegirNotas(f, mapa, manual, fechaPedido, abierta);
     const principal = manual[0] ?? orden[0] ?? null;
     const fechaPrincipal = principal ? fechaPedido.get(principal) ?? '' : '';
     const factor = factorImpuestos(f);
@@ -628,7 +636,7 @@ export function analizarFacturas(
       // Primero las notas elegidas, en su orden; las demás (sin saldo que haga falta) al final.
       // Las notas cuya tarjeta salió de las listas de pendientes no cuentan (salvo tildadas a mano).
       const pos = (id: string) => { const i = orden.indexOf(id); return i < 0 ? orden.length : i; };
-      const grupos = (mapa.get(cod) ?? []).filter((g) => manual.includes(g.pedido.id) || notaDisponible(g.pedido, f.fecha)).sort((a, b) =>
+      const grupos = (mapa.get(cod) ?? []).filter((g) => manual.includes(g.pedido.id) || notaDisponible(g.pedido, f.fecha, abierta)).sort((a, b) =>
         pos(a.pedido.id) - pos(b.pedido.id) || a.pedido.fecha.localeCompare(b.pedido.fecha));
       const antes = new Map(grupos.map((g) => [g, g.facturado]));
       let resto = r.cantidad;
