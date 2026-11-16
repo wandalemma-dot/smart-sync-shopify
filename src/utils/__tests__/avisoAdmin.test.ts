@@ -1,6 +1,6 @@
 // Aviso de carga a administración y comentario en Trello (16-nov-2026, gax).
 import { describe, expect, it } from 'vitest';
-import { comentarioTrello, fechaCorta, filaPlanilla, observacionesPlanilla, proveedorPlanilla, textoAvisoAdmin } from '../avisoAdmin';
+import { comentarioTrello, fechaCorta, filaPlanilla, filaPlanillaFamily, observacionesPlanilla, proveedorPlanilla, textoAvisoAdmin } from '../avisoAdmin';
 import type { ResultadoCarga } from '../cargaFamily';
 import type { ResultadoFactura } from '../controlFacturas';
 
@@ -65,6 +65,12 @@ describe('Fila para la planilla de ingreso (16-nov-2026)', () => {
     expect(filaPlanilla(o)).toEqual({
       fecha: '10/11/26', proveedor: 'ID LE COQ', numero: '0011-00139953', factura: 'FAC.OK - 0011-00139953',
       remito: '0013-00125274', monto: 1215508.21, observaciones: 'APP - ok', ok: true, carga: '16/11/26',
+    });
+  });
+  it('Family: como las anotaba a mano (Familyarg, sin factura ni monto, con el remito)', () => {
+    expect(filaPlanillaFamily({ fecha: '2026-11-11', remito: ' 0001-00002716 ', hoy: '2026-11-16' })).toEqual({
+      fecha: '11/11/26', proveedor: 'Familyarg', numero: '0001-00002716', factura: '', remito: '0001-00002716',
+      monto: null, observaciones: 'APP - ok', ok: true, carga: '16/11/26',
     });
   });
   it('con algo para revisar: «FAC. -» y la observación', () => {

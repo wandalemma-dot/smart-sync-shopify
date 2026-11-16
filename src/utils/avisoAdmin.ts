@@ -125,6 +125,16 @@ export function filaPlanilla(o: DatosAvisoAdmin): FilaPlanilla {
   };
 }
 
+/**
+ * Fila de una carga de Family (16-nov-2026, gax, con captura de la planilla): Family no factura, así que va
+ * como las que se anotaban a mano: FECHA de la planilla de entrega, «Familyarg», sin N° de factura ni monto,
+ * el N° de remito y CARGA STOCK hoy. Solo se carga si la planilla coincide con el remito: «APP - ok».
+ */
+export function filaPlanillaFamily(o: { fecha: string; remito: string; hoy: string }): FilaPlanilla {
+  const remito = o.remito.trim();
+  return { fecha: fechaCorta(o.fecha), proveedor: 'Familyarg', numero: remito, factura: '', remito, monto: null, observaciones: 'APP - ok', ok: true, carga: fechaCorta(o.hoy) };
+}
+
 /** Comentario para la tarjeta de Trello (sin saludo; Trello admite textos largos). */
 export function comentarioTrello(o: DatosAvisoAdmin): string {
   const c = lineasCarga(o.resultados, o.sucursal);

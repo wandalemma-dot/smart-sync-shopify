@@ -44,6 +44,13 @@ describe('Planilla de ingreso', () => {
     }
   });
 
+  it('Family (sin factura): va con el remito; sin factura ni remito, o con otro número, no', () => {
+    const fam = { fecha: '11/11/26', proveedor: 'Familyarg', numero: '0001-00002716', factura: '', remito: '0001-00002716', monto: null, observaciones: 'APP - ok', ok: true, carga: '16/11/26' };
+    expect(validarFila(fam)).toMatchObject({ factura: '', remito: '0001-00002716', monto: null });
+    expect(() => validarFila({ ...fam, remito: '' })).toThrow();
+    expect(() => validarFila({ ...fam, numero: '0001-00009999' })).toThrow(/remito/);
+  });
+
   it('sin configurar, con una dirección que no es de Apps Script, o una respuesta que no es JSON: error claro sin la clave', async () => {
     const { f } = script({ ok: true });
     await expect(anotarFila(fila, f)).rejects.toThrow(/PLANILLA_URL y PLANILLA_SECRETO/);

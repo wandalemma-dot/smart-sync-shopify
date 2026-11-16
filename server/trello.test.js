@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import * as XLSX from 'xlsx';
 import { unzipSync, zipSync } from 'fflate';
-import { adjuntarArchivo, bajarAdjunto, esVerde, fechaCreacion, listarTarjetas, MAX_ADJUNTO, comentarTarjeta, moverTarjeta, nombreAdjunto, verdesDe } from './trello.js';
+import { adjuntarArchivo, bajarAdjunto, esVerde, fechaCreacion, listarTarjetas, MAX_ADJUNTO, comentarTarjeta, crearTarjeta, moverTarjeta, nombreAdjunto, verdesDe } from './trello.js';
 import { esVerde as esVerdeApp } from '../src/utils/planillaVerde.ts';
 import { NOTA_1522, VERDES_1522, planillaFalsa } from '../src/utils/__tests__/planillaFalsa.ts';
 import { leerPedidoAuto } from '../src/utils/lectoresFacturas.ts';
@@ -338,7 +338,7 @@ describe('Adjuntar la factura y el remito a la tarjeta (14-nov-2026)', () => {
     expect(otra.subidos).toHaveLength(0);
     const { f } = trello();
     await expect(adjuntarArchivo('../x', { nombre: 'x', tipo: 'application/pdf', datos: PDF }, f)).rejects.toThrow(/inválido/);
-    await expect(adjuntarArchivo(CARD, { nombre: 'x.exe', tipo: 'application/x-msdownload', datos: PDF }, f)).rejects.toThrow(/PDF, JPG o PNG/);
+    await expect(adjuntarArchivo(CARD, { nombre: 'x.exe', tipo: 'application/x-msdownload', datos: PDF }, f)).rejects.toThrow(/PDF, JPG, PNG o Excel/);
     await expect(adjuntarArchivo(CARD, { nombre: 'x', tipo: 'image/jpeg', datos: 'no es base64!' }, f)).rejects.toThrow(/inválido/);
     const grande = Buffer.alloc(MAX_ADJUNTO + 1).toString('base64');
     await expect(adjuntarArchivo(CARD, { nombre: 'x', tipo: 'image/jpeg', datos: grande }, f)).rejects.toThrow(/3 MB/);
@@ -454,5 +454,51 @@ describe('Comentar lo cargado en la tarjeta (16-nov-2026)', () => {
     await expect(comentarTarjeta(CARD, '  ', f)).rejects.toThrow(/vacío/);
     await expect(comentarTarjeta(CARD, 'x'.repeat(8001), f)).rejects.toThrow(/largo/);
     await expect(comentarTarjeta('../x', 'x', f)).rejects.toThrow(/inválido/);
+  });
+});
+
+describe('Crear la tarjeta de una entrega de Family (16-nov-2026)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+  const LISTA = 'd'.repeat(24);
+  function trello({ boardLista = BOARD_ID, cerrada = false, abiertas = [] } = {}) {
+    const posts = [];
+    const f = vi.fn(async (url, opts = {}) => {
+      const ruta = url.replace('https://api.trello.com/1', '');
+      if (opts.method === 'POST') {
+        posts.push({ ruta, datos: Object.fromEntries(opts.body), auth: opts.headers.Authorization });
+        return Response.json({ id: 'f'.repeat(24), shortUrl: 'https://trello.com/c/AbC123' });
+      }
+      if (ruta.startsWith(`/lists/${LISTA}`)) return Response.json({ idBoard: boardLista, closed: cerrada, name: 'FINALIZADO' });
+      if (ruta.startsWith('/boards/RzHl0YNS/cards')) return Response.json(abiertas);
+      if (ruta.startsWith('/boards/')) return Response.json({ id: BOARD_ID });
+      return new Response('', { status: 404 });
+    });
+    return { f, posts };
+  }
+  it('la crea arriba de la lista, con nombre y descripción, claves en el encabezado', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    const { f, posts } = trello();
+    expect(await crearTarjeta(LISTA, 'Family - Remito 0001-00002716 - 11/11/26', 'Entrega…', f))
+      .toEqual({ id: 'f'.repeat(24), enlace: 'https://trello.com/c/AbC123', yaEstaba: false });
+    expect(posts).toEqual([{ ruta: '/cards', datos: { idList: LISTA, name: 'Family - Remito 0001-00002716 - 11/11/26', desc: 'Entrega…', pos: 'top' }, auth: 'OAuth oauth_consumer_key="k", oauth_token="t"' }]);
+    for (const [url] of f.mock.calls) expect(url).not.toMatch(/key=|token=/);
+  });
+  it('si ya hay una tarjeta abierta con ese nombre, devuelve esa y no crea otra', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    const { f, posts } = trello({ abiertas: [{ id: 'e'.repeat(24), name: 'Family - Remito 1', closed: false, shortUrl: 'https://trello.com/c/Xy9' }] });
+    expect(await crearTarjeta(LISTA, 'Family - Remito 1', '', f)).toEqual({ id: 'e'.repeat(24), enlace: 'https://trello.com/c/Xy9', yaEstaba: true });
+    expect(posts).toHaveLength(0);
+  });
+  it('solo listas abiertas del tablero de compras y nombre válido', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    for (const op of [{ boardLista: 'e'.repeat(24) }, { cerrada: true }]) {
+      const { f, posts } = trello(op);
+      await expect(crearTarjeta(LISTA, 'x', '', f)).rejects.toThrow(/tablero de compras|archivada/);
+      expect(posts).toHaveLength(0);
+    }
+    const { f } = trello();
+    await expect(crearTarjeta('../x', 'x', '', f)).rejects.toThrow(/inválido/);
+    await expect(crearTarjeta(LISTA, '  ', '', f)).rejects.toThrow(/inválido/);
+    await expect(crearTarjeta(LISTA, 'x', 'y'.repeat(4001), f)).rejects.toThrow(/larga/);
   });
 });

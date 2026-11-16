@@ -61,7 +61,11 @@ export function nombreArchivoPlanilla(p: { nroProveedor?: string; nombre: string
 export const mensaje = (e: unknown) => (e instanceof Error ? e.message : 'Error inesperado.');
 
 /** Un archivo listo para adjuntar a una tarjeta de Trello (base64, ≤ 3 MB). */
-export interface ArchivoTrello { nombre: string; tipo: 'application/pdf' | 'image/jpeg' | 'image/png'; datos: string }
+export interface ArchivoTrello {
+  nombre: string;
+  tipo: 'application/pdf' | 'image/jpeg' | 'image/png' | 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' | 'application/vnd.ms-excel';
+  datos: string;
+}
 const MAX_TRELLO = 3_000_000;
 const base64 = (buf: ArrayBuffer) => {
   const b = new Uint8Array(buf);
@@ -96,6 +100,54 @@ export async function adjuntarATrello(tarjeta: string, archivo: ArchivoTrello): 
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.error || `Error ${r.status}`);
   return d;
+}
+
+/**
+ * Family (16-nov-2026): la planilla de entrega (Excel tal cual, o fotos/PDF) y las fotos del remito, para
+ * la tarjeta que crea la app. Nombres «Planilla de entrega 11-11-26.xlsx», «Remito 0001-00002716 (1).jpg».
+ */
+export async function archivosFamily(planilla: File[], remito: File[], numeroRemito: string, fecha: string): Promise<ArchivoTrello[]> {
+  const out: ArchivoTrello[] = [];
+  const dia = fechaAr(fecha).replace(/\//g, '-');
+  const esXlsx = (f: File) => /\.xlsx$/i.test(f.name), esXls = (f: File) => /\.xls$/i.test(f.name);
+  const esPdf = (f: File) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+  const tal = async (files: File[], base: string) => {
+    for (const [i, f] of files.entries()) {
+      if (f.size > MAX_TRELLO) throw new Error(`${f.name} pesa más de 3 MB: subilo a mano a Trello.`);
+      const tipo = esPdf(f) ? 'application/pdf' : esXlsx(f) ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/vnd.ms-excel';
+      out.push({ nombre: `${base}${files.length > 1 ? ` (${i + 1})` : ''}`, tipo, datos: base64(await f.arrayBuffer()) });
+    }
+  };
+  const fotos = async (files: File[], base: string) => {
+    const achicadas = files.length ? await prepararFotos(files) : [];
+    for (const [i, f] of achicadas.entries()) {
+      if (f.datos.length * 0.75 > MAX_TRELLO) throw new Error('Una foto pesa más de 3 MB: subila a mano a Trello.');
+      out.push({ nombre: `${base}${achicadas.length > 1 ? ` (${i + 1})` : ''}`, tipo: 'image/jpeg', datos: f.datos });
+    }
+  };
+  const directos = (f: File) => esPdf(f) || esXlsx(f) || esXls(f);
+  await tal(planilla.filter(directos), `Planilla de entrega ${dia}`);
+  await fotos(planilla.filter((f) => !directos(f)), `Planilla de entrega ${dia}`);
+  const nombreRemito = `Remito ${numeroRemito || dia}`;
+  await tal(remito.filter(esPdf), nombreRemito);
+  await fotos(remito.filter((f) => !esPdf(f)), nombreRemito);
+  return out;
+}
+
+/** Crea una tarjeta en una lista del tablero de compras (o devuelve la que ya tiene ese nombre). */
+export async function crearEnTrello(lista: string, nombre: string, descripcion: string): Promise<{ id: string; enlace: string; yaEstaba: boolean }> {
+  const r = await fetch('/api/trello', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accion: 'crear', lista, nombre, descripcion }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || `Error ${r.status}`);
+  return d;
+}
+
+/** Las listas abiertas del tablero de compras. */
+export async function listasDeTrello(): Promise<{ id: string; nombre: string }[]> {
+  const r = await fetch('/api/trello?accion=tarjetas', { cache: 'no-store' });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || `Error ${r.status}`);
+  return Array.isArray(d.listas) ? d.listas : [];
 }
 
 /** Pasa una tarjeta del tablero de compras a otra lista (la app lo hace sola al avanzar la entrega). */
