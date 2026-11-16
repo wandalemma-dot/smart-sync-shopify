@@ -185,7 +185,8 @@ const todoTipo = { calzado: 'todo el calzado', indumentaria: 'toda la indumentar
 /**
  * Qué hacer con la tarjeta de la nota (12-nov-2026, gax: «cuando termina el pedido completo y queda todo
  * en verde, lo doy por finalizado»; «si solo entra la indumentaria, decirme y agregar a pendientes de
- * indumentaria/calzado»). Solo es un aviso: la app no mueve tarjetas.
+ * indumentaria/calzado»). Desde el 14-nov-2026 la app mueve la tarjeta sola al cerrar la entrega
+ * (ver movimientosTarjetas en listasTrello.ts): el texto dice adónde va o dónde quedó.
  * `listaActual` = lista donde está la tarjeta; `listaParcial` = la lista de entregas parciales del tablero.
  */
 export function consejoNota(m: MarcasNota, opts: { listaActual?: string; listaParcial?: string; listaFinal?: string } = {}): ConsejoNota {
@@ -198,7 +199,7 @@ export function consejoNota(m: MarcasNota, opts: { listaActual?: string; listaPa
       tipo: 'finalizar', corto: '✅ llegó todo: finalizar', falta,
       texto: `✅ Pedido completo: llegó todo (${pedido} u.).`,
       tarjeta: actual && actual === opts.listaFinal ? `La tarjeta ya está en «${actual}».`
-        : `Podés darlo por finalizado${actual ? ` y sacar la tarjeta de «${actual}»` : ''}.`,
+        : `Al cerrar la entrega, la app pasa la tarjeta a «${opts.listaFinal || 'FINALIZADO'}».`,
     };
   }
   if (llegaron <= 0) return { tipo: 'nada', corto: 'todavía no llegó nada', texto: `Todavía no llegó nada de esta nota (${pedido} u.).`, tarjeta: '', falta };
@@ -223,7 +224,7 @@ export function consejoNota(m: MarcasNota, opts: { listaActual?: string; listaPa
   }
   const destino = opts.listaParcial || 'pendientes de indumentaria/calzado';
   const ya = !!actual && !!opts.listaParcial && actual === opts.listaParcial;
-  return { tipo: 'parcial', corto, texto, falta, tarjeta: ya ? `La tarjeta ya está en «${destino}»: dejala ahí.` : `Pasá la tarjeta a «${destino}».` };
+  return { tipo: 'parcial', corto, texto, falta, tarjeta: ya ? `La tarjeta ya está en «${destino}».` : `Al cerrar la entrega, la app pasa la tarjeta a «${destino}».` };
 }
 
 /**
