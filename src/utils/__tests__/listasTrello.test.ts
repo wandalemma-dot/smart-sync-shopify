@@ -96,6 +96,40 @@ describe('listas de pedidos pendientes en Trello (gax: «solo tené en cuenta es
     expect(f4.faltaNota).toBe(true);
     expect(f4.semaforo).toBe('incompleta');
   });
+
+  it('tarjeta ARCHIVADA (16-nov-2026, gax: «esta tarjeta yo la archivé»): su nota no se elige sola para una entrega abierta', () => {
+    const linea = (codigo: string, cantidad: number) => ({ sku: codigo, codigo, descripcion: codigo, talle: 'M', unidadesPorUdm: 1, precioLista: 100000, descuento: 10, cantidad });
+    const ren = (codigo: string, cantidad: number): RenglonFactura => ({ codigo, descripcion: codigo, precioUnitario: 100000, bonificacion: 10, cantidad, total: 90000 * cantidad });
+    const factura = (id: string, fecha: string, rs: RenglonFactura[]): Factura => {
+      const subtotal = rs.reduce((t, r) => t + r.total, 0);
+      return { id, numero: id, fecha, renglones: rs, subtotal, iva: subtotal * 0.21, percepcionCaba: subtotal * 0.05, percepcionBsAs: subtotal * 0.06, total: subtotal * 1.32 };
+    };
+    const pend: Pedido & { origen: string } = { id: 'PEND', nombre: 'PEND', fecha: '2026-10-30', lineas: [linea('X', 2)], origen: `trello:${T('a')}` };
+    const fact: Pedido & { origen: string } = { id: 'FACT', nombre: 'CONVERSE FACTURADO', fecha: '2026-10-01', lineas: [linea('Y', 4)], origen: `trello:${T('b')}` };
+    // La app vio la tarjeta archivada el 16/11 (no está entre las abiertas del tablero), después de la factura del 12/11.
+    const estados = estadosTarjetas([pend, fact], [{ id: T('a'), idLista: L(1), lista: 'PEDIDOS PENDIENTES' }], new Set([L(1)]),
+      { [T('b')]: { pendiente: true, visto: true, fuera: '', lista: 'PEDIDOS PENDIENTES' } }, '2026-11-16');
+    expect(estados[T('b')]).toEqual({ pendiente: false, visto: true, fuera: '2026-11-16', lista: 'archivada o borrada' });
+    const notas = conEstadoTrello([pend, fact], estados, '2026-11-16');
+    expect(notas[1]).toMatchObject({ cerradaDesde: '2026-11-16', archivada: true });
+    expect(notas[0].archivada).toBeUndefined();
+    // Una tarjeta que solo cambió de lista (no archivada) sigue con la regla de la fecha.
+    const movida = conEstadoTrello([fact], { [T('b')]: { pendiente: false, visto: true, fuera: '2026-11-16', lista: 'FINALIZADO' } }, '2026-11-16')[0];
+    expect(movida.archivada).toBeUndefined();
+    expect(notaDisponible(movida, '2026-11-12', true)).toBe(true);
+
+    const f = factura('F', '2026-11-12', [ren('X', 2), ren('Y', 4)]);
+    // Entrega abierta: Y queda facturado sin pedir, no se descuenta de la nota archivada.
+    const abierta = analizarFacturas(notas, [f], {}, undefined, new Set(['F'])).facturas[0];
+    expect(abierta.pedidosCubiertos).toEqual(['PEND']);
+    expect(abierta.renglones[1].sinPedir).toBe(4);
+    // Entrega ya cargada y cerrada: conserva su resultado con la nota archivada.
+    const cerrada = analizarFacturas(notas, [f]).facturas[0];
+    expect([...cerrada.pedidosCubiertos].sort()).toEqual(['FACT', 'PEND']);
+    // Tildada a mano, se usa igual.
+    const tildada = analizarFacturas(notas, [f], { F: ['FACT'] }, undefined, new Set(['F'])).facturas[0];
+    expect(tildada.renglones.every((r) => r.sinPedir === 0)).toBe(true);
+  });
 });
 
 describe('mover las tarjetas solas (14-nov-2026, gax: «que haga todo automático»)', () => {

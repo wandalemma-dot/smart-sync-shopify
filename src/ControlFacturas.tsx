@@ -172,6 +172,19 @@ async function guardarEstados(p: Prov, cambios: Record<string, EstadoTarjeta>) {
 }
 /** Fecha de hoy en Argentina (hoy() es la de UTC: después de las 21 ya da mañana). */
 const hoyAr = () => new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+
+/**
+ * Control de todas las facturas. Las notas de tarjetas archivadas en Trello (16-nov-2026, gax: «esta tarjeta yo la
+ * archivé») no se eligen solas para las entregas abiertas; las entregas ya cargadas y cerradas conservan su resultado.
+ */
+function analizarControl(ctrl: (Pedido & { archivada?: boolean })[], d: Datos, p: Prov) {
+  const res = analizarFacturas(ctrl, d.facturas, d.asignaciones, d.remitos);
+  if (!ctrl.some((x) => x.archivada)) return res;
+  const cargaEnt = p === 'id' || p === 'distrinando';
+  const abiertas = new Set(res.facturas.filter((r) => !(cargaEnt
+    && entregaArchivada(r, estadoCargaFactura(r, d.cargas ?? {}, d.noLlego), d.archivo?.[r.factura.id]?.estado))).map((r) => r.factura.id));
+  return analizarFacturas(ctrl, d.facturas, d.asignaciones, d.remitos, abiertas);
+}
 const sinListas = (elegidas: string[]) => elegidas.length
   ? 'Las listas de Trello elegidas como pedidos pendientes ya no están en el tablero: elegilas de nuevo en «Notas de pedido cargadas».'
   : 'No encontré en Trello ninguna lista de pedidos pendientes (con «pendiente» en el nombre): elegilas en «Notas de pedido cargadas».';
@@ -300,7 +313,7 @@ export default function ControlFacturas() {
 
   // Las notas cuya tarjeta de Trello salió de las listas de pedidos pendientes no se eligen solas.
   const pedidosControl = useMemo(() => conEstadoTrello(datos.pedidos, datos.tarjetasTrello, hoyAr()), [datos.pedidos, datos.tarjetasTrello]);
-  const res = useMemo(() => analizarFacturas(pedidosControl, datos.facturas, datos.asignaciones, datos.remitos), [pedidosControl, datos.facturas, datos.asignaciones, datos.remitos]);
+  const res = useMemo(() => analizarControl(pedidosControl, datos, prov), [pedidosControl, datos, prov]);
   const resumen = useMemo(() => resumenPedidos(pedidosControl, res), [pedidosControl, res]);
   // Qué hacer con la tarjeta de cada nota hoy: finalizar, pasar a la lista de parciales o nada (la app no la mueve).
   const listaParcial = useMemo(() => listaDeParciales(listasTablero ?? []), [listasTablero]);
@@ -333,7 +346,7 @@ export default function ControlFacturas() {
       if (sigue(p)) setListasTablero(listas);
       const frescos = { ...VACIO, ...(await api(undefined, p)) } as Datos;
       const ctrl = conEstadoTrello(frescos.pedidos, frescos.tarjetasTrello, hoyAr());
-      const resF = analizarFacturas(ctrl, frescos.facturas, frescos.asignaciones, frescos.remitos);
+      const resF = analizarControl(ctrl, frescos, p);
       const rf = resF.facturas.find((x) => x.factura.id === facturaId);
       if (!rf) return [];
       const carga = p === 'id' || p === 'distrinando' ? estadoCargaFactura(rf, frescos.cargas ?? {}, frescos.noLlego) : null;
