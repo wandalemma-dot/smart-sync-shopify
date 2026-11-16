@@ -5,7 +5,7 @@
 // escrito y la persona lo manda. El destinatario se guarda en la base (cf:config), nunca en el código.
 import { pesos } from './avisoPrecio';
 import type { ResultadoCarga } from './cargaFamily';
-import { motivoInformativo, type ResultadoFactura } from './controlFacturas';
+import { diferenciasInformativas, motivoInformativo, type ResultadoFactura } from './controlFacturas';
 
 /** 2026-11-10 → 10/11/26, como la planilla. */
 export const fechaCorta = (iso: string) => {
@@ -74,9 +74,19 @@ export function textoAvisoAdmin(o: DatosAvisoAdmin): { asunto: string; cuerpo: s
     ['CARGA STOCK', fechaCorta(o.hoy)],
   ];
   const c = lineasCarga(o.resultados, o.sucursal);
-  const asunto = `Carga de mercadería — ${proveedor} factura ${f.numero}`;
-  const cabeza = ['Hola,', '', 'Se cargó en Shopify la mercadería de esta entrega:', '', ...filas.map(([k, v]) => `${k}: ${v}`), '',
-    `Cargado en ${o.sucursal}: ${c.sumadas} u.${c.pasadas ? ` (${c.pasadas} u. para ventas de iD que pasaron a ${o.sucursal})` : ''}.`];
+  // Como el mail que mandaba el depósito («Fac. OK ID»), pero escrito: solo informa (gax, 16-nov-2026).
+  // La fecha es la de la factura; la de la carga va en la planilla.
+  const ok = observacionesPlanilla(o.r) === 'ok';
+  const corto = o.prov === 'distrinando' ? 'Distrinando' : 'ID';
+  const asunto = `Fac. ${ok ? 'OK ' : ''}${corto} - ${f.numero}${ok ? '' : ' (con diferencias)'}`;
+  const remito = o.r.remito?.numero || f.remito;
+  const datos = [`de ${proveedor}`, `del ${fechaCorta(f.fecha)}`, f.total ? `por ${pesos(f.total)}` : '', remito ? `(remito ${remito})` : ''].filter(Boolean).join(' ');
+  const cargado = `Se cargaron ${c.sumadas} u. en ${o.sucursal}${c.pasadas ? `, ${c.pasadas} de ellas para ventas de iD que pasaron a ${o.sucursal}` : ''}.`;
+  const cabeza = ['Hola,', '',
+    `Les informo que llegó y se cargó en stock la mercadería de la factura ${f.numero} ${datos}.`, '',
+    ...(ok ? ['La factura coincide con la nota de pedido: OK.']
+      : ['La factura no coincide con la nota de pedido. Esto es lo que se encontró:', ...diferenciasInformativas(o.r.motivos)]),
+    '', cargado];
   const pie = c.revisar.length ? ['', 'Para revisar:', ...c.revisar] : [];
   // Los enlaces de mail tienen un largo máximo: el detalle por artículo se corta con aviso.
   const usadas: string[] = [];
@@ -86,7 +96,7 @@ export function textoAvisoAdmin(o: DatosAvisoAdmin): { asunto: string; cuerpo: s
     usadas.push(l); largo += l.length + 1;
   }
   if (usadas.length < c.lineas.length) usadas.push(`… y ${c.lineas.length - usadas.length} artículo(s) más.`);
-  const cuerpo = [...cabeza, ...(usadas.length ? ['', ...usadas] : []), ...pie].join('\n');
+  const cuerpo = [...cabeza, ...(usadas.length ? ['', 'Detalle:', ...usadas] : []), ...pie, '', 'Saludos.'].join('\n');
   return { asunto, cuerpo, filas };
 }
 

@@ -16,13 +16,28 @@ const resultados: ResultadoCarga[] = [
 const o = { prov: 'id' as const, r, resultados, sucursal: 'DEPOSITO MARTINEZ', hoy: '2026-11-16' };
 
 describe('Aviso de carga a administración', () => {
-  it('lleva las columnas de la planilla de ingreso', () => {
+  it('mail escrito, como el «Fac. OK ID» del depósito: factura, fecha de la factura, remito, monto y OK', () => {
     const { asunto, cuerpo } = textoAvisoAdmin(o);
-    expect(asunto).toBe('Carga de mercadería — ID LE COQ factura 0011-00139953');
-    for (const l of ['FECHA: 10/11/26', 'PROVEEDOR: ID LE COQ', 'N° FACTURA: 0011-00139953', 'N° REMITO: 0013-00125274', 'MONTO: $ 1.215.508,21', 'OBSERVACIONES: ok', 'CARGA STOCK: 16/11/26']) expect(cuerpo).toContain(l);
-    expect(cuerpo).toContain('Cargado en DEPOSITO MARTINEZ: 6 u. (1 u. para ventas de iD que pasaron a DEPOSITO MARTINEZ).');
-    expect(cuerpo).toMatch(/LTO0224043 .*: 4 u\. \(M 2, S 2\)/);
+    expect(asunto).toBe('Fac. OK ID - 0011-00139953');
+    expect(cuerpo).toContain('Les informo que llegó y se cargó en stock la mercadería de la factura 0011-00139953 de ID LE COQ del 10/11/26 por $ 1.215.508,21 (remito 0013-00125274).');
+    expect(cuerpo).toContain('La factura coincide con la nota de pedido: OK.');
+    // La fecha de carga va en la planilla, no en el mail.
+    expect(cuerpo).not.toContain('16/11/26');
+    expect(cuerpo).not.toMatch(/^[A-Z° ]+: /m);
+    expect(cuerpo).toContain('Se cargaron 6 u. en DEPOSITO MARTINEZ, 1 de ellas para ventas de iD que pasaron a DEPOSITO MARTINEZ.');
+    expect(cuerpo).toMatch(/Detalle:\n• LTO0224043 .*: 4 u\. \(M 2, S 2\)/);
     expect(cuerpo).toMatch(/Para revisar:\n• LTO0226092: No se pudo dar de alta: XXL/);
+  });
+  it('con diferencias: las informa, primero lo que no se pidió, sin reclamar', () => {
+    const conDif = { ...r, semaforo: 'reclamar', totalSinPedirNeto: 60000, motivos: [
+      'PRECIO: 1 artículo(s) más caros que en el pedido: $ 30.000,00 neto + IVA $ 6.300,00 + percepciones $ 3.300,00 = $ 39.600,00. Pedir nota de crédito por $ 30.000,00 neto más impuestos.',
+      'FACTURADO SIN PEDIR: ZZ9 (1): $ 60.000,00 neto, $ 79.200,00 con impuestos.',
+    ] } as unknown as ResultadoFactura;
+    const { asunto, cuerpo } = textoAvisoAdmin({ ...o, prov: 'distrinando', r: conDif });
+    expect(asunto).toBe('Fac. Distrinando - 0011-00139953 (con diferencias)');
+    expect(cuerpo).toMatch(/no coincide con la nota de pedido\. Esto es lo que se encontró:\nVino algo que no se pidió:\n- FACTURADO SIN PEDIR: ZZ9/);
+    expect(cuerpo).toMatch(/Otras diferencias encontradas:\n- PRECIO: .*= \$ 39\.600,00\.\n/);
+    expect(cuerpo).not.toMatch(/nota de crédito|RECLAM/i);
   });
   it('proveedor y observaciones como los escribe la planilla', () => {
     expect(proveedorPlanilla('distrinando', [])).toBe('DISTRINANDO');
