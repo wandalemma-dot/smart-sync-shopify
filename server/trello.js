@@ -298,3 +298,25 @@ export async function moverTarjeta(tarjetaId, listaId, fetchImpl = fetch) {
   await post(`/cards/${tarjetaId}?idList=${listaId}&pos=top`, null, fetchImpl, 'PUT');
   return { yaEstaba: false };
 }
+
+// ---------------------------------------------------------------------------
+// COMENTAR UNA TARJETA (16-nov-2026, gax: «que la app cargue la carga en Trello»). Al terminar una carga
+// en Shopify, la app deja en la tarjeta de la nota un comentario con lo cargado. Solo texto, en una
+// tarjeta del tablero de compras; no cambia nada más de la tarjeta.
+// ---------------------------------------------------------------------------
+export const MAX_COMENTARIO = 8000;
+export async function comentarTarjeta(tarjetaId, texto, fetchImpl = fetch) {
+  if (!RE_ID.test(String(tarjetaId))) throw error('Identificador inválido.', 400);
+  const t = String(texto ?? '').trim();
+  if (!t) throw error('Comentario vacío.', 400);
+  if (t.length > MAX_COMENTARIO) throw error('El comentario es demasiado largo.', 413);
+  const [tarjeta, idTab] = await Promise.all([get(`/cards/${tarjetaId}?fields=idBoard,closed`, fetchImpl), idTablero(fetchImpl)]);
+  if (!tarjeta || !idTab || tarjeta.idBoard !== idTab) throw error('La tarjeta no es del tablero de compras.', 403);
+  if (tarjeta.closed) throw error('La tarjeta está archivada.', 400);
+  const c = await post(`/cards/${tarjetaId}/actions/comments`, () => {
+    const form = new URLSearchParams();
+    form.set('text', t);
+    return form;
+  }, fetchImpl);
+  return { ok: true, ...(RE_ID.test(String(c?.id || '')) ? { id: c.id } : {}) };
+}

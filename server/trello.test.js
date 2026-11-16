@@ -2,7 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest';
 import { randomBytes } from 'node:crypto';
 import * as XLSX from 'xlsx';
 import { unzipSync, zipSync } from 'fflate';
-import { adjuntarArchivo, bajarAdjunto, esVerde, fechaCreacion, listarTarjetas, MAX_ADJUNTO, moverTarjeta, nombreAdjunto, verdesDe } from './trello.js';
+import { adjuntarArchivo, bajarAdjunto, esVerde, fechaCreacion, listarTarjetas, MAX_ADJUNTO, comentarTarjeta, moverTarjeta, nombreAdjunto, verdesDe } from './trello.js';
 import { esVerde as esVerdeApp } from '../src/utils/planillaVerde.ts';
 import { NOTA_1522, VERDES_1522, planillaFalsa } from '../src/utils/__tests__/planillaFalsa.ts';
 import { leerPedidoAuto } from '../src/utils/lectoresFacturas.ts';
@@ -420,5 +420,39 @@ describe('Mover una tarjeta de lista (14-nov-2026)', () => {
     vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
     const { f } = trello({ estado: 401 });
     await expect(moverTarjeta(CARD, LISTA, f)).rejects.toThrow(/solo lectura/);
+  });
+});
+
+describe('Comentar lo cargado en la tarjeta (16-nov-2026)', () => {
+  afterEach(() => vi.unstubAllEnvs());
+  function trello({ boardCard = BOARD_ID, cerrada = false } = {}) {
+    const posts = [];
+    const f = vi.fn(async (url, opts = {}) => {
+      const ruta = url.replace('https://api.trello.com/1', '');
+      if (opts.method === 'POST') { posts.push({ ruta, texto: opts.body.get('text'), auth: opts.headers.Authorization }); return Response.json({ id: 'c'.repeat(24) }); }
+      if (ruta.startsWith(`/cards/${CARD}`)) return Response.json({ idBoard: boardCard, closed: cerrada });
+      if (ruta.startsWith('/boards/')) return Response.json({ id: BOARD_ID });
+      return new Response('', { status: 404 });
+    });
+    return { f, posts };
+  }
+  it('deja el comentario en la tarjeta, con las claves en el encabezado', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    const { f, posts } = trello();
+    expect(await comentarTarjeta(CARD, 'Cargado en Shopify: 3 u.', f)).toEqual({ ok: true, id: 'c'.repeat(24) });
+    expect(posts).toEqual([{ ruta: `/cards/${CARD}/actions/comments`, texto: 'Cargado en Shopify: 3 u.', auth: 'OAuth oauth_consumer_key="k", oauth_token="t"' }]);
+    for (const [url] of f.mock.calls) expect(url).not.toMatch(/key=|token=/);
+  });
+  it('solo tarjetas del tablero de compras, no archivadas, y con texto', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    for (const op of [{ boardCard: 'e'.repeat(24) }, { cerrada: true }]) {
+      const { f, posts } = trello(op);
+      await expect(comentarTarjeta(CARD, 'x', f)).rejects.toThrow(/tablero de compras|archivada/);
+      expect(posts).toHaveLength(0);
+    }
+    const { f } = trello();
+    await expect(comentarTarjeta(CARD, '  ', f)).rejects.toThrow(/vacío/);
+    await expect(comentarTarjeta(CARD, 'x'.repeat(8001), f)).rejects.toThrow(/largo/);
+    await expect(comentarTarjeta('../x', 'x', f)).rejects.toThrow(/inválido/);
   });
 });
