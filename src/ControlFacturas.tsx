@@ -28,7 +28,7 @@ import { Archivo, Copiar, Parte } from './EntregasPartes';
 import { OrdenesQueSalen, PanelCarga } from './PanelCarga';
 import { accionesElegidas, ejecutarCargaFamily, resumenCarga, textoCarga, type CargaFamily, type EleccionesCarga, type ModoVenta, type PlanCarga, type ResultadoCarga } from './utils/cargaFamily';
 import { ResultadosCarga } from './ResultadosCarga';
-import { comentarioTrello, textoAvisoAdmin } from './utils/avisoAdmin';
+import { comentarioTrello, filaPlanilla, textoAvisoAdmin } from './utils/avisoAdmin';
 import { cambiosDePrecio, enlacesMail, textoAvisoPrecio, type CambioPrecio, type MailsAviso } from './utils/avisoPrecio';
 import { diferenciasDeTalles, netosDeCarga, textoAvisoTalles } from './utils/avisoTalles';
 import { planCargaDistrinando } from './utils/cargaDistrinando';
@@ -36,7 +36,7 @@ import { entregaArchivada, estadoCargaFactura, leerEstadoCargaId, ordenesQueSale
 import { actualizarPreciosManualmente, shopifyGraphQL } from './utils/shopify';
 import {
   adjuntarATrello, apiControl, archivosParaTrello, boton, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, slug, td, th,
-  comentarEnTrello, moverEnTrello,
+  anotarEnPlanilla, comentarEnTrello, moverEnTrello, probarPlanilla,
 } from './utils/entregasUi';
 
 type Prov = 'distrinando' | 'id' | 'family';
@@ -955,10 +955,18 @@ export default function ControlFacturas() {
     if (!algo) return;
     const datosAviso = { prov: p, r, resultados, sucursal: SUCURSAL_CARGA_ID, hoy: hoyAr() };
     setAvisoAdmin(textoAvisoAdmin(datosAviso));
-    const tarjetas = [...new Set(r.pedidosCubiertos.map((id) => tarjetaDeNota(datos.pedidos.find((x) => x.id === id))).filter(Boolean))];
-    if (!tarjetas.length) return;
-    const texto = comentarioTrello(datosAviso);
     const hechos: string[] = [];
+    // Fila en la planilla «CONTROL INGRESO MERCADERIA» (16-nov-2026, gax): la agrega sola; si esa factura
+    // ya está anotada (otra carga de la misma entrega), no la repite.
+    try {
+      const a = await anotarEnPlanilla(filaPlanilla(datosAviso));
+      if (a.sinPlanilla) hechos.push('Planilla de ingreso: todavía no está conectada (ver «Planilla de ingreso» en Notas de pedido).');
+      else if (a.yaEstaba) hechos.push(`Planilla de ingreso: la factura ${r.factura.numero} ya estaba anotada${a.fila ? ` (fila ${a.fila})` : ''}.`);
+      else hechos.push(`Planilla de ingreso: agregué la factura ${r.factura.numero}${a.fila ? ` en la fila ${a.fila}` : ''}.`);
+    } catch (e) { hechos.push(`Planilla de ingreso: no pude agregar la fila (${mensaje(e)}). Cargala a mano.`); }
+    const tarjetas = [...new Set(r.pedidosCubiertos.map((id) => tarjetaDeNota(datos.pedidos.find((x) => x.id === id))).filter(Boolean))];
+    if (!tarjetas.length) { if (sigue(p)) setAvisos((a) => [...a, ...hechos]); return; }
+    const texto = comentarioTrello(datosAviso);
     for (const t of tarjetas) {
       const nombre = datos.pedidos.find((x) => tarjetaDeNota(x) === t)?.nombre ?? 'la tarjeta';
       try { await comentarEnTrello(t, texto); hechos.push(`Trello: dejé en «${nombre}» el comentario con lo cargado.`); }
@@ -1195,6 +1203,7 @@ export default function ControlFacturas() {
             {prov === 'id' ? 'La fecha de cada nota sale de la fila 1 del Excel de iD.' : 'Distrinando no trae la fecha en el Excel: poné la del día que lo mandaste.'} La fecha ordena qué nota se factura primero; se puede corregir abajo.
           </p>
           <ListasTrelloCaja listas={listasTablero} elegidas={datos.listasTrello} ocupado={!!ocupado} onElegir={elegirListas} />
+          <PlanillaCaja />
           {excelTrello.length > 0 && (
             <details style={{ fontSize: '0.8rem', margin: '0 0 10px', opacity: 0.85 }}>
               <summary style={{ cursor: 'pointer' }}>{excelTrello.length} Excel de Trello que no se cargaron como notas de este proveedor</summary>
@@ -1632,6 +1641,26 @@ function Deposito({ facturas, elegida, onElegir, recepciones, onGuardar }: {
         </div>
       )}
     </div>
+  );
+}
+
+/** Planilla «CONTROL INGRESO MERCADERIA»: qué hace y botón para probar la conexión (no escribe nada). */
+function PlanillaCaja() {
+  const [estado, setEstado] = useState('');
+  async function probar() {
+    setEstado('Probando…');
+    try {
+      const r = await probarPlanilla();
+      setEstado(r.sinPlanilla ? 'Todavía no está conectada: faltan PLANILLA_URL y PLANILLA_SECRETO en Vercel.' : `Conectada: la fila se agrega en la hoja «${r.hoja}».`);
+    } catch (e) { setEstado(`No anduvo: ${mensaje(e)}`); }
+  }
+  return (
+    <details style={{ fontSize: '0.8rem', margin: '0 0 10px' }}>
+      <summary style={{ cursor: 'pointer' }}>📊 Planilla de ingreso (CONTROL INGRESO MERCADERIA)</summary>
+      <p style={{ opacity: 0.75, margin: '4px 0' }}>Al terminar una carga de iD o Distrinando, la app agrega sola la fila de la factura al final de la planilla (fecha, proveedor, N° de factura, remito, monto, observaciones y carga de stock), con el color del proveedor. Si la factura ya está anotada, no la repite.</p>
+      <button style={botonChico} onClick={probar} disabled={estado === 'Probando…'}>Probar la conexión</button>
+      {estado && <span style={{ marginLeft: 8 }}>{estado}</span>}
+    </details>
   );
 }
 

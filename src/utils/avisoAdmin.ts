@@ -90,6 +90,31 @@ export function textoAvisoAdmin(o: DatosAvisoAdmin): { asunto: string; cuerpo: s
   return { asunto, cuerpo, filas };
 }
 
+/** Fila para la planilla «CONTROL INGRESO MERCADERIA» (la agrega el Apps Script de la planilla). */
+export interface FilaPlanilla {
+  fecha: string; proveedor: string; numero: string; factura: string; remito: string;
+  monto: number | null; observaciones: string; ok: boolean; carga: string;
+}
+
+/** Como las filas que ya están: «FAC.OK - 0011-…» si está todo bien, «FAC. - …» si hay algo; observaciones «APP - …». */
+export function filaPlanilla(o: DatosAvisoAdmin): FilaPlanilla {
+  const f = o.r.factura;
+  const obs = observacionesPlanilla(o.r);
+  const ok = obs === 'ok';
+  const remito = o.r.remito?.numero || f.remito || '';
+  return {
+    fecha: fechaCorta(f.fecha),
+    proveedor: proveedorPlanilla(o.prov, o.resultados.map((x) => x.detalle?.titulo ?? '')),
+    numero: f.numero,
+    factura: `${ok ? 'FAC.OK' : 'FAC.'} - ${f.numero}`,
+    remito,
+    monto: f.total ? f.total : null,
+    observaciones: `APP - ${obs}`.slice(0, 290),
+    ok,
+    carga: fechaCorta(o.hoy),
+  };
+}
+
 /** Comentario para la tarjeta de Trello (sin saludo; Trello admite textos largos). */
 export function comentarioTrello(o: DatosAvisoAdmin): string {
   const c = lineasCarga(o.resultados, o.sucursal);
