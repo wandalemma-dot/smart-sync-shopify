@@ -84,6 +84,19 @@ describe('control de facturas contra pedidos', () => {
     expect(mensajePagos(r.facturas[0])).toMatch(/✅ OK: pedido/);
   });
 
+  it('mensaje a administración: informa las diferencias, sin pedir reclamos, y primero lo que no se pidió', () => {
+    // Más caro que en el pedido + un código que no está en ninguna nota.
+    const r = analizarFacturas([pA], [factura('1', '2026-10-05', [ren('X1', 5, 110000), ren('ZZ9', 1)])]);
+    const m = mensajePagos(r.facturas[0]);
+    expect(r.facturas[0].semaforo).toBe('reclamar');
+    expect(m).toMatch(/⚠️ NO COINCIDE CON LA NOTA DE PEDIDO/);
+    expect(m).not.toMatch(/RECLAMAR|nota de crédito|revisar|¿/i);
+    expect(m).toMatch(/Vino algo que no se pidió:\n- FACTURADO SIN PEDIR: ZZ9 \(1\)/);
+    expect(m).toMatch(/- ZZ9 no figura en ninguna nota de pedido\./);
+    expect(m).toMatch(/Otras diferencias encontradas:\n- PRECIO: 1 artículo\(s\) más caros que en el pedido: \$ 30\.000,00 neto/);
+    expect(m.indexOf('no se pidió')).toBeLessThan(m.indexOf('PRECIO'));
+  });
+
   it('pedido Excel: packs pasan a pares con precio por par', () => {
     const filas = [
       ['SKU', 'Modelo color', 'Descripción del artículo', 'UDM', 'Mayorista', 'Descuento', 'Mayorista con descuento', 'Pedido'],

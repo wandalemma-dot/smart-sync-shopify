@@ -5,7 +5,7 @@
 // escrito y la persona lo manda. El destinatario se guarda en la base (cf:config), nunca en el código.
 import { pesos } from './avisoPrecio';
 import type { ResultadoCarga } from './cargaFamily';
-import type { ResultadoFactura } from './controlFacturas';
+import { motivoInformativo, type ResultadoFactura } from './controlFacturas';
 
 /** 2026-11-10 → 10/11/26, como la planilla. */
 export const fechaCorta = (iso: string) => {
@@ -22,12 +22,12 @@ export function proveedorPlanilla(prov: 'id' | 'distrinando', titulos: string[])
   return 'ID CONVERSE';
 }
 
-/** Observaciones: «ok», «Facturado más caro ($ …)», o lo que hay que reclamar. */
+/** Observaciones: «ok», «Facturado más caro ($ …)», o la diferencia encontrada (solo informa). */
 export function observacionesPlanilla(r: ResultadoFactura): string {
   const partes: string[] = [];
   if (r.totalDifPrecio > 0) partes.push(`Facturado más caro (${pesos(r.totalDifPrecio)} de más)`);
   if (r.totalSinPedirNeto > 0) partes.push(`Facturado sin pedir (${pesos(r.totalSinPedirNeto)} neto)`);
-  if (!partes.length && r.semaforo === 'reclamar') partes.push(...r.motivos.slice(0, 2));
+  if (!partes.length && r.semaforo === 'reclamar') partes.push(...r.motivos.slice(0, 2).map(motivoInformativo));
   return partes.length ? partes.join(' · ') : 'ok';
 }
 
