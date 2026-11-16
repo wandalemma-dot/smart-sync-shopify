@@ -60,7 +60,8 @@ describe('órdenes de iD que ya pueden salir', () => {
       { orden: '#210837', puede: false, pasa: false, llega: ['Remera Patch S'], faltan: ['Remera Le Coq S'] },
     ]} />);
     expect(h).toMatch(/Ya pueden salir \(1\)/);
-    expect(h).toMatch(/#210952<\/strong> \(se prepara desde Martínez\)/);
+    expect(h).toMatch(/#210952<\/strong>: Remera Retro M \(pasa a Martínez\)/);
+    expect(h).not.toMatch(/se prepara desde Martínez/);
     expect(h).toMatch(/Todavía no pueden salir \(1\)/);
     expect(h).toMatch(/falta de iD: Remera Le Coq S/);
     expect(renderToStaticMarkup(<OrdenesQueSalen ordenes={[]} />)).toBe('');

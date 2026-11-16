@@ -102,7 +102,8 @@ export function OrdenesQueSalen({ ordenes, titulo }: { ordenes: OrdenQueSale[]; 
   const salen = ordenes.filter((o) => o.puede), esperan = ordenes.filter((o) => !o.puede);
   const fila = (o: OrdenQueSale) => (
     <li key={o.orden} style={{ marginTop: 2 }}>
-      <strong>{o.orden}</strong>{o.pasa ? ' (se prepara desde Martínez)' : ''}: {o.llega.join(', ')}
+      {/* Sin «(se prepara desde Martínez)» (16-nov-2026, gax: «junta mucho texto»): cada artículo ya dice «pasa a Martínez». */}
+      <strong>{o.orden}</strong>: {o.llega.join(', ')}
       {o.faltan.length ? <span style={{ color: AMARILLO }}> — falta de iD: {o.faltan.join(', ')}</span> : null}
     </li>
   );
