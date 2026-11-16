@@ -9,7 +9,8 @@
 // Qué hace: busca la hoja cuya fila 1 tiene FECHA, PROVEEDOR y N° FACTURA; encuentra las columnas por
 // su encabezado (no por letra); agrega la fila debajo de la última con FECHA; copia el formato de la
 // última fila del mismo proveedor (su color); pinta OBSERVACIONES en naranja si hubo algo para revisar.
-// Si el N° de factura ya está en la planilla, no la repite. No borra ni cambia otras filas.
+// Si el N° de factura ya está en la planilla, no la repite. Family no factura: la fila va sin N° de
+// factura y no se repite si su N° de remito ya está. No borra ni cambia otras filas.
 
 function crearClave() {
   var p = PropertiesService.getScriptProperties();
@@ -101,11 +102,12 @@ function anotar(f) {
   var ultima = 1;
   for (var i = fechas.length - 1; i >= 1; i--) if (String(fechas[i][0]).trim()) { ultima = i + 1; break; }
 
-  // Misma factura ya anotada: no repetir.
+  // Misma factura ya anotada: no repetir. Sin factura (Family), se busca el N° de remito.
   if (ultima > 1) {
-    var facturas = h.getRange(2, c.factura, ultima - 1, 1).getDisplayValues();
-    for (var j = 0; j < facturas.length; j++) {
-      if (String(facturas[j][0]).indexOf(f.numero) >= 0) return { ok: true, yaEstaba: true, fila: j + 2 };
+    var columna = f.factura ? c.factura : c.remito;
+    var vistos = h.getRange(2, columna, ultima - 1, 1).getDisplayValues();
+    for (var j = 0; j < vistos.length; j++) {
+      if (String(vistos[j][0]).indexOf(f.numero) >= 0) return { ok: true, yaEstaba: true, fila: j + 2 };
     }
   }
 

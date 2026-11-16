@@ -1,5 +1,5 @@
 // PLANILLA «CONTROL INGRESO MERCADERIA» (16-nov-2026, gax: «la app agregue la fila sola»).
-// Al terminar una carga de iD o Distrinando, la app manda UNA fila a un Apps Script pegado en la
+// Al terminar una carga de iD, Distrinando o Family, la app manda UNA fila a un Apps Script pegado en la
 // planilla de Google (automation/planilla-ingreso.gs), que la agrega abajo. La dirección del script
 // (PLANILLA_URL) y la clave compartida (PLANILLA_SECRETO) están en Vercel, nunca en el código.
 // Solo escribe esa fila: no lee la planilla ni toca Shopify.
@@ -31,18 +31,20 @@ export function validarFila(f) {
   const carga = String(f.carga ?? '');
   if (!RE_FECHA.test(fecha) || !RE_FECHA.test(carga)) throw error('Fecha inválida.', 400);
   const numero = String(f.numero ?? '').trim();
-  if (!/^[0-9A-Za-z][0-9A-Za-z.-]{3,30}$/.test(numero)) throw error('N° de factura inválido.', 400);
+  if (!/^[0-9A-Za-z][0-9A-Za-z.-]{3,30}$/.test(numero)) throw error('N° de factura o remito inválido.', 400);
   let monto = null;
   if (f.monto !== null && f.monto !== undefined) {
     monto = Number(f.monto);
     if (!Number.isFinite(monto) || monto < 0 || monto > 1e11) throw error('Monto inválido.', 400);
     monto = Math.round(monto * 100) / 100;
   }
+  // Family no factura: la fila va sin N° de factura, con el remito (y el script no la repite por el remito).
+  const factura = texto(f.factura, 60, 'N° de factura', false);
+  const remito = texto(f.remito, 60, 'N° de remito', !factura);
+  if (!factura && !remito.includes(numero)) throw error('Sin factura, el número tiene que ser el del remito.', 400);
   return {
-    fecha, carga, numero, monto,
+    fecha, carga, numero, monto, factura, remito,
     proveedor: texto(f.proveedor, 40, 'Proveedor'),
-    factura: texto(f.factura, 60, 'N° de factura'),
-    remito: texto(f.remito, 60, 'N° de remito', false),
     observaciones: texto(f.observaciones, 300, 'Observaciones'),
     ok: f.ok === true,
   };

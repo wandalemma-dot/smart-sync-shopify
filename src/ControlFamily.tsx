@@ -28,8 +28,9 @@ import { ResultadosCarga } from './ResultadosCarga';
 import { leerTextoRemito, textoRemito } from './utils/lectoresFacturas';
 import { shopifyGraphQL } from './utils/shopify';
 import {
-  apiControl, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, slug, td, th,
+  anotarEnPlanilla, apiControl, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, slug, td, th,
 } from './utils/entregasUi';
+import { filaPlanillaFamily } from './utils/avisoAdmin';
 
 const SEMAFORO = {
   ok: { icono: '✅', texto: 'Todo coincide', color: '#34d399' },
@@ -184,6 +185,9 @@ export default function ControlFamily() {
       'Los precios de los productos que ya existen no se tocan. ¿Confirmás?'].join('\n');
     if (!confirm(texto)) return;
     const eid = plan.entregaId;
+    const entrega = resultados.find((x) => x.entrega.id === eid);
+    // La fila de la planilla de ingreso va con la primera carga de la entrega (las siguientes ya la tienen).
+    const yaAnotada = Object.values(cargasDeEntrega(cargas, eid)).some((c) => c.estado === 'cargada' || c.estado === 'parcial');
     setResultadoCarga(null);
     setOcupado('Cargando en Shopify… no cierres esta página.');
     try {
@@ -198,8 +202,26 @@ export default function ControlFamily() {
       setAvisos([]);
       setResultadoCarga(resultados);
       setArmado(null);
+      const algo = resultados.some((x) => x.estado === 'cargada' || x.estado === 'parcial' || (x.detalle?.sumados.length ?? 0) > 0);
+      if (algo && entrega && !yaAnotada) setAvisos([await anotarFamily(entrega)]);
     } catch (e) { setAvisos([`La carga se cortó: ${mensaje(e)} Revisá en Shopify qué quedó cargado antes de volver a intentar.`]); }
     finally { setOcupado(''); await recargar(); }
+  }
+
+  /**
+   * Fila en la planilla «CONTROL INGRESO MERCADERIA» (16-nov-2026, gax: «lo de Family igual se sube al Excel?»,
+   * con captura de cómo la anotaban a mano). Si el remito ya está anotado, la planilla no la repite.
+   */
+  async function anotarFamily(r: ResultadoFamily): Promise<string> {
+    const remito = r.remito?.numero?.trim() ?? '';
+    if (!remito) return 'Planilla de ingreso: el remito no tiene número, así que no agregué la fila. Escribí el número en «✏️ Ver o corregir» del remito y anotala a mano.';
+    const hoyAr = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+    try {
+      const a = await anotarEnPlanilla(filaPlanillaFamily({ fecha: r.entrega.fecha, remito, hoy: hoyAr }));
+      if (a.sinPlanilla) return 'Planilla de ingreso: todavía no está conectada (ver «Planilla de ingreso» en Notas de pedido de iD o Distrinando).';
+      if (a.yaEstaba) return `Planilla de ingreso: el remito ${remito} ya estaba anotado${a.fila ? ` (fila ${a.fila})` : ''}.`;
+      return `Planilla de ingreso: agregué el remito ${remito} de Family${a.fila ? ` en la fila ${a.fila}` : ''}.`;
+    } catch (e) { return `Planilla de ingreso: no pude agregar la fila (${mensaje(e)}). Anotala a mano.`; }
   }
 
   async function liberarCarga(entregaId: string, codigo: string, c: CargaFamily) {
