@@ -508,5 +508,14 @@ describe('mails del aviso de cambio de precio (12-nov-2026)', () => {
     await expect(aplicar(fn, { accion: 'guardarMailsAviso', para: ['a@b.com,c@d.com'], copia: [] })).rejects.toThrow(/no es una dirección/);
     await expect(aplicar(fn, { accion: 'guardarMailsAviso', para: [], copia: ['a@b.com'] })).rejects.toThrow(/Para/);
     await expect(aplicar(fn, { accion: 'guardarMailsAviso', para: Array(6).fill('a@b.com'), copia: [] })).rejects.toThrow(/Hasta/);
+  });  it('el mail de administración se guarda aparte del de cambio de precio (16-nov-2026)', async () => {
+    const { fn } = memoria();
+    await aplicar(fn, { accion: 'guardarMailsAviso', para: ['deposito@example.com'], copia: [] });
+    await aplicar(fn, { accion: 'guardarMailsAviso', tipo: 'admin', para: ['admin@example.com'], copia: [] });
+    await aplicar(fn, { proveedor: 'id', accion: 'reservarCarga', entregaId: 'E-1', codigo: 'X1', firma: 'f' });
+    const d = await leerTodo(fn, 'id');
+    expect(d.mailsAviso.para).toEqual(['deposito@example.com']);
+    expect(d.mailsAdmin.para).toEqual(['admin@example.com']);
+    expect(Object.keys(d.cargas)).toEqual(['E-1|X1']);
   });
 });

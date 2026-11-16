@@ -269,7 +269,7 @@ export async function leerTodo(kv, prov) {
   const extra = CARGAN.includes(prov) ? [['HGETALL', clave(prov, 'cargas')], ['HGETALL', clave(prov, 'nollego')], ['HGETALL', clave(prov, 'archivo')]] : [];
   const res = await kv([
     ...TIPOS.map((t) => ['HGETALL', clave(prov, t)]), ['HGET', 'cf:config', prov], ['HGETALL', clave(prov, 'trello')],
-    ['HGETALL', clave(prov, 'tarjetas')], ['HGET', 'cf:config', 'listasTrello'], ['HGET', 'cf:config', 'mailsAviso'], ...extra,
+    ['HGETALL', clave(prov, 'tarjetas')], ['HGET', 'cf:config', 'listasTrello'], ['HGET', 'cf:config', 'mailsAviso'], ['HGET', 'cf:config', 'mailsAdmin'], ...extra,
   ]);
   const [pedidos, facturas, asignaciones, recepciones, remitos, entregas] = res.slice(0, TIPOS.length).map(parsear);
   const crudo = res[TIPOS.length];
@@ -283,11 +283,12 @@ export async function leerTodo(kv, prov) {
     tarjetasTrello: parsear(res[TIPOS.length + 2]),
     listasTrello: Array.isArray(listas) ? listas.filter((x) => RE_TRELLO.test(String(x))) : [],
     mailsAviso: leerMails(json(res[TIPOS.length + 4])),
+    mailsAdmin: leerMails(json(res[TIPOS.length + 5])),
   };
   if (CARGAN.includes(prov)) {
-    out.cargas = parsear(res[TIPOS.length + 5]);
-    out.noLlego = parsear(res[TIPOS.length + 6]);
-    out.archivo = parsear(res[TIPOS.length + 7]);
+    out.cargas = parsear(res[TIPOS.length + 6]);
+    out.noLlego = parsear(res[TIPOS.length + 7]);
+    out.archivo = parsear(res[TIPOS.length + 8]);
   }
   return out;
 }
@@ -349,12 +350,14 @@ function leerMails(v) {
   try { return { para: limpiarMails(v?.para ?? [], 'Para'), copia: limpiarMails(v?.copia ?? [], 'Copia') }; }
   catch { return { para: [], copia: [] }; }
 }
+// tipo 'admin' (16-nov-2026, gax): el aviso de carga a administración, campo «mailsAdmin».
 async function guardarMailsAviso(kv, body) {
+  const campo = body?.tipo === 'admin' ? 'mailsAdmin' : 'mailsAviso';
   const para = limpiarMails(body?.para ?? [], 'Para');
   const copia = limpiarMails(body?.copia ?? [], 'Copia').filter((m) => !para.includes(m));
   if (!para.length && copia.length) throw new Error('Falta a quién va el mail («Para»).');
-  await kv([para.length ? ['HSET', 'cf:config', 'mailsAviso', JSON.stringify({ para, copia })] : ['HDEL', 'cf:config', 'mailsAviso']]);
-  return { ok: true, mailsAviso: { para, copia } };
+  await kv([para.length ? ['HSET', 'cf:config', campo, JSON.stringify({ para, copia })] : ['HDEL', 'cf:config', campo]]);
+  return { ok: true, [campo]: { para, copia } };
 }
 
 // ---------------------------------------------------------------------------

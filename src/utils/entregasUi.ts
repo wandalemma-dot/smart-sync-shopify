@@ -106,6 +106,13 @@ export async function moverEnTrello(tarjeta: string, lista: string): Promise<{ y
   return d;
 }
 
+/** Deja un comentario en una tarjeta del tablero de compras (lo cargado en Shopify). */
+export async function comentarEnTrello(tarjeta: string, texto: string): Promise<void> {
+  const r = await fetch('/api/trello', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accion: 'comentar', tarjeta, texto }) });
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(d.error || `Error ${r.status}`);
+}
+
 /** Lee fotos con IA (api/leer-remito.js): el remito, o la planilla de entrega de Family. */
 export async function leerFotos<T>(files: File[], tipo: 'remito' | 'entrega' = 'remito'): Promise<T> {
   const fotos = await prepararFotos(files);

@@ -28,6 +28,7 @@ import { Archivo, Copiar, Parte } from './EntregasPartes';
 import { OrdenesQueSalen, PanelCarga } from './PanelCarga';
 import { accionesElegidas, ejecutarCargaFamily, resumenCarga, textoCarga, type CargaFamily, type EleccionesCarga, type ModoVenta, type PlanCarga, type ResultadoCarga } from './utils/cargaFamily';
 import { ResultadosCarga } from './ResultadosCarga';
+import { comentarioTrello, textoAvisoAdmin } from './utils/avisoAdmin';
 import { cambiosDePrecio, enlacesMail, textoAvisoPrecio, type CambioPrecio, type MailsAviso } from './utils/avisoPrecio';
 import { diferenciasDeTalles, netosDeCarga, textoAvisoTalles } from './utils/avisoTalles';
 import { planCargaDistrinando } from './utils/cargaDistrinando';
@@ -35,7 +36,7 @@ import { entregaArchivada, estadoCargaFactura, leerEstadoCargaId, ordenesQueSale
 import { actualizarPreciosManualmente, shopifyGraphQL } from './utils/shopify';
 import {
   adjuntarATrello, apiControl, archivosParaTrello, boton, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, slug, td, th,
-  moverEnTrello,
+  comentarEnTrello, moverEnTrello,
 } from './utils/entregasUi';
 
 type Prov = 'distrinando' | 'id' | 'family';
@@ -56,6 +57,7 @@ interface Datos {
   listasTrello: string[];
   /** A quién va el aviso de cambio de precio (se guarda en la base, no en el código). */
   mailsAviso?: MailsAviso;
+  mailsAdmin?: MailsAviso;
   /** iD: qué artículos de cada entrega ya se cargaron en Shopify («{facturaId}|{código}»). */
   cargas?: Record<string, CargaFamily>;
   /** Artículos sacados de la carga porque no llegaron («{facturaId}|{código}»): cuentan como terminados. */
@@ -189,6 +191,7 @@ export default function ControlFacturas() {
   const [avisos, setAvisos] = useState<string[]>([]);
   /** Precios de venta que cambió la última carga: se ofrece mandar el aviso por mail. */
   const [avisoPrecio, setAvisoPrecio] = useState<{ cambios: CambioPrecio[]; asunto: string; cuerpo: string } | null>(null);
+  const [avisoAdmin, setAvisoAdmin] = useState<{ asunto: string; cuerpo: string } | null>(null);
   /** Talles distintos al remito en la última carga (13-nov-2026, gax): el mail para avisar. */
   const [avisoTalles, setAvisoTalles] = useState<{ asunto: string; cuerpo: string } | null>(null);
   /** Órdenes de iD que se llevaron algo de la última carga: cuáles ya pueden salir (12-nov-2026, gax). */
@@ -912,7 +915,7 @@ export default function ControlFacturas() {
     const p = prov, eid = plan.entregaId, factura = r.factura.numero;
     const elegidas = accionesElegidas(plan, elecciones);
     const salen = ordenesQueSalen(plan, elecciones);
-    setAvisoPrecio(null); setAvisoTalles(null); setOrdenesCarga([]); setResultadoCarga(null); setAvisos([]);
+    setAvisoPrecio(null); setAvisoTalles(null); setAvisoAdmin(null); setOrdenesCarga([]); setResultadoCarga(null); setAvisos([]);
     setOcupado('Cargando en Shopify… no cierres esta página.');
     try {
       const resultados = await ejecutarCargaFamily(plan, elecciones, {
@@ -932,12 +935,36 @@ export default function ControlFacturas() {
         const proveedor = PROVS.find((x) => x.id === p)?.nombre ?? p;
         if (cambios.length) setAvisoPrecio({ cambios, ...textoAvisoPrecio(cambios, { proveedor, factura, remito: r.remito?.numero, fecha }) });
         armarMailTalles(r, plan, resultados, p);
+        await avisarCarga(p, r, resultados);
       }
       setPlanCarga(null);
     } catch (e) { if (sigue(p)) setAvisos([`La carga se cortó: ${mensaje(e)} Revisá en Shopify qué quedó cargado antes de volver a intentar.`]); }
     finally { setOcupado(''); if (sigue(p)) await recargar(); }
     // Con la carga terminada, la entrega se cierra sola y la tarjeta de Trello pasa a su lista.
     if (sigue(p)) await avanzarYAvisar(p, eid);
+  }
+
+  /**
+   * Después de una carga (16-nov-2026, gax: «que la app cargue la carga en Trello y avise a administración»):
+   * comenta lo cargado en la tarjeta de cada nota de la entrega (automático) y arma el mail a administración
+   * con los datos de la planilla de ingreso (lo envía la persona).
+   */
+  async function avisarCarga(p: Prov, r: ResultadoFactura, resultados: ResultadoCarga[]) {
+    if (p === 'family') return;
+    const algo = resultados.some((x) => (x.detalle?.sumados.length ?? 0) > 0 || (x.detalle?.pasadas.length ?? 0) > 0);
+    if (!algo) return;
+    const datosAviso = { prov: p, r, resultados, sucursal: SUCURSAL_CARGA_ID, hoy: hoyAr() };
+    setAvisoAdmin(textoAvisoAdmin(datosAviso));
+    const tarjetas = [...new Set(r.pedidosCubiertos.map((id) => tarjetaDeNota(datos.pedidos.find((x) => x.id === id))).filter(Boolean))];
+    if (!tarjetas.length) return;
+    const texto = comentarioTrello(datosAviso);
+    const hechos: string[] = [];
+    for (const t of tarjetas) {
+      const nombre = datos.pedidos.find((x) => tarjetaDeNota(x) === t)?.nombre ?? 'la tarjeta';
+      try { await comentarEnTrello(t, texto); hechos.push(`Trello: dejé en «${nombre}» el comentario con lo cargado.`); }
+      catch (e) { hechos.push(`Trello: no pude comentar en «${nombre}» lo cargado (${mensaje(e)}).`); }
+    }
+    if (sigue(p)) setAvisos((a) => [...a, ...hechos]);
   }
 
   async function liberarCarga(entregaId: string, codigo: string, c: CargaFamily) {
@@ -1057,7 +1084,7 @@ export default function ControlFacturas() {
           onMailSolo: () => planCarga && armarMailTalles(r, planCarga, [], prov), explicacion: EXPLICA_DISTRINANDO,
         }),
       } : undefined} />;
-  const cambiarProv = (p: Prov) => { setResultadoCarga(null); setPlanCarga(null); setAvisoPrecio(null); setAvisoTalles(null); setOrdenesCarga([]); setVerRegistro(false); provRef.current = p; setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
+  const cambiarProv = (p: Prov) => { setResultadoCarga(null); setAvisoAdmin(null); setPlanCarga(null); setAvisoPrecio(null); setAvisoTalles(null); setOrdenesCarga([]); setVerRegistro(false); provRef.current = p; setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
 
   const cabecera = (<>
     <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
@@ -1105,6 +1132,9 @@ export default function ControlFacturas() {
       </div>}
       {avisoPrecio && <AvisoPrecio aviso={avisoPrecio} mails={datos.mailsAviso ?? { para: [], copia: [] }} ocupado={!!ocupado}
         onGuardarMails={async (m) => { await api({ accion: 'guardarMailsAviso', ...m }); await recargar(); }} onCerrar={() => setAvisoPrecio(null)} />}
+      {avisoAdmin && <AvisoPrecio aviso={avisoAdmin} mails={datos.mailsAdmin ?? { para: [], copia: [] }} ocupado={!!ocupado}
+        titulo="✉️ Avisá a administración la carga" boton="✉️ Avisar a administración (Gmail)" placeholder="mail de administración"
+        onGuardarMails={async (m) => { await api({ accion: 'guardarMailsAviso', tipo: 'admin', ...m }); await recargar(); }} onCerrar={() => setAvisoAdmin(null)} />}
       {avisoTalles && <AvisoTalles aviso={avisoTalles} onCerrar={() => setAvisoTalles(null)} />}
 
       {vista !== 'entregas' && <button style={{ ...enlace, marginBottom: 10 }} onClick={() => setVista('entregas')}>← Volver a las entregas</button>}
@@ -1708,10 +1738,13 @@ function TarjetasTrello({ ids, pedidos, children }: { ids: string[]; pedidos: Pe
  * Aviso de cambio de precio (12-nov-2026, gax): después de una carga que cambió precios de venta,
  * un botón abre el mail ya escrito (Gmail o el programa de correo). La app no lo envía sola.
  */
-function AvisoPrecio({ aviso, mails, ocupado, onGuardarMails, onCerrar }: {
-  aviso: { cambios: CambioPrecio[]; asunto: string; cuerpo: string }; mails: MailsAviso; ocupado: boolean;
+function AvisoPrecio({ aviso, mails, ocupado, onGuardarMails, onCerrar, titulo, boton: textoBoton, placeholder }: {
+  aviso: { cambios?: CambioPrecio[]; asunto: string; cuerpo: string }; mails: MailsAviso; ocupado: boolean;
   onGuardarMails: (m: MailsAviso) => Promise<void>; onCerrar: () => void;
+  /** Para reusarlo con otro aviso (administración). */
+  titulo?: string; boton?: string; placeholder?: string;
 }) {
+  const n = aviso.cambios?.length ?? 0;
   const [editar, setEditar] = useState(!mails.para.length);
   const [para, setPara] = useState(mails.para.join(', '));
   const [copia, setCopia] = useState(mails.copia.join(', '));
@@ -1731,13 +1764,13 @@ function AvisoPrecio({ aviso, mails, ocupado, onGuardarMails, onCerrar }: {
   return (
     <div style={{ border: '1px solid rgba(251,191,36,0.6)', borderRadius: 10, padding: '12px 14px', margin: '6px 0 14px', background: 'rgba(251,191,36,0.07)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, alignItems: 'baseline' }}>
-        <strong>✉️ Cambió el precio de {aviso.cambios.length} producto{aviso.cambios.length === 1 ? '' : 's'}: avisá por mail</strong>
+        <strong>{titulo ?? `✉️ Cambió el precio de ${n} producto${n === 1 ? '' : 's'}: avisá por mail`}</strong>
         <button style={enlace} onClick={onCerrar}>Cerrar</button>
       </div>
       <pre style={{ whiteSpace: 'pre-wrap', fontFamily: 'inherit', fontSize: '0.82rem', margin: '8px 0', padding: '8px 10px', background: 'rgba(0,0,0,0.2)', borderRadius: 6 }}>{aviso.cuerpo}</pre>
       {listo ? (
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center' }}>
-          <a href={gmail} target="_blank" rel="noreferrer" style={{ ...botonPrincipal, textDecoration: 'none' }}>✉️ Avisar cambio de precio (Gmail)</a>
+          <a href={gmail} target="_blank" rel="noreferrer" style={{ ...botonPrincipal, textDecoration: 'none' }}>{textoBoton ?? '✉️ Avisar cambio de precio (Gmail)'}</a>
           <a href={mailto} style={{ ...boton, textDecoration: 'none' }}>Abrir en mi programa de mail</a>
           <button style={boton} onClick={copiar}>📋 Copiar texto</button>
           <span style={{ fontSize: '0.8rem', opacity: 0.75 }}>
@@ -1747,7 +1780,7 @@ function AvisoPrecio({ aviso, mails, ocupado, onGuardarMails, onCerrar }: {
       ) : (
         <div style={{ display: 'grid', gap: 6, fontSize: '0.84rem' }}>
           <span>¿A quién va el aviso? Se guarda una sola vez para las próximas cargas.</span>
-          <label>Para: <input style={{ ...inputSt, width: 'min(420px, 100%)' }} value={para} onChange={(e) => setPara(e.target.value)} placeholder="mail del depósito" /></label>
+          <label>Para: <input style={{ ...inputSt, width: 'min(420px, 100%)' }} value={para} onChange={(e) => setPara(e.target.value)} placeholder={placeholder ?? 'mail del depósito'} /></label>
           <label>Copia: <input style={{ ...inputSt, width: 'min(420px, 100%)' }} value={copia} onChange={(e) => setCopia(e.target.value)} placeholder="mails separados por coma" /></label>
           <div style={{ display: 'flex', gap: 8 }}>
             <button style={{ ...botonPrincipal, opacity: ocupado ? 0.5 : 1 }} disabled={ocupado} onClick={guardarMails}>💾 Guardar mails</button>
