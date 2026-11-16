@@ -28,9 +28,11 @@ import { ResultadosCarga } from './ResultadosCarga';
 import { leerTextoRemito, textoRemito } from './utils/lectoresFacturas';
 import { shopifyGraphQL } from './utils/shopify';
 import {
-  anotarEnPlanilla, apiControl, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, slug, td, th,
+  adjuntarATrello, anotarEnPlanilla, apiControl, archivosFamily, botonChico, crearEnTrello, listasDeTrello, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, slug, td, th,
 } from './utils/entregasUi';
 import { filaPlanillaFamily } from './utils/avisoAdmin';
+import { listaFinalizado } from './utils/listasTrello';
+import { descripcionTarjetaFamily, nombreTarjetaFamily } from './utils/trelloFamily';
 
 const SEMAFORO = {
   ok: { icono: '✅', texto: 'Todo coincide', color: '#34d399' },
@@ -74,6 +76,12 @@ export default function ControlFamily() {
   const [aMano, setAMano] = useState<string | null>(null);
   const [cargas, setCargas] = useState<Record<string, CargaFamily>>({});
   const [armado, setArmado] = useState<PlanCarga | null>(null);
+  // Archivos subidos en esta pantalla, por entrega, para adjuntarlos a la tarjeta de Trello (no se guardan en la base).
+  const [archivos, setArchivos] = useState<Record<string, { planilla: File[]; remito: File[] }>>({});
+  const [enTrello, setEnTrello] = useState<Record<string, string>>({});
+  const guardarArchivos = (id: string, planilla: File[], remito: File[]) => setArchivos((a) => ({
+    ...a, [id]: { planilla: planilla.length ? planilla : a[id]?.planilla ?? [], remito: remito.length ? remito : a[id]?.remito ?? [] },
+  }));
 
   const recargar = useCallback(async () => {
     setCargando(true); setError('');
@@ -123,13 +131,14 @@ export default function ControlFamily() {
   }
 
   /** Guarda una planilla nueva (o actualiza la misma si ya estaba) y le suma el remito. */
-  async function guardarNueva(leida: Leida, fotos: File[]) {
+  async function guardarNueva(leida: Leida, fotos: File[], planillaFiles: File[] = []) {
     const nuevos: string[] = [];
     const repetida = entregas.find((x) => x.fecha === leida.fecha && firma(x.renglones) === firma(leida.renglones));
     const id = repetida?.id || `E-${leida.fecha}-${slug(leida.nombre).slice(0, 30)}-${Date.now().toString(36)}`;
     let entrega: EntregaFamily = { id, nombre: leida.nombre, fecha: leida.fecha, origen: leida.origen, renglones: leida.renglones, dudas: leida.dudas ?? [] };
     entrega = await conShopify(entrega);
     await api({ accion: 'guardarEntrega', entrega });
+    guardarArchivos(id, planillaFiles, fotos);
     const u = leida.renglones.reduce((s, r) => s + r.cantidad, 0);
     nuevos.push(`Planilla del ${fechaAr(leida.fecha)} ${repetida ? 'actualizada (ya estaba cargada)' : 'guardada'}: ${leida.renglones.length} artículos, ${u} unidades.`, ...leida.avisos);
     if (entrega.shopify?.error) nuevos.push(`No pude consultar Shopify: ${entrega.shopify.error}`);
@@ -146,7 +155,7 @@ export default function ControlFamily() {
     try { leida = await leerPlanilla(planilla); }
     catch (e) { setAvisos([`No pude leer la planilla de entrega: ${mensaje(e)}${planilla.some(esExcel) ? '' : ' Podés escribirla a mano.'}`]); setOcupado(''); return; }
     setOcupado('');
-    try { await guardarNueva(leida, fotosRemito); } catch (e) { setAvisos([mensaje(e)]); return; }
+    try { await guardarNueva(leida, fotosRemito, planilla); } catch (e) { setAvisos([mensaje(e)]); return; }
     setPlanilla([]); setFotosRemito([]);
   }
 
@@ -203,7 +212,7 @@ export default function ControlFamily() {
       setResultadoCarga(resultados);
       setArmado(null);
       const algo = resultados.some((x) => x.estado === 'cargada' || x.estado === 'parcial' || (x.detalle?.sumados.length ?? 0) > 0);
-      if (algo && entrega && !yaAnotada) setAvisos([await anotarFamily(entrega)]);
+      if (algo && entrega && !yaAnotada) setAvisos([await anotarFamily(entrega), ...await tarjetaFamily(entrega)]);
     } catch (e) { setAvisos([`La carga se cortó: ${mensaje(e)} Revisá en Shopify qué quedó cargado antes de volver a intentar.`]); }
     finally { setOcupado(''); await recargar(); }
   }
@@ -222,6 +231,47 @@ export default function ControlFamily() {
       if (a.yaEstaba) return `Planilla de ingreso: el remito ${remito} ya estaba anotado${a.fila ? ` (fila ${a.fila})` : ''}.`;
       return `Planilla de ingreso: agregué el remito ${remito} de Family${a.fila ? ` en la fila ${a.fila}` : ''}.`;
     } catch (e) { return `Planilla de ingreso: no pude agregar la fila (${mensaje(e)}). Anotala a mano.`; }
+  }
+
+  /**
+   * Tarjeta de Trello de la entrega (16-nov-2026, gax: «que cree la tarjeta de Trello y la mande a finalizada
+   * con remito y planilla»). Se crea en «FINALIZADO» (si ya hay una abierta con el mismo nombre, se usa esa) y se
+   * le adjuntan la planilla y el remito subidos en esta pantalla, o los que se eligen con «📎».
+   */
+  async function tarjetaFamily(r: ResultadoFamily, elegidos?: { planilla: File[]; remito: File[] }): Promise<string[]> {
+    const hechos: string[] = [];
+    const nombre = nombreTarjetaFamily(r);
+    let tarjeta: { id: string; enlace: string; yaEstaba: boolean };
+    try {
+      const final = listaFinalizado(await listasDeTrello());
+      if (!final) return ['Trello: no encontré una sola lista «FINALIZADO» en el tablero. Creá la tarjeta a mano.'];
+      const hoyAr = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
+      tarjeta = await crearEnTrello(final.id, nombre, descripcionTarjetaFamily(r, SUCURSAL_FAMILY, hoyAr));
+      hechos.push(tarjeta.yaEstaba ? `Trello: la tarjeta «${nombre}» ya estaba.` : `Trello: creé la tarjeta «${nombre}» en «${final.nombre}».`);
+      if (tarjeta.enlace) setEnTrello((t) => ({ ...t, [r.entrega.id]: tarjeta.enlace }));
+    } catch (e) { return [`Trello: no pude crear la tarjeta (${mensaje(e)}). Creala a mano en «FINALIZADO».`]; }
+    const files = elegidos ?? archivos[r.entrega.id] ?? { planilla: [], remito: [] };
+    if (!files.planilla.length && !files.remito.length) {
+      hechos.push('Trello: no tengo en esta pantalla la planilla ni la foto del remito (se suben de nuevo si se recargó la página). Adjuntalos con «📎» en la parte Trello de la entrega.');
+      return hechos;
+    }
+    try {
+      for (const a of await archivosFamily(files.planilla, files.remito, r.remito?.numero?.trim() ?? '', r.entrega.fecha)) {
+        try { const x = await adjuntarATrello(tarjeta.id, a); hechos.push(`Trello: ${x.yaEstaba ? `«${x.nombre}» ya estaba en la tarjeta` : `adjunté «${x.nombre}»`}.`); }
+        catch (e) { hechos.push(`Trello: no pude adjuntar «${a.nombre}» (${mensaje(e)}).`); }
+      }
+    } catch (e) { hechos.push(`Trello: ${mensaje(e)}`); }
+    if (!files.planilla.length) hechos.push('Trello: la planilla no está en esta pantalla; adjuntala con «📎 Planilla».');
+    if (!files.remito.length) hechos.push('Trello: la foto del remito no está en esta pantalla; adjuntala con «📎 Remito».');
+    return hechos;
+  }
+
+  async function adjuntarElegidos(r: ResultadoFamily, que: 'planilla' | 'remito', files: File[]) {
+    if (!confirm(`Se ${files.length === 1 ? 'adjunta 1 archivo' : `adjuntan ${files.length} archivos`} como ${que} a la tarjeta «${nombreTarjetaFamily(r)}» de Trello (si no existe, se crea en «FINALIZADO»). ¿Confirmás?`)) return;
+    guardarArchivos(r.entrega.id, que === 'planilla' ? files : [], que === 'remito' ? files : []);
+    setOcupado('Subiendo a Trello…');
+    try { setAvisos(await tarjetaFamily(r, { planilla: que === 'planilla' ? files : [], remito: que === 'remito' ? files : [] })); }
+    finally { setOcupado(''); }
   }
 
   async function liberarCarga(entregaId: string, codigo: string, c: CargaFamily) {
@@ -287,7 +337,8 @@ export default function ControlFamily() {
         onArmar={() => armarCarga(r)} onConfirmar={(el) => armado && confirmarCarga(armado, el)} onCancelarCarga={() => setArmado(null)}
         onLiberar={(codigo, c) => liberarCarga(r.entrega.id, codigo, c)}
         onAbrir={() => setAbierta(abierta === r.entrega.id ? null : r.entrega.id)}
-        onFotos={async (f) => { const m = await remitoDeFotos(r.entrega.id, f); await recargar(); setAvisos([m]); }}
+        onFotos={async (f) => { guardarArchivos(r.entrega.id, [], f); const m = await remitoDeFotos(r.entrega.id, f); await recargar(); setAvisos([m]); }}
+        enTrello={enTrello[r.entrega.id] ?? ''} onTrello={(que, f) => adjuntarElegidos(r, que, f)}
         onGuardarRemito={(remito) => guardar({ accion: 'guardarRemito', facturaId: r.entrega.id, remito })}
         onBorrarRemito={() => confirm('¿Borrar el remito de esta entrega?') && guardar({ accion: 'borrarRemito', facturaId: r.entrega.id })}
         onGuardarEntrega={async (e) => { try { return await guardar({ accion: 'guardarEntrega', entrega: await conShopify(e) }); } catch (err) { setError(mensaje(err)); return false; } }}
@@ -344,10 +395,11 @@ function estadoFila(f: FilaFamily): [string, string] {
   return ['✅', '#34d399'];
 }
 
-function TarjetaFamily({ r, abierta, ocupado, cargas, plan, onArmar, onConfirmar, onCancelarCarga, onLiberar, onAbrir, onFotos, onGuardarRemito, onBorrarRemito, onGuardarEntrega, onFecha, onConsultar, onBorrar }: {
+function TarjetaFamily({ r, abierta, ocupado, cargas, plan, onArmar, onConfirmar, onCancelarCarga, onLiberar, onAbrir, onFotos, enTrello, onTrello, onGuardarRemito, onBorrarRemito, onGuardarEntrega, onFecha, onConsultar, onBorrar }: {
   r: ResultadoFamily; abierta: boolean; ocupado: boolean; cargas: Record<string, CargaFamily>; plan: PlanCarga | null;
   onArmar: () => void; onConfirmar: (e: EleccionesCarga) => void; onCancelarCarga: () => void; onLiberar: (codigo: string, c: CargaFamily) => void;
   onAbrir: () => void; onFotos: (f: File[]) => void;
+  enTrello: string; onTrello: (que: 'planilla' | 'remito', f: File[]) => void;
   onGuardarRemito: (r: Remito) => Promise<boolean>; onBorrarRemito: () => void; onGuardarEntrega: (e: EntregaFamily) => Promise<boolean>;
   onFecha: (f: string) => void; onConsultar: () => void; onBorrar: () => void;
 }) {
@@ -411,6 +463,11 @@ function TarjetaFamily({ r, abierta, ocupado, cargas, plan, onArmar, onConfirmar
             title={puedeCargar ? 'Crea los nuevos y suma la reposición, con vista previa y confirmación' : 'Primero la planilla tiene que coincidir con el remito'}
             onClick={onArmar}>⬆️ Cargar en Shopify</button>}
         </Parte>
+        {cargados > 0 && <Parte ok={!!enTrello} titulo="Trello" detalle={enTrello ? 'tarjeta en FINALIZADO' : 'se crea al cargar'}>
+          {enTrello && <a href={enTrello} target="_blank" rel="noreferrer" style={{ ...botonChico, textDecoration: 'none' }}>🗂️ Ver tarjeta</a>}
+          <Archivo etiqueta="📎 Planilla" accept="image/*,.pdf,.xlsx,.xls" multiple disabled={ocupado} estilo={botonChico} onArchivos={(f) => onTrello('planilla', f)} />
+          <Archivo etiqueta="📎 Remito" accept="image/*,.pdf" multiple disabled={ocupado} estilo={botonChico} onArchivos={(f) => onTrello('remito', f)} />
+        </Parte>}
       </div>
       {aRevisar.length > 0 && <div style={{ marginTop: 8, fontSize: '0.84rem', color: '#fbbf24' }}>
         {aRevisar.map(([codigo, c]) => <div key={codigo}>

@@ -219,7 +219,11 @@ export function sinFotos(datos) {
 // remitos y la factura»). Solo PDF, JPG o PNG, de hasta 3 MB, a tarjetas del tablero de compras.
 // Si la tarjeta ya tiene un adjunto con el mismo nombre, no se sube otra vez.
 // ---------------------------------------------------------------------------
-const TIPOS_ADJUNTO = { 'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png' };
+const TIPOS_ADJUNTO = {
+  'application/pdf': 'pdf', 'image/jpeg': 'jpg', 'image/png': 'png',
+  // La planilla de entrega de Family en Excel (16-nov-2026).
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': 'xlsx', 'application/vnd.ms-excel': 'xls',
+};
 
 /** Nombre prolijo para el adjunto: sin caracteres raros, con la extensión del tipo. */
 export function nombreAdjunto(nombre, tipo) {
@@ -253,7 +257,7 @@ async function post(ruta, cuerpo, fetchImpl, method = 'POST') {
 export async function adjuntarArchivo(tarjetaId, archivo, fetchImpl = fetch) {
   if (!RE_ID.test(String(tarjetaId))) throw error('Identificador inválido.', 400);
   const tipo = String(archivo?.tipo || '');
-  if (!TIPOS_ADJUNTO[tipo]) throw error('Solo se pueden adjuntar PDF, JPG o PNG.', 400);
+  if (!TIPOS_ADJUNTO[tipo]) throw error('Solo se pueden adjuntar PDF, JPG, PNG o Excel.', 400);
   const b64 = String(archivo?.datos || '');
   if (!/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) throw error('Archivo inválido.', 400);
   const datos = Buffer.from(b64, 'base64');
@@ -319,4 +323,40 @@ export async function comentarTarjeta(tarjetaId, texto, fetchImpl = fetch) {
     return form;
   }, fetchImpl);
   return { ok: true, ...(RE_ID.test(String(c?.id || '')) ? { id: c.id } : {}) };
+}
+
+// ---------------------------------------------------------------------------
+// CREAR UNA TARJETA (16-nov-2026, gax: «que cree la tarjeta de Trello y la mande a finalizada con remito
+// y planilla»). Family no tiene nota de pedido en Trello: al cargar una entrega, la app crea su tarjeta en
+// una lista del tablero de compras (FINALIZADO) y después le adjunta el remito y la planilla. Si ya hay una
+// tarjeta abierta con el mismo nombre en el tablero, devuelve esa (no crea otra ni la mueve).
+// ---------------------------------------------------------------------------
+export const MAX_DESCRIPCION = 4000;
+const enlaceDe = (t) => (/^https:\/\/trello\.com\/c\/[A-Za-z0-9]+$/.test(String(t?.shortUrl || '')) ? t.shortUrl : '');
+export async function crearTarjeta(listaId, nombre, descripcion, fetchImpl = fetch) {
+  if (!RE_ID.test(String(listaId))) throw error('Identificador inválido.', 400);
+  const n = String(nombre ?? '').replace(/\s+/g, ' ').trim();
+  if (!n || n.length > 200) throw error('Nombre de tarjeta inválido.', 400);
+  const d = String(descripcion ?? '').trim();
+  if (d.length > MAX_DESCRIPCION) throw error('La descripción es demasiado larga.', 413);
+  const b = tablero();
+  const [lista, idTab, abiertas] = await Promise.all([
+    get(`/lists/${listaId}?fields=idBoard,closed,name`, fetchImpl),
+    idTablero(fetchImpl),
+    get(`/boards/${encodeURIComponent(b)}/cards?fields=id,name,closed,shortUrl`, fetchImpl),
+  ]);
+  if (!lista || !idTab || lista.idBoard !== idTab) throw error('La lista no es del tablero de compras.', 403);
+  if (lista.closed) throw error('Esa lista de Trello está archivada.', 400);
+  const igual = (Array.isArray(abiertas) ? abiertas : []).find((t) => !t?.closed && RE_ID.test(String(t?.id || '')) && String(t.name || '').trim() === n);
+  if (igual) return { id: igual.id, enlace: enlaceDe(igual), yaEstaba: true };
+  const t = await post('/cards', () => {
+    const form = new URLSearchParams();
+    form.set('idList', listaId);
+    form.set('name', n);
+    if (d) form.set('desc', d);
+    form.set('pos', 'top');
+    return form;
+  }, fetchImpl);
+  if (!RE_ID.test(String(t?.id || ''))) throw error('Trello no devolvió la tarjeta creada.');
+  return { id: t.id, enlace: enlaceDe(t), yaEstaba: false };
 }
