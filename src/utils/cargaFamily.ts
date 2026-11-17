@@ -279,6 +279,16 @@ export interface LineaFOId { id: string; lineaId: string; abierta: boolean }
 export type ModoVenta = 'separar' | 'igual' | 'pasar';
 /** Un artículo que una orden espera de iD (preparación abierta o en curso). */
 export interface LineaOrdenId { lineaId: string; titulo: string; talle: string; cantidad: number }
+/**
+ * Lo pedido a iD que no entró y ya no va a entrar (17-nov-2026, gax): las ventas de iD que lo esperan hay que
+ * solucionarlas con atención al cliente. `talle` = talle de iD (vacío si no se sabe).
+ */
+export interface NoEntroCarga {
+  codigo: string; descripcion: string; talle: string; unidades: number; nota: string;
+  producto?: string; talleShopify?: string;
+  ordenes: { nombre: string; cantidad: number; talle?: string; motivo?: string }[];
+  aviso?: string;
+}
 /** Unidades de esta entrega que se lleva una orden de iD: separadas, pasadas a Martínez o ya retiradas («-1»). */
 export interface CubiertaOrden { orden: string; lineaId: string; cantidad: number; como: 'separar' | 'pasar' | 'retirado' }
 /** Una venta de iD que pasa a prepararse desde Martínez después de sumar el stock. */
@@ -441,6 +451,8 @@ export interface PlanCarga {
   ordenesId?: Record<string, LineaOrdenId[]>;
   /** iD: la sucursal del proveedor (para que pasar una venta a Martínez no libere stock ahí). */
   idLocationId?: string;
+  /** iD: lo pedido en las notas de esta entrega que no entró, con las ventas que lo esperan. */
+  noEntraron?: NoEntroCarga[];
 }
 
 const NO_CARGAR: OpcionCarga = { clave: 'no', etiqueta: 'No cargar este artículo', accion: null, avisos: [] };

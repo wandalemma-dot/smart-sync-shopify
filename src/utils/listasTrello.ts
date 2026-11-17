@@ -114,7 +114,8 @@ export function conEstadoTrello<T extends Pedido & { origen?: string }>(pedidos:
 // Solo se mueven hacia adelante y desde esas listas: una tarjeta que alguien puso en otra lista no se toca.
 // ============================================================================
 export interface MovimientoTarjeta { tarjeta: string; nombre: string; desde: string; hacia: ListaTrello; motivo: string }
-export type TipoConsejo = 'finalizar' | 'parcial' | 'nada';
+/** 'cerrar' = iD: entró la nota menos lo que iD no mandó (no va a entrar): también va a «FINALIZADO». */
+export type TipoConsejo = 'finalizar' | 'cerrar' | 'parcial' | 'nada';
 
 export function movimientosTarjetas(o: {
   /** Tarjetas de las notas de esta entrega. */
@@ -151,9 +152,10 @@ export function movimientosTarjetas(o: {
     if (!enPendientes && !enRecibido) continue;
     const tipos = o.consejos(id);
     if (!tipos.length || tipos.every((x) => x === 'nada')) continue;
-    if (tipos.every((x) => x === 'finalizar')) {
+    if (tipos.every((x) => x === 'finalizar' || x === 'cerrar')) {
       if (!final) { falta('«FINALIZADO»'); continue; }
-      mover.push({ tarjeta: id, nombre, desde: t.lista || '', hacia: final, motivo: 'llegó todo y se cargó' });
+      mover.push({ tarjeta: id, nombre, desde: t.lista || '', hacia: final,
+        motivo: tipos.includes('cerrar') ? 'se cargó lo que llegó; lo que falta iD no lo mandó y no va a entrar' : 'llegó todo y se cargó' });
     } else {
       if (!parciales) { falta('de pendientes de indumentaria/calzado'); continue; }
       if (t.idLista === parciales.id) continue;

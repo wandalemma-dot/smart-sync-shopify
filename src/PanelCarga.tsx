@@ -8,9 +8,10 @@
 // ============================================================================
 import { useState, type CSSProperties } from 'react';
 import { fmt } from './utils/controlFacturas';
-import { leerPrecio, precioAEscribir, resumenCarga, textoSeparar, type AjustePrecio, type EleccionesCarga, type ItemCarga, type ModoVenta, type OpcionCarga, type PackCarga, type PlanCarga, type TablaItem, type ReposicionFamily, type AltaFamily } from './utils/cargaFamily';
+import { leerPrecio, precioAEscribir, resumenCarga, textoSeparar, type AjustePrecio, type EleccionesCarga, type ItemCarga, type ModoVenta, type NoEntroCarga, type OpcionCarga, type PackCarga, type PlanCarga, type TablaItem, type ReposicionFamily, type AltaFamily } from './utils/cargaFamily';
 import { margenPct } from './utils/margen';
-import { ordenesQueSalen, type OrdenQueSale } from './utils/cargaId';
+import { ordenesQueSalen, textoNoEntraron, type OrdenQueSale } from './utils/cargaId';
+import { Copiar } from './EntregasPartes';
 import { botonChico, botonPrincipal, enlace, inputSt } from './utils/entregasUi';
 import { esTalleUS, talleUS } from './utils/talleDistrinando';
 
@@ -79,6 +80,7 @@ export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, e
           onQuitar={onQuitar && it.estado !== 'cargado' ? () => onQuitar(it.codigo, true) : undefined} ocupado={ocupado}
           onPack={onPack && ((n) => onPack(it.codigo, n))} />)}
       <OrdenesQueSalen ordenes={ordenesQueSalen(plan, efectivas)} />
+      {plan.noEntraron && plan.noEntraron.length > 0 && <NoEntraron items={plan.noEntraron} factura="" />}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
         <button style={{ ...botonPrincipal, opacity: res.lineas.length && !ocupado ? 1 : 0.5, cursor: res.lineas.length && !ocupado ? 'pointer' : 'not-allowed' }}
           disabled={!res.lineas.length || ocupado} onClick={() => onConfirmar(efectivas)}>✅ Confirmar y cargar</button>
@@ -119,6 +121,39 @@ export function OrdenesQueSalen({ ordenes, titulo }: { ordenes: OrdenQueSale[]; 
         <ul style={{ margin: '2px 0 0', paddingLeft: 20 }}>{esperan.map(fila)}</ul>
       </div>}
       <div style={{ opacity: 0.65, marginTop: 4, fontSize: '0.78rem' }}>Lo que esas órdenes tengan en Martínez lo doy por disponible.</div>
+    </div>
+  );
+}
+
+/**
+ * Productos pedidos que no entraron (17-nov-2026, gax): iD prepara cada nota completa, así que lo que falta no va a
+ * venir. Lista las ventas de iD que lo esperan para pasarlas a atención al cliente. Solo informa.
+ */
+export function NoEntraron({ items, factura }: { items: NoEntroCarga[]; factura: string }) {
+  if (!items.length) return null;
+  const unidades = items.reduce((s, x) => s + x.unidades, 0);
+  const ventas = new Set(items.flatMap((x) => x.ordenes.map((o) => o.nombre))).size;
+  return (
+    <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 6, borderLeft: `4px solid ${ROJO}`, background: 'rgba(248,113,113,0.08)', fontSize: '0.84rem', lineHeight: 1.5 }}>
+      <strong>⛔ Productos pedidos que no entraron ({unidades} u.): a revisión</strong>
+      <div style={{ opacity: 0.85 }}>
+        iD prepara cada nota completa: lo que falta no va a venir. {ventas ? `Avisá a atención al cliente para solucionar ${ventas === 1 ? 'esta venta' : `estas ${ventas} ventas`}.` : 'No hay ventas de iD esperándolos.'}
+      </div>
+      <ul style={{ margin: '4px 0 0', paddingLeft: 20 }}>
+        {items.map((x, i) => (
+          <li key={`${x.codigo}|${x.talle}|${i}`} style={{ marginTop: 2 }}>
+            <strong>{x.codigo}</strong> {x.producto || x.descripcion}
+            {x.talleShopify ? ` · talle ${x.talleShopify}` : x.talle ? ` · talle iD ${x.talle}` : ''} · {x.unidades} u. (nota {x.nota})
+            <div style={{ paddingLeft: 8 }}>
+              {x.ordenes.length
+                ? <>Ventas que lo esperan: {x.ordenes.map((o) => `${o.nombre}${o.talle ? ` (talle ${o.talle})` : ''}${o.cantidad > 1 ? ` ×${o.cantidad}` : ''}${o.motivo ? ` [${o.motivo}]` : ''}`).join(', ')}</>
+                : <span style={{ opacity: 0.7 }}>Sin ventas pendientes en iD.</span>}
+              {x.aviso && <div style={{ color: AMARILLO }}>⚠️ {x.aviso}</div>}
+            </div>
+          </li>
+        ))}
+      </ul>
+      <div style={{ marginTop: 6 }}><Copiar texto={textoNoEntraron(items, factura)} etiqueta="📋 Copiar para atención al cliente" /></div>
     </div>
   );
 }
