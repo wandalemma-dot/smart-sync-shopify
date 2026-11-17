@@ -2,7 +2,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { accionesElegidas, ejecutarCargaFamily, leerPrecio, llegaAl50, precioAEscribir, resumenCarga, type CargaFamily, type DepsCarga, type ItemCarga } from '../cargaFamily';
 import {
-  ajusteDe, costoPromedio, entregaArchivada, estadoCargaFactura, firmaCargaId, formasCodigo, leerEstadoCargaId, leerPendientesId, leerVentasId, ordenesQueSalen, packDeCarga, planCargaId, precioYCostoAntes, separarDe, talleEnShopify,
+  ajusteDe, costoPromedio, entregaArchivada, estadoCargaFactura, firmaCargaId, formasCodigo, leerEstadoCargaId, leerPendientesId, leerVentasId, ordenesQueSalen, packDeCarga, planCargaId, precioYCostoAntes, separarDe, talleEnShopify, tablaCargaId,
   type EstadoCargaId, type OrdenPendienteId, type ProductoId, type VarianteId,
 } from '../cargaId';
 import { diferenciasDeTalles, netosDeCarga, textoAvisoTalles } from '../avisoTalles';
@@ -40,11 +40,16 @@ function resultado(filas: FilaChecklist[], renglones = [renglon()]): ResultadoFa
 const estado = (p: ProductoId = remera(), codigo = 'CTO0325003'): EstadoCargaId => ({ locationId: LOC, porCodigo: { [codigo]: [p.id] }, productos: { [p.id]: p } });
 
 describe('iD: talle del proveedor → talle de Shopify (nunca adivina)', () => {
-  it('Converse: la etiqueta TABLA DE TALLE manda; sin etiqueta, el maestro; sin ninguno, no se carga', () => {
+  it('Converse: la etiqueta TABLA DE TALLE manda; sin etiqueta, la tabla elegida (el maestro solo no alcanza)', () => {
     // A11716C: etiqueta TABLA 1 pero maestro tabla 2 (caso real de CLAUDE.md, sección 4).
     expect(talleEnShopify('converse', '085', 'A11716C', ['A11716C', 'TABLA DE TALLE CONVERSE 1'], '')).toEqual({ talle: '41' });
-    expect(talleEnShopify('converse', '7.5', 'A11716C', ['A11716C'], '')).toEqual({ talle: '41' });
-    expect(talleEnShopify('converse', '8', 'ZZZ9999C', [], '')).toMatchObject({ error: expect.stringMatching(/tabla de talle/) });
+    // 17-nov-2026, gax: A10548C sin etiqueta, el maestro decía tabla 2 y era la 1. Sin etiqueta no se usa el maestro.
+    expect(talleEnShopify('converse', '7', 'A10548C', ['a10548c'], '')).toMatchObject({ error: expect.stringMatching(/no tiene la etiqueta TABLA DE TALLE/) });
+    expect(talleEnShopify('converse', '7', 'A10548C', ['a10548c'], '', 'TABLA DE TALLE CONVERSE 1')).toEqual({ talle: '39' });
+    expect(talleEnShopify('converse', '7', 'A10548C', ['a10548c'], '', 'TABLA DE TALLE CONVERSE 2')).toEqual({ talle: '40' });
+    // La etiqueta manda sobre lo elegido.
+    expect(talleEnShopify('converse', '085', 'A11716C', ['TABLA DE TALLE CONVERSE 1'], '', 'TABLA DE TALLE CONVERSE 2')).toEqual({ talle: '41' });
+    expect(talleEnShopify('converse', '8', 'ZZZ9999C', [], '')).toMatchObject({ error: expect.stringMatching(/TABLA DE TALLE/) });
     expect(talleEnShopify('converse', 'XL', 'CTO0325003', [], '')).toEqual({ talle: 'XL' });
   });
   it('Le Coq: el calzado va uno menos; la ropa con talle numérico, tal cual', () => {
@@ -803,5 +808,54 @@ describe('iD: packs (13-nov-2026, gax: «la factura dice por 6, es porque son 6 
     const it = planCargaId(r, e, {}).items[0];
     expect(it).toMatchObject({ estado: 'bloqueado', motivo: expect.stringMatching(/termina en P .*Escribí cuántas unidades trae cada pack\./), pack: { unidades: 1, error: expect.any(String) } });
     expect(planCargaId(r, e, {}, new Map(), new Map(), new Map([[N, 6]])).items[0]).toMatchObject({ estado: 'listo', unidades: 6, pack: { unidades: 6, manual: true, costo: 4331.55 } });
+  });
+});
+
+describe('iD: zapatilla Converse sin etiqueta TABLA DE TALLE (17-nov-2026, gax)', () => {
+  // Caso real: Zapatillas Converse Sport Casual Gris (A10548C), sin etiqueta de tabla; el maestro dice tabla 2.
+  const zapa = (etiquetas = ['a10548c']): ProductoId => ({
+    id: 'gid://shopify/Product/7', titulo: 'Zapatillas Converse Sport Casual Gris', vendor: 'Converse', estado: 'ACTIVE', etiquetas,
+    variantes: ['37', '38', '39', '39.5', '40', '41', '41.5', '42', '43', '44'].map((t) => variante(t, 0)),
+  });
+  const llega = (talles: FilaChecklist['talles']) => resultado([fila(talles, { codigo: 'A10548C' })], [renglon(50000, 'A10548C')]);
+  const est = (p = zapa()) => estado(p, 'A10548C');
+
+  it('queda bloqueada hasta elegir la tabla; ninguna viene elegida y la del maestro es solo sugerencia', () => {
+    const [it] = planCargaId(llega([{ talle: '070', cantidad: 1 }]), est(), {}).items;
+    expect(it.estado).toBe('bloqueado');
+    expect(it.motivo).toMatch(/no tiene la etiqueta TABLA DE TALLE/);
+    expect(it.tabla?.elegida).toBe('');
+    expect(it.tabla?.opciones.find((o) => o.clave === 'TABLA DE TALLE CONVERSE 2')?.etiqueta).toMatch(/sugerida por el maestro/);
+    expect(it.tabla?.opciones.find((o) => o.clave === 'TABLA DE TALLE CONVERSE 1')?.etiqueta).toMatch(/US 7 → 39/);
+    expect(it.tabla?.avisos[0]).toMatch(/Mirá la caja/);
+  });
+
+  it('con la tabla elegida carga en el talle de esa tabla y le agrega la etiqueta', () => {
+    const [it] = planCargaId(llega([{ talle: '070', cantidad: 1 }]), est(), {}, new Map(), new Map(), new Map(), new Map([['A10548C', 'TABLA DE TALLE CONVERSE 1']])).items;
+    expect(it.estado).toBe('listo');
+    expect(it.tabla?.elegida).toBe('TABLA DE TALLE CONVERSE 1');
+    const a = it.opciones[0].accion;
+    expect(a?.tipo).toBe('reposicion');
+    if (a?.tipo !== 'reposicion') return;
+    expect(a.lineas.map((l) => [l.talle, l.suma])).toEqual([['39', 1]]);
+    expect(a.etiquetas).toEqual(['TABLA DE TALLE CONVERSE 1']);
+  });
+
+  it('una tabla que manda un US a un talle que el producto no tiene, o que no tiene ese US, no se puede elegir', () => {
+    const t = tablaCargaId(fila([{ talle: '095', cantidad: 1 }], { codigo: 'A10548C' }), [zapa()], 'TABLA DE TALLE CONVERSE 2');
+    // Tabla 2: US 9.5 = 43 (existe). Tabla 1: US 9.5 = 42 (existe). Mujer: US 9.5 = 41 (existe). Niño: no tiene US 9.5.
+    expect(t?.opciones.find((o) => o.clave === 'TABLA DE TALLE CONVERSE NIÑO')?.bloqueo).toMatch(/no tiene el US 9.5/);
+    const t2 = tablaCargaId(fila([{ talle: '090', cantidad: 1 }], { codigo: 'A10548C' }), [zapa()], 'TABLA DE TALLE CONVERSE 2');
+    // Tabla 2: US 9 = 42.5, que el producto no tiene: no se puede elegir y no queda elegida.
+    expect(t2?.opciones.find((o) => o.clave === 'TABLA DE TALLE CONVERSE 2')?.bloqueo).toMatch(/42.5/);
+    expect(t2?.elegida).toBe('');
+  });
+
+  it('con etiqueta, ropa o Le Coq no aparece el selector', () => {
+    const [con] = planCargaId(llega([{ talle: '070', cantidad: 1 }]), est(zapa(['a10548c', 'TABLA DE TALLE CONVERSE 1'])), {}).items;
+    expect(con.tabla).toBeUndefined();
+    expect(con.estado).toBe('listo');
+    expect(con.opciones[0].accion?.tipo === 'reposicion' && con.opciones[0].accion.etiquetas).toBeFalsy();
+    expect(planCargaId(resultado([fila([{ talle: 'L', cantidad: 2 }])]), estado(), {}).items[0].tabla).toBeUndefined();
   });
 });

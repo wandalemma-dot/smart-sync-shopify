@@ -781,7 +781,7 @@ export default function ControlFacturas() {
     if (!b) return;
     setPlanCarga(b.prov === 'distrinando'
       ? { ...planCargaDistrinando(b.r, b.estado, b.cargas, b.pedidos, new Map(b.tablas), new Map(b.cantidades), new Map(b.destinos), new Map(b.skus)), quitados: [...b.quitados] }
-      : { ...planCargaId(b.r, b.estado, b.cargas, new Map(b.modos), new Map(b.cantidades), new Map(b.packs)), quitados: [...b.quitados] });
+      : { ...planCargaId(b.r, b.estado, b.cargas, new Map(b.modos), new Map(b.cantidades), new Map(b.packs), new Map(b.tablas)), quitados: [...b.quitados] });
   }
 
   /** Lo vendido en iD: separarlo (por defecto), cargarlo igual (si ya se separó antes) o cargarlo y pasar la venta a Martínez. */
@@ -812,7 +812,7 @@ export default function ControlFacturas() {
     rearmar();
   }
 
-  /** Distrinando: la tabla de talle elegida para un modelo (13-nov-2026, gax). */
+  /** La tabla de talle elegida para un modelo (Distrinando 13-nov-2026; iD, Converse sin etiqueta, 17-nov-2026). */
   function tablaCarga(codigo: string, tabla: string) {
     const b = baseCarga.current;
     if (!b) return;
@@ -1101,7 +1101,7 @@ export default function ControlFacturas() {
         onQuitar: (codigo, quitar) => quitarArticulo(r.factura.id, codigo, quitar),
         onArmar: () => armarCarga(r), onConfirmar: (e) => planCarga && confirmarCarga(r, planCarga, e),
         onCancelar: () => setPlanCarga(null), onLiberar: (codigo, c) => liberarCarga(r.factura.id, codigo, c), onCantidad: cantidadCarga,
-        ...(prov === 'id' ? { onModoVenta: modoVenta, onPack: packCarga, explicacion: EXPLICA_ID } : {
+        ...(prov === 'id' ? { onModoVenta: modoVenta, onPack: packCarga, onTabla: tablaCarga, explicacion: EXPLICA_ID } : {
           onTabla: tablaCarga, onDestino: destinoCarga, onSku: skuCarga, onQuitarTalle: quitarTalle,
           onMailSolo: () => planCarga && armarMailTalles(r, planCarga, [], prov), explicacion: EXPLICA_DISTRINANDO,
         }),
@@ -1282,7 +1282,7 @@ function estadoRenglon(x: ControlRenglon, nombrePedido: (id: string) => string):
 }
 
 
-const EXPLICA_ID = 'Lo que llegó (el remito, menos lo que salió para órdenes y lo que ya está vendido en iD, que se separa) se SUMA al stock de Martínez; el stock de iD lo lleva la sincronización. Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (si un talle que llega ya tenía stock, lleva el promedio ponderado), y si el margen no llega al 50% hay que poner un precio nuevo para toda la curva. Lo que viene en packs (X6 en la factura, en el nombre de Shopify o en la lista de packs de la plantilla de iD) se carga por unidad, con el costo dividido. Los productos que no están en Shopify se crean desde Sincronización.';
+const EXPLICA_ID = 'Lo que llegó (el remito, menos lo que salió para órdenes y lo que ya está vendido en iD, que se separa) se SUMA al stock de Martínez; el stock de iD lo lleva la sincronización. Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (si un talle que llega ya tenía stock, lleva el promedio ponderado), y si el margen no llega al 50% hay que poner un precio nuevo para toda la curva. Lo que viene en packs (X6 en la factura, en el nombre de Shopify o en la lista de packs de la plantilla de iD) se carga por unidad, con el costo dividido. Una zapatilla Converse sin la etiqueta TABLA DE TALLE no se carga hasta que elijas su tabla (mirá la caja): la elegida se agrega a las etiquetas. Los productos que no están en Shopify se crean desde Sincronización.';
 const EXPLICA_DISTRINANDO = 'Lo que llegó (el remito) se SUMA al stock de Martínez. Cada talle US entra en el talle de Shopify que da el SKU del proveedor, el AR que informa la nota o la tabla de talle que elijas; al lado de cada talle podés escribir otro si entró en otro. La tabla elegida se agrega a las etiquetas. Los talles que no existen se crean (SKU del proveedor, precio de la curva, costo de la factura) y los modelos nuevos se crean con precio Reebok (Mayorista × 1,8755, terminado en 999). Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (con stock: promedio ponderado). Por ahora solo Reebok calzado.';
 
 function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, recordados, onSubirTrello, informe, onRecargarBorrada, res, todas, consejos, carga, mailsAdmin, proveedor }: {
