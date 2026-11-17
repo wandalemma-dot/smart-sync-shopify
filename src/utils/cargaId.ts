@@ -8,7 +8,8 @@
 //   · Solo reposición: si el producto no está en Shopify, se crea desde Sincronización
 //     (ahí están las tablas de talle, los títulos y los precios de iD) y se vuelve a armar.
 //   · El talle del remito es el del proveedor: Converse en US (la tabla la da la etiqueta
-//     TABLA DE TALLE del producto, o el maestro de curvas; si no se sabe, NO se adivina) y
+//     TABLA DE TALLE del producto; sin etiqueta se ELIGE en la vista previa y se le agrega al
+//     cargar: el maestro de curvas solo se sugiere, no se usa solo, 17-nov-2026) y
 //     Le Coq calzado uno más que en Shopify (talleShopifyLeCoq). Letras van tal cual.
 //   · Precio y costo con la factura (gax): margen con el costo nuevo; 50% o más = verde;
 //     menos = hay que poner un precio nuevo para TODA la curva (básicos: se avisa, no obliga).
@@ -30,12 +31,13 @@
 // ============================================================================
 import { claveCodigo, fmt, type FilaChecklist, type RenglonFactura, type ResultadoFactura } from './controlFacturas';
 import {
-  llegaAl50, textoCarga, type AjustePrecio, type CubiertaOrden, type EleccionesCarga, type LineaFOId, type LineaOrdenId, type ModoVenta, type MoverVenta, type SepararId, type CargaFamily, type ItemCarga, type LineaReposicion, type OpcionCarga, type PackCarga, type PlanCarga, type ReposicionFamily,
+  llegaAl50, textoCarga, type TablaItem, type AjustePrecio, type CubiertaOrden, type EleccionesCarga, type LineaFOId, type LineaOrdenId, type ModoVenta, type MoverVenta, type SepararId, type CargaFamily, type ItemCarga, type LineaReposicion, type OpcionCarga, type PackCarga, type PlanCarga, type ReposicionFamily,
 } from './cargaFamily';
 import { esPrecioSugerido } from './conversePreciosFijos';
 import { margenPct } from './margen';
 import { packConocidoId, pareceCodigoPackId, unidadesPorPackId } from './packsId';
-import { converseTablaInfo, LOC_MARTINEZ_NOMBRE, precioId, redondear2, talleShopifyLeCoq } from './syncLogic';
+import { CONVERSE_CODE_TABLE } from './converseCurvas';
+import { convTable1, convTable2, convTable3, convTable4, convTable5, convTable6, LOC_MARTINEZ_NOMBRE, precioId, redondear2, tablaDesdeEtiquetaTalle, talleShopifyLeCoq } from './syncLogic';
 import { mismaSucursal } from './shopify';
 
 export const SUCURSAL_CARGA_ID = LOC_MARTINEZ_NOMBRE;
@@ -283,18 +285,78 @@ const esNumero = (s: string) => /^\d+([.,]\d+)?$/.test(s);
 const fmtNum = (n: number) => String(Math.round(n * 100) / 100);
 
 /**
- * El talle del remito o de la nota en el de Shopify. Nunca adivina: si no se sabe, devuelve el motivo.
- * Converse: «055» o «5.5» = US 5.5 → AR por la tabla del producto. Le Coq: «040» o «40» → calzado 39.
+ * Tablas de talle de Converse que se pueden elegir en la carga (17-nov-2026, gax): la clave es la etiqueta que se le
+ * agrega al producto. `nro` = el número del maestro de curvas (`converseCurvas.ts`).
  */
-export function talleEnShopify(marca: Marca, talle: string, codigo: string, etiquetas: string[], nombreProveedor: string): { talle: string } | { error: string } {
-  const t = String(talle ?? '').trim().toUpperCase().replace(',', '.');
+export const TABLAS_CONVERSE: { etiqueta: string; nro: number; tabla: Record<string, string> }[] = [
+  { etiqueta: 'TABLA DE TALLE CONVERSE 1', nro: 1, tabla: convTable1 },
+  { etiqueta: 'TABLA DE TALLE CONVERSE 2', nro: 2, tabla: convTable2 },
+  { etiqueta: 'TABLA DE TALLE CONVERSE MUJER', nro: 3, tabla: convTable3 },
+  { etiqueta: 'TABLA DE TALLE CONVERSE MUJER 2', nro: 6, tabla: convTable6 },
+  { etiqueta: 'TABLA DE TALLE CONVERSE NIÑO', nro: 4, tabla: convTable4 },
+  { etiqueta: 'TABLA DE TALLE CONVERSE BEBE', nro: 5, tabla: convTable5 },
+];
+const tablaConverse = (etiqueta: string | undefined) => TABLAS_CONVERSE.find((t) => t.etiqueta === etiqueta);
+/** «055» o «5.5» = US 5.5 (Converse); Le Coq tal cual. */
+const numeroProveedor = (marca: Marca, t: string) => (/^\d{3}$/.test(t) ? Number(t) / (marca === 'converse' ? 10 : 1) : Number(t));
+const normTalleProv = (talle: string) => String(talle ?? '').trim().toUpperCase().replace(',', '.');
+/** La tabla de la etiqueta TABLA DE TALLE del producto (null = no tiene, o es una que no reconozco). */
+const tablaDeEtiqueta = (etiquetas: string[]) => tablaDesdeEtiquetaTalle(etiquetas.join(', '));
+const sinTabla = (error: string) => error.startsWith('el producto no tiene la etiqueta TABLA DE TALLE');
+
+/**
+ * El talle del remito o de la nota en el de Shopify. Nunca adivina: si no se sabe, devuelve el motivo.
+ * Converse: «055» o «5.5» = US 5.5 → AR por la tabla de la etiqueta TABLA DE TALLE del producto. Sin etiqueta, la
+ * tabla elegida en la vista previa (17-nov-2026, gax: la A10548C no tenía etiqueta, el maestro decía tabla 2 y era la
+ * 1: se cargó un talle que no era). El maestro de curvas ya no se usa solo. Le Coq: «040» o «40» → calzado 39.
+ */
+export function talleEnShopify(marca: Marca, talle: string, _codigo: string, etiquetas: string[], nombreProveedor: string, elegida?: string): { talle: string } | { error: string } {
+  const t = normTalleProv(talle);
   if (!esNumero(t)) return { talle: t };
-  const n = /^\d{3}$/.test(t) ? Number(t) / (marca === 'converse' ? 10 : 1) : Number(t);
+  const n = numeroProveedor(marca, t);
   if (marca === 'lecoq') return { talle: talleShopifyLeCoq(fmtNum(n), nombreProveedor) };
-  const info = converseTablaInfo(codigo, etiquetas.join(', '));
-  if (info.origen === 'default') return { error: `no sé qué tabla de talle lleva (el producto no tiene la etiqueta TABLA DE TALLE y el código no está en el maestro)` };
-  const ar = info.tabla[fmtNum(n)];
+  const tabla = tablaDeEtiqueta(etiquetas) ?? tablaConverse(elegida)?.tabla;
+  if (!tabla) return { error: 'el producto no tiene la etiqueta TABLA DE TALLE: elegí la tabla abajo' };
+  const ar = tabla[fmtNum(n)];
   return ar ? { talle: ar } : { error: `el US ${fmtNum(n)} no está en su tabla de talle` };
+}
+
+/**
+ * Converse sin etiqueta TABLA DE TALLE (17-nov-2026, gax: «que detecte que no tiene etiqueta de tabla de talle, para que
+ * no cargue talles que en realidad no son»): el selector de la tabla. Ninguna viene elegida; la del maestro de iD se
+ * marca como sugerencia. Una tabla que no tiene un US que llegó, o que lo manda a un talle que el producto no tiene, no
+ * se puede elegir. null = no hace falta (tiene etiqueta, no es Converse o no llegaron talles numéricos).
+ */
+export function tablaCargaId(fila: FilaChecklist, productos: (ProductoId | undefined)[], elegida: string | undefined): TablaItem | null {
+  const sinEtiqueta = productos.filter((p): p is ProductoId => !!p && marcaDe(p.vendor) === 'converse' && !tablaDeEtiqueta(p.etiquetas));
+  const us = [...new Set((fila.talles ?? []).filter((t) => t.cantidad > 0).map((t) => normTalleProv(t.talle)).filter(esNumero).map((t) => fmtNum(numeroProveedor('converse', t))))];
+  if (!sinEtiqueta.length || !us.length) return null;
+  const maestro = TABLAS_CONVERSE.find((t) => t.nro === CONVERSE_CODE_TABLE[fila.codigo.toUpperCase()]);
+  const evaluadas = TABLAS_CONVERSE.map((t) => {
+    const falta = us.find((u) => !t.tabla[u]);
+    if (falta) return { ...t, bloqueo: `no tiene el US ${falta}` };
+    for (const p of sinEtiqueta) {
+      const no = us.find((u) => !p.variantes.some((v) => igualTalle(v.talle, t.tabla[u])));
+      if (no) return { ...t, bloqueo: `el US ${no} va al ${t.tabla[no]}, y el producto no tiene ese talle` };
+    }
+    return { ...t, bloqueo: '' };
+  });
+  const valida = evaluadas.find((t) => t.etiqueta === elegida && !t.bloqueo);
+  const conv = (t: typeof evaluadas[number]) => us.map((u) => `US ${u} → ${t.tabla[u]}`).join(', ');
+  return {
+    elegida: valida ? valida.etiqueta : '',
+    actual: null,
+    hace: true,
+    avisos: [`El producto no tiene la etiqueta TABLA DE TALLE: no sé en qué talle va cada par. Mirá la caja (o la tabla de la web) y elegí la tabla; se la agrego al cargar.${maestro ? ` El maestro de iD dice ${maestro.etiqueta.replace('TABLA DE TALLE ', '')}, pero a veces se equivoca.` : ''}`],
+    opciones: [
+      { clave: '', etiqueta: 'Elegí la tabla de talle…' },
+      ...evaluadas.map((t) => ({
+        clave: t.etiqueta,
+        etiqueta: `${t.etiqueta}${t === evaluadas.find((x) => x.nro === maestro?.nro) ? ' (sugerida por el maestro)' : ''}${t.bloqueo ? '' : `: ${conv(t)}`}`,
+        ...(t.bloqueo ? { bloqueo: t.bloqueo } : {}),
+      })),
+    ],
+  };
 }
 /** El mismo talle en Shopify: «39» = «39.0», «xl» = «XL». */
 /**
@@ -402,7 +464,7 @@ export function costoPromedio(stock: number, costo: number, suma: number, costoN
 }
 
 function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefined, ren: RenglonFactura | undefined,
-  pendientes: Record<string, OrdenPendienteId[]> | undefined, modo: ModoVenta, pack = 1): OpcionCarga {
+  pendientes: Record<string, OrdenPendienteId[]> | undefined, modo: ModoVenta, pack = 1, tabla = ''): OpcionCarga {
   if (!p) return { clave: 'falta', etiqueta: 'Producto que no pude leer', accion: null, bloqueo: 'No pude leer ese producto en Shopify.', avisos: [] };
   const avisos: string[] = [];
   const base = { clave: `repo:${p.id}`, etiqueta: `Sumar el stock en «${p.titulo}»`, avisos };
@@ -412,7 +474,8 @@ function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefi
   const problemas: string[] = [];
   for (const t of fila.talles ?? []) {
     if (!(t.cantidad > 0)) continue;
-    const conv = talleEnShopify(marca, t.talle, fila.codigo, p.etiquetas, descripcion);
+    const conv = talleEnShopify(marca, t.talle, fila.codigo, p.etiquetas, descripcion, tabla);
+    if ('error' in conv && sinTabla(conv.error)) return { ...base, accion: null, bloqueo: `«${p.titulo}» no tiene la etiqueta TABLA DE TALLE: elegí la tabla de talle abajo (mirá la caja) y se la agrego al cargar.` };
     if ('error' in conv) { problemas.push(`talle ${t.talle}: ${conv.error}`); continue; }
     const vs = p.variantes.filter((v) => igualTalle(v.talle, conv.talle));
     const como = conv.talle === t.talle ? t.talle : `${t.talle} (en Shopify ${conv.talle})`;
@@ -484,7 +547,9 @@ function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefi
       avisos.push(`El costo de la factura (${fmt(ajuste.costoNuevo)}) deja el margen en negativo. ¿Viene en pack? Si trae varias unidades, tocá «¿Viene en pack?» y escribí cuántas.`);
     }
   }
-  return { ...base, ...sep, accion: { tipo: 'reposicion', productoId: p.id, titulo: p.titulo, lineas, etiquetar: false, ...(ajuste ? { ajuste } : {}), ...sepAccion, ...(mover.length ? { mover } : {}), ...(pack > 1 ? { pack } : {}) } };
+  // La tabla elegida (producto sin etiqueta TABLA DE TALLE) se le agrega al cargar.
+  const etiquetar = marca === 'converse' && tabla && !tablaDeEtiqueta(p.etiquetas) && lineas.length ? { etiquetas: [tabla] } : {};
+  return { ...base, ...sep, accion: { tipo: 'reposicion', productoId: p.id, titulo: p.titulo, lineas, etiquetar: false, ...etiquetar, ...(ajuste ? { ajuste } : {}), ...sepAccion, ...(mover.length ? { mover } : {}), ...(pack > 1 ? { pack } : {}) } };
 }
 
 const NO_CARGAR: OpcionCarga = { clave: 'no', etiqueta: 'No cargar este artículo', accion: null, avisos: [] };
@@ -497,7 +562,7 @@ const NO_CARGAR: OpcionCarga = { clave: 'no', etiqueta: 'No cargar este artícul
 export type CantidadesCarga = ReadonlyMap<string, Readonly<Record<string, number>>>;
 
 export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: Record<string, CargaFamily>, modos: ReadonlyMap<string, ModoVenta> = new Map(),
-  cantidades: CantidadesCarga = new Map(), packs: ReadonlyMap<string, number> = new Map()): PlanCarga {
+  cantidades: CantidadesCarga = new Map(), packs: ReadonlyMap<string, number> = new Map(), tablas: ReadonlyMap<string, string> = new Map()): PlanCarga {
   const f = r.factura;
   const avisos: string[] = [];
   const remito = r.remito?.numero || f.remito || '';
@@ -543,7 +608,10 @@ export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: 
     if (!buscable(c.codigo.toUpperCase())) return bloqueado('El código tiene caracteres que no puedo buscar en Shopify: cargalo a mano.');
     if (!ids.length) return bloqueado('No está en Shopify: crealo desde Sincronización (con el archivo de iD) y armá la carga de nuevo.');
     if (pk.error) return bloqueado(`${pk.error} Escribí cuántas unidades trae cada pack.`);
-    const opciones = ids.map((id) => opcion(c, descripcion, estado.productos[id], ren, estado.pendientesId, modos.get(c.codigo) ?? 'separar', n));
+    // Converse sin etiqueta TABLA DE TALLE: se elige la tabla (17-nov-2026, gax).
+    const tabla = tablaCargaId(c, ids.map((id) => estado.productos[id]), tablas.get(c.codigo));
+    const conTabla = (x: ItemCarga): ItemCarga => (tabla ? { ...x, tabla } : x);
+    const opciones = ids.map((id) => opcion(c, descripcion, estado.productos[id], ren, estado.pendientesId, modos.get(c.codigo) ?? 'separar', n, tabla?.elegida ?? ''));
     if (c.retirado && !cambiadas.length) {
       for (const o of opciones) o.avisos.push(n > 1
         ? `Salieron ${c.retirado} para órdenes (marca a mano en el remito): las cuento como unidades sueltas del pack y no se suman. Si salió el pack entero, corregí la cantidad.`
@@ -551,8 +619,8 @@ export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: 
     }
     if (cambiadas.length) for (const o of opciones) o.avisos.push(`Cantidad escrita a mano: ${cambiadas.map((t) => `${t.talle} ${t.original}→${t.cantidad}`).join(' · ')} (el remito dice otra cosa).`);
     // Todo vendido en iD: queda bloqueado pero con la opción, para mostrar qué separar y «cargarlo igual».
-    if (ids.length === 1) return opciones[0].bloqueo ? { ...bloqueado(opciones[0].bloqueo), opciones: opciones[0].separar ? opciones : [] } : { ...base, estado: 'listo', motivo: '', opciones };
-    return { ...base, estado: 'elegir', motivo: `El código está en ${ids.length} productos de Shopify: elegí en cuál sumar el stock.`, opciones: [NO_CARGAR, ...opciones] };
+    if (ids.length === 1) return conTabla(opciones[0].bloqueo ? { ...bloqueado(opciones[0].bloqueo), opciones: opciones[0].separar ? opciones : [] } : { ...base, estado: 'listo', motivo: '', opciones });
+    return conTabla({ ...base, estado: 'elegir', motivo: `El código está en ${ids.length} productos de Shopify: elegí en cuál sumar el stock.`, opciones: [NO_CARGAR, ...opciones] });
   });
   return { entregaId: f.id, locationId: estado.locationId, posId: null, items, avisos, sucursal: SUCURSAL_CARGA_ID, ...(estado.ordenesId ? { ordenesId: estado.ordenesId } : {}), ...(estado.idLocationId ? { idLocationId: estado.idLocationId } : {}) };
 }

@@ -305,7 +305,7 @@ export interface ReposicionFamily {
    * costo no cambian. `talle` es el nombre de hoy y `sku` el que tiene (se revisan en vivo antes de renombrar).
    */
   renombrar?: { id: string; talle: string; nuevo: string; sku: string }[];
-  /** Distrinando: etiquetas que se agregan (código, tabla de talle elegida, SKU del proveedor de los talles nuevos). */
+  /** Etiquetas que se agregan. Distrinando: código, tabla de talle elegida, SKU del proveedor de los talles nuevos. iD: la tabla de talle elegida (Converse sin etiqueta, 17-nov-2026). */
   etiquetas?: string[];
   /** Distrinando: etiquetas de tabla que se reemplazan por la elegida. */
   quitarEtiquetas?: string[];
