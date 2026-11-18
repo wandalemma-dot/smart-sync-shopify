@@ -21,7 +21,7 @@ export const LINES_QUERY = `query PedidoIdLines($id: ID!, $after: String) {
   } }
 }`;
 
-export interface PendienteId { orden: string; id: string; titulo: string; sku: string; talle: string; cantidad: number; tags: string[]; vendor: string; barcode?: string; variantId?: string }
+export interface PendienteId { orden: string; ordenId?: string; id: string; titulo: string; sku: string; talle: string; cantidad: number; tags: string[]; vendor: string; barcode?: string; variantId?: string }
 export interface CeldaPedido { raw: string; col: number; disponible: number; tope: boolean }
 export interface ArticuloPedido { codigo: string; nombre: string; row: number; celdas: CeldaPedido[]; pack: number }
 export interface PlantillaId { original: Uint8Array; articulos: ArticuloPedido[]; sheetPath: string; limpiar: string[]; previas: number }
@@ -162,7 +162,7 @@ export async function leerPendientesSucursal(ids: string[], filtro: FiltroPedido
             const l = item.lineItem;
             if (!l) throw new Error('Shopify no devolvió el artículo pendiente completo.');
             const opciones = (l.variant?.selectedOptions || []).filter((v: any) => /^(talle|talla|size)$/i.test(v.name.trim()));
-            (soloRevision ? etiquetadas : lineas).push({ orden: o.name, id: item.id, titulo: l.title, sku: l.sku || '', talle: opciones.length === 1 ? opciones[0].value : l.variantTitle || '', cantidad: item.remainingQuantity, tags: l.product?.tags || [], vendor: l.product?.vendor || '', barcode: l.variant?.barcode || '', variantId: l.variant?.id });
+            (soloRevision ? etiquetadas : lineas).push({ orden: o.name, ordenId: id, id: item.id, titulo: l.title, sku: l.sku || '', talle: opciones.length === 1 ? opciones[0].value : l.variantTitle || '', cantidad: item.remainingQuantity, tags: l.product?.tags || [], vendor: l.product?.vendor || '', barcode: l.variant?.barcode || '', variantId: l.variant?.id });
           }
           page = siguiente;
         } while (page);
