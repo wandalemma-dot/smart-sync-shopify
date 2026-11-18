@@ -24,6 +24,7 @@ import {
   type FilaFamily, type RenglonFamily, type ResultadoFamily,
 } from './controlFamily';
 import { mismaSucursal } from './shopify';
+import { confirmarCantidades } from './confirmarStock';
 import { ordenarTalles } from './ordenTalles.js';
 
 export const SUCURSAL_FAMILY = 'FAMILYARG';
@@ -786,7 +787,9 @@ async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga
         ? `El stock de «${rep.titulo}» en ${plan.sucursal ?? SUCURSAL_FAMILY} cambió desde que armaste la carga (por ejemplo, una venta). No se sumó nada: armá la carga de nuevo.`
         : `Shopify no sumó el stock en «${rep.titulo}»: ${errores(ue)}. No se sumó nada.` };
     }
-    if (!data?.inventorySetQuantities?.inventoryAdjustmentGroup) return { estado: 'dudosa', mensaje: `No sé si se sumó el stock en «${rep.titulo}»: ${NO_SE_SABE}.`, productoId: rep.productoId, titulo: rep.titulo, talles: talles(activas) };
+    // Sin inventoryAdjustmentGroup (Shopify, 18-nov-2026): se relee; solo vale si TODOS quedaron en lo que había + lo que llegó.
+    if (!data?.inventorySetQuantities?.inventoryAdjustmentGroup
+      && (await confirmarCantidades(activas.map((l) => ({ inventoryItemId: l.inventoryItemId, quantity: l.actual! + l.suma })), plan.locationId, deps.gql)).size !== activas.length) return { estado: 'dudosa', mensaje: `No sé si se sumó el stock en «${rep.titulo}»: ${NO_SE_SABE}.`, productoId: rep.productoId, titulo: rep.titulo, talles: talles(activas) };
     for (const l of activas) { hechas.push(`${l.talle} ${l.actual}→${l.actual! + l.suma}`); sumados.push({ talle: l.talle, antes: l.actual, suma: l.suma }); unidades += l.suma; }
   }
   const fallas: string[] = [], dudas: string[] = [], avisosCrear: string[] = [];
@@ -1128,7 +1131,11 @@ async function dejarIdComoEstaba(antes: Map<string, number | null>, loc: string,
       { inventorySetQuantities?: { inventoryAdjustmentGroup?: unknown; userErrors?: unknown[] } } | null;
     const ue = r?.inventorySetQuantities?.userErrors;
     if (Array.isArray(ue) && !ue.length && r?.inventorySetQuantities?.inventoryAdjustmentGroup) ok.push(...quantities.map((q) => q.inventoryItemId));
-    else mal.push(...quantities.map((q) => q.inventoryItemId));
+    else if (Array.isArray(ue) && !ue.length) {
+      // Sin inventoryAdjustmentGroup: se relee y cuenta lo que quedó como antes.
+      const bien = await confirmarCantidades(quantities, loc, deps.gql);
+      for (const q of quantities) (bien.has(q.inventoryItemId) ? ok : mal).push(q.inventoryItemId);
+    } else mal.push(...quantities.map((q) => q.inventoryItemId));
   } catch { mal.push(...quantities.map((q) => q.inventoryItemId)); }
   return { ok, mal };
 }

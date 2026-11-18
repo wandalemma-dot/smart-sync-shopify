@@ -76,4 +76,18 @@ describe('operaciones de ID', () => {
       expect(res.status).toHaveBeenCalledWith(401);
     }
   });
+  it('sin inventoryAdjustmentGroup, relee y solo da por escrito lo que quedó en la cantidad pedida (18-nov-2026)', async () => {
+    const {query,item} = shop();
+    const receipt = await prepare(plan,actor,query);
+    const base = query.getMockImplementation();
+    let quedo = 2;
+    query.mockImplementation(async (doc, vars) => {
+      if (doc.startsWith('mutation Stock')) { item.inventoryLevel.quantities[0].quantity = quedo; return { inventorySetQuantities: { inventoryAdjustmentGroup: null, userErrors: [] } }; }
+      return base(doc, vars);
+    });
+    expect((await apply(batch(receipt,'stock'),actor,query)).written).toBe(1);
+    item.inventoryLevel.quantities[0].quantity = 4; quedo = 4;
+    await expect(apply(batch(receipt,'stock'),actor,query)).rejects.toThrow('no confirmó');
+    expect(query.mock.calls.filter(([doc]) => doc.startsWith('mutation Stock')).length).toBe(2);
+  });
 });

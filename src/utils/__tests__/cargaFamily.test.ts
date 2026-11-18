@@ -367,6 +367,20 @@ describe('Family: carga en Shopify (después de confirmar)', () => {
     expect(otroDia.items.map((i) => [i.codigo, i.estado])).toEqual([['SHBSPEC', 'cargado'], ['GSKPT23', 'listo']]);
   });
 
+  it('sin inventoryAdjustmentGroup relee Shopify: cargada si todo quedó en lo esperado, dudosa si no (18-nov-2026)', async () => {
+    const p = producto('gid://shopify/Product/1', 'Bermuda', { S: 1, M: 0, L: 3, XL: 0, XXL: 2 });
+    const esperado: Record<string, number> = { S: 3, M: 4, L: 7, XL: 6, XXL: 6 };
+    for (const falta of [0, 1]) {
+      const gql = shopify({
+        inventorySetQuantities: () => ({ inventorySetQuantities: { inventoryAdjustmentGroup: null, userErrors: [] } }),
+        ConfirmarStock: (v) => ({ nodes: (v.ids as string[]).map((id) => ({ id, inventoryLevel: { quantities: [{ name: 'available', quantity: esperado[id.split('/').pop()!] - (id.endsWith('/L') ? falta : 0) }] } })) }),
+      });
+      const [res] = await ejecutarCargaFamily(planSolo('SHBSPEC', estadoVacio({ porCodigo: { SHBSPEC: [p.id], GSKPT23: [] }, productos: { [p.id]: p } })), {}, deps(gql));
+      expect(res.estado).toBe(falta ? 'dudosa' : 'cargada');
+      expect(gql.mock.calls.filter(([q]) => q.includes('inventorySetQuantities')).length).toBe(1);
+    }
+  });
+
   it('si el stock cambió desde la vista previa, Shopify rechaza todo y no se suma nada', async () => {
     const p = producto('gid://shopify/Product/1', 'Bermuda', { S: 1, M: 0, L: 3, XL: null, XXL: 2 });
     const gql = shopify({ inventorySetQuantities: () => ({ inventorySetQuantities: { inventoryAdjustmentGroup: null, userErrors: [{ code: 'CHANGE_FROM_QUANTITY_STALE', message: 'stale' }] } }) });

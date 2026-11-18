@@ -19,6 +19,7 @@ import { ausenteCrocs, codigosCrocs, esCalzadoCrocs, varianteIndividualCrocs } f
 import { coincideVarianteReebok } from './reebokMatching';
 import { coincideCategoriaReebok, codigosReebok } from './reebokCatalogo';
 import { shopifyGraphQL, mismaSucursal } from './shopify';
+import { confirmarCantidades } from './confirmarStock';
 import { talleMatches, STOCK_LOCATION, converseTablaInfo, talleShopifyLeCoq } from './syncLogic';
 import type { SyncResult, SyncConfig } from './syncLogic';
 
@@ -886,6 +887,17 @@ export async function executeStockWrite(
   const errors: string[] = [];
   const BATCH = 100;
 
+  const NO_CONFIRMO = 'Shopify no confirmó la escritura. Volvé a simular antes de reintentar.';
+  // Respuesta sin errores pero sin inventoryAdjustmentGroup (Shopify, 18-nov-2026):
+  // se relee y cuenta como escrito solo lo que quedó en la cantidad pedida.
+  const confirmar = async (lista: StockChange[]) => {
+    const ok = await confirmarCantidades(lista.map((c) => ({ inventoryItemId: c.inventoryItemId, quantity: c.desired })), plan.locationId!, shopifyGraphQL);
+    const bien = lista.filter((c) => ok.has(c.inventoryItemId)).length;
+    written += bien;
+    failed += lista.length - bien;
+    if (bien < lista.length && errors.length < 5) errors.push(`${NO_CONFIRMO} (${lista.length - bien} sin confirmar)`);
+  };
+
   for (let i = 0; i < plan.changes.length; i += BATCH) {
     const batch = plan.changes.slice(i, i + BATCH);
     const input = {
@@ -901,16 +913,19 @@ export async function executeStockWrite(
     };
     let loteOk = false;
     let loteRechazado = false;
+    let sinGrupo = false;
     try {
       const data = await shopifyGraphQL<any>(SET_MUTATION, { input, key: crypto.randomUUID() });
       const ue = data?.inventorySetQuantities?.userErrors;
-      if (!Array.isArray(ue) || (!ue.length && !data.inventorySetQuantities.inventoryAdjustmentGroup)) throw new Error('Shopify no confirmó la escritura. Volvé a simular antes de reintentar.');
+      if (!Array.isArray(ue)) throw new Error(NO_CONFIRMO);
       loteRechazado = ue.length > 0;
-      if (!ue.length) { written += batch.length; loteOk = true; }
+      if (!ue.length && data.inventorySetQuantities.inventoryAdjustmentGroup) { written += batch.length; loteOk = true; }
+      else if (!ue.length) sinGrupo = true;
       else if (errors.length < 5) errors.push(...ue.slice(0, 2).map((e: any) => e.message));
     } catch (err: any) {
       if (errors.length < 5) errors.push(err?.message || 'Error desconocido');
     }
+    if (sinGrupo) await confirmar(batch);
 
     // ⚠ Shopify rechaza el LOTE ENTERO si una sola variante falla. Antes eso
     // contaba 100 fallidas y perdíamos 99 escrituras que estaban bien.
@@ -918,7 +933,7 @@ export async function executeStockWrite(
     // que realmente tiene el problema.
     // Solo repetir de a una si Shopify confirmó el rechazo del lote completo.
     // Una respuesta perdida/incompleta no demuestra que la escritura no ocurrió.
-    if (!loteOk && !loteRechazado) failed += batch.length;
+    if (!loteOk && !loteRechazado && !sinGrupo) failed += batch.length;
     if (loteRechazado) {
       for (const c of batch) {
         try {
@@ -931,11 +946,12 @@ export async function executeStockWrite(
             key: crypto.randomUUID(),
           });
           const ue = d?.inventorySetQuantities?.userErrors;
-          if (!Array.isArray(ue) || (!ue.length && !d.inventorySetQuantities.inventoryAdjustmentGroup)) throw new Error('Shopify no confirmó la escritura. Volvé a simular antes de reintentar.');
+          if (!Array.isArray(ue)) throw new Error(NO_CONFIRMO);
           if (ue.length) {
             failed++;
             if (errors.length < 5) errors.push(`${c.title} ${c.talle}: ${ue[0].message}`);
-          } else written++;
+          } else if (d.inventorySetQuantities.inventoryAdjustmentGroup) written++;
+          else await confirmar([c]);
         } catch (err: any) {
           failed++;
           if (errors.length < 5) errors.push(`${c.title} ${c.talle}: ${err?.message || 'Error'}`);

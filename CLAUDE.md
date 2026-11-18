@@ -410,6 +410,10 @@ Cómo quedó resuelto en `writeStock.ts`:
   20-ago-2026): el botón rojo de stock **nunca** las toca.
   `inventoryActivate` está en la allowlist de `api/shopify.js`.
 
+### Shopify no devuelve la confirmación del ajuste (18-nov-2026)
+- Caso real: sincronización manual de iD «Escritos 0 · fallidos 115 · Shopify no confirmó la escritura», pero en Shopify los 115 SÍ estaban escritos (A10548C: 41→42, 42→6, 43→3). Shopify respondió a `inventorySetQuantities` sin errores y sin `inventoryAdjustmentGroup`. Lo mismo hacía fallar la sincronización automática (`/api/id-stock`).
+- Ahora, si la respuesta no trae errores pero tampoco el grupo, la app RELEE el disponible (`confirmarCantidades` en `utils/confirmarStock.ts`; en el servidor `confirmWritten` de `server/id-stock.js`) y cuenta como escrito SOLO lo que quedó exactamente en la cantidad pedida; el resto sigue como «no confirmado». No se reintenta nada. Vale para la sincronización manual (`executeStockWrite`), las cargas de Martínez (`sumarStock`, queda «dudosa» si no coincide) y dejar iD como estaba (`dejarIdComoEstaba`). Respuesta sin `userErrors` o que no se pudo releer sigue sin contar como éxito. Tests en `manualStockWrite.test.ts`, `cargaFamily.test.ts` e `id-stock.test.js`.
+
 ### 3.1-ter iD — «PlantillaPedido.xlsx» (formato vigente desde agosto 2026)
 
 Es como Wanda baja hoy los archivos de iD: **uno por marca** (uno de Converse,
