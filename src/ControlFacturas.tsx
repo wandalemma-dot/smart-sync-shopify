@@ -19,20 +19,20 @@ import {
 } from './utils/controlFacturas';
 import { leerFacturaDistrinando, leerFacturaId, leerPedidoAuto, leerTextoRemito, textoRemito, type HojaMarcada, type ItemPdf } from './utils/lectoresFacturas';
 import { celdasVerdes, hojaVisible } from './utils/planillaVerde';
-import { consejoNota, fusionarPlanilla, marcasDeNota, type ConsejoNota, type MarcasNota } from './utils/marcasPlanilla';
+import { consejoNota, fusionarPlanilla, marcasDeNota, type ConsejoNota, type MarcasNota, type NoEntro } from './utils/marcasPlanilla';
 import { conEstadoTrello, estadosTarjetas, listaDeParciales, listaFinalizado, listasDePendientes, movimientosTarjetas, tarjetaDeNota, type EstadoTarjeta, type ListaTrello } from './utils/listasTrello';
 import ControlFamily from './ControlFamily';
 import RegistroCargas from './RegistroCargas';
 import EnlacesRapidos from './EnlacesRapidos';
 import { Archivo, Copiar, Parte } from './EntregasPartes';
-import { OrdenesQueSalen, PanelCarga } from './PanelCarga';
-import { accionesElegidas, ejecutarCargaFamily, resumenCarga, textoCarga, type CargaFamily, type EleccionesCarga, type ModoVenta, type PlanCarga, type ResultadoCarga } from './utils/cargaFamily';
+import { NoEntraron, OrdenesQueSalen, PanelCarga } from './PanelCarga';
+import { accionesElegidas, ejecutarCargaFamily, resumenCarga, textoCarga, type CargaFamily, type EleccionesCarga, type ModoVenta, type NoEntroCarga, type PlanCarga, type ResultadoCarga } from './utils/cargaFamily';
 import { ResultadosCarga } from './ResultadosCarga';
 import { comentarioTrello, filaPlanilla, textoAvisoAdmin } from './utils/avisoAdmin';
 import { cambiosDePrecio, enlacesMail, textoAvisoPrecio, type CambioPrecio, type MailsAviso } from './utils/avisoPrecio';
 import { diferenciasDeTalles, netosDeCarga, textoAvisoTalles } from './utils/avisoTalles';
 import { planCargaDistrinando } from './utils/cargaDistrinando';
-import { entregaArchivada, estadoCargaFactura, leerEstadoCargaId, ordenesQueSalen, planCargaId, type OrdenQueSale, precioYCostoAntes, SUCURSAL_CARGA_ID, type EstadoCargaId } from './utils/cargaId';
+import { entregaArchivada, estadoCargaFactura, leerEstadoCargaId, noEntraronId, ordenesQueSalen, planCargaId, type OrdenQueSale, precioYCostoAntes, SUCURSAL_CARGA_ID, type EstadoCargaId } from './utils/cargaId';
 import { actualizarPreciosManualmente, shopifyGraphQL } from './utils/shopify';
 import {
   adjuntarATrello, apiControl, archivosParaTrello, boton, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, slug, td, th,
@@ -177,6 +177,26 @@ const hoyAr = () => new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 1
  * Control de todas las facturas. Las notas de tarjetas archivadas en Trello (16-nov-2026, gax: «esta tarjeta yo la
  * archivé») no se eligen solas para las entregas abiertas; las entregas ya cargadas y cerradas conservan su resultado.
  */
+/**
+ * iD: lo que no entró de las notas de una entrega y ya no va a entrar (17-nov-2026, gax: «iD siempre va a preparar
+ * los pedidos completos»). Con datos frescos de la base. Ver consejoNota (completoPorTipo).
+ */
+function noEntroDeEntrega(facturaId: string, d: Datos, p: Prov): (NoEntro & { nota: string })[] {
+  try {
+    const datos = { ...VACIO, ...d } as Datos;
+    const ctrl = conEstadoTrello(datos.pedidos, datos.tarjetasTrello, hoyAr());
+    const res = analizarControl(ctrl, datos, p);
+    const rf = res.facturas.find((x) => x.factura.id === facturaId);
+    if (!rf) return [];
+    return rf.pedidosCubiertos.flatMap((id) => {
+      const nota = ctrl.find((x) => x.id === id);
+      const c = consejoNota(marcasDeNota(res, null, ctrl, id), { completoPorTipo: true });
+      const nombre = nota ? (nota.nroProveedor ? `N° ${nota.nroProveedor}` : nota.nombre) : id;
+      return (c.noEntro ?? []).map((x) => ({ ...x, nota: nombre }));
+    });
+  } catch { return []; }
+}
+
 function analizarControl(ctrl: (Pedido & { archivada?: boolean })[], d: Datos, p: Prov) {
   const res = analizarFacturas(ctrl, d.facturas, d.asignaciones, d.remitos);
   if (!ctrl.some((x) => x.archivada)) return res;
@@ -209,6 +229,7 @@ export default function ControlFacturas() {
   const [avisoTalles, setAvisoTalles] = useState<{ asunto: string; cuerpo: string } | null>(null);
   /** Órdenes de iD que se llevaron algo de la última carga: cuáles ya pueden salir (12-nov-2026, gax). */
   const [ordenesCarga, setOrdenesCarga] = useState<OrdenQueSale[]>([]);
+  const [noEntraronCarga, setNoEntraronCarga] = useState<{ items: NoEntroCarga[]; factura: string } | null>(null);
   const [resultadoCarga, setResultadoCarga] = useState<{ resultados: ResultadoCarga[]; conVentas: boolean } | null>(null);
   const [fechaPedido, setFechaPedido] = useState(hoy());
   const [abierta, setAbierta] = useState<string | null>(null);
@@ -243,6 +264,8 @@ export default function ControlFacturas() {
     skus: Map<string, Record<string, string>>; quitados: Set<string>;
     /** iD: unidades por pack escritas a mano. */
     packs: Map<string, number>;
+    /** iD: lo pedido en las notas de esta entrega que no entró, con las ventas que lo esperan. */
+    noEntraron?: NoEntroCarga[];
   } | null>(null);
   const listasRevisadas = useRef(new Set<Prov>());
   // Proveedor elegido ahora: una búsqueda o carga que termina después de cambiarlo no toca la pantalla.
@@ -322,10 +345,10 @@ export default function ControlFacturas() {
   const consejos = useMemo(() => {
     const out = new Map<string, ConsejoNota>();
     for (const p of pedidosControl) {
-      try { out.set(p.id, consejoNota(marcasDeNota(res, null, pedidosControl, p.id), { listaActual: listaDe(p), listaParcial, listaFinal })); } catch { /* sin datos */ }
+      try { out.set(p.id, consejoNota(marcasDeNota(res, null, pedidosControl, p.id), { listaActual: listaDe(p), listaParcial, listaFinal, completoPorTipo: prov === 'id' })); } catch { /* sin datos */ }
     }
     return out;
-  }, [res, pedidosControl, listaDe, listaParcial, listaFinal]);
+  }, [res, pedidosControl, listaDe, listaParcial, listaFinal, prov]);
   const cerradas = useMemo(() => new Set(pedidosControl.filter((p) => p.cerradaDesde).map((p) => p.id)), [pedidosControl]);
   const nombrePedido = (id: string) => { const p = datos.pedidos.find((x) => x.id === id); return p ? (p.nroProveedor ? `N° ${p.nroProveedor}` : p.nombre) : id; };
 
@@ -353,7 +376,10 @@ export default function ControlFacturas() {
       const cerrada = entregaArchivada(rf, carga, frescos.archivo?.[facturaId]?.estado);
       const pend = listasDePendientes(listas, frescos.listasTrello);
       const consejosDe = (tarjeta: string) => ctrl.filter((x) => tarjetaDeNota(x) === tarjeta).map((x) => {
-        try { return consejoNota(marcasDeNota(resF, null, ctrl, x.id)).tipo; } catch { return 'nada' as const; }
+        try {
+          const c = consejoNota(marcasDeNota(resF, null, ctrl, x.id), { completoPorTipo: p === 'id' });
+          return c.tipo === 'finalizar' && c.noEntro?.length ? 'cerrar' as const : c.tipo;
+        } catch { return 'nada' as const; }
       });
       const plan = movimientosTarjetas({
         tarjetasEntrega: rf.pedidosCubiertos.map((id) => tarjetaDeNota(ctrl.find((x) => x.id === id))),
@@ -764,12 +790,17 @@ export default function ControlFacturas() {
     try {
       const d = await api(undefined, p);
       const dis = p === 'distrinando';
-      const estado = await leerEstadoCargaId(r.checklist.map((c) => c.codigo), shopifyGraphQL, dis ? { ventasId: false, pos: true } : {});
+      // iD: lo que no entró de las notas de esta entrega (17-nov-2026, gax). Se leen también esos productos para
+      // mostrar las ventas que lo esperan.
+      const faltan = dis ? [] : noEntroDeEntrega(r.factura.id, d, p);
+      const codigos = [...r.checklist.map((c) => c.codigo), ...faltan.map((x) => x.codigo)];
+      const estado = await leerEstadoCargaId(codigos, shopifyGraphQL, dis ? { ventasId: false, pos: true } : {});
       if (!sigue(p)) return;
       setDatos({ ...VACIO, ...d });
       // Lo que ya se sacó antes porque no llegó sigue sacado (queda guardado).
       const quitados = new Set(Object.keys(d.noLlego ?? {}).filter((k) => k.startsWith(`${r.factura.id}|`)).map((k) => k.slice(r.factura.id.length + 1)));
-      baseCarga.current = { prov: p, r, estado, cargas: d.cargas ?? {}, modos: new Map(), cantidades: new Map(), pedidos: d.pedidos ?? [], tablas: new Map(), destinos: new Map(), skus: new Map(), quitados, packs: new Map() };
+      baseCarga.current = { prov: p, r, estado, cargas: d.cargas ?? {}, modos: new Map(), cantidades: new Map(), pedidos: d.pedidos ?? [], tablas: new Map(), destinos: new Map(), skus: new Map(), quitados, packs: new Map(),
+        ...(faltan.length ? { noEntraron: noEntraronId(faltan, estado) } : {}) };
       rearmar();
     } catch (e) { if (sigue(p)) setAvisos([`No pude armar la carga: ${mensaje(e)} No se cargó nada.`]); }
     finally { setOcupado(''); }
@@ -781,7 +812,8 @@ export default function ControlFacturas() {
     if (!b) return;
     setPlanCarga(b.prov === 'distrinando'
       ? { ...planCargaDistrinando(b.r, b.estado, b.cargas, b.pedidos, new Map(b.tablas), new Map(b.cantidades), new Map(b.destinos), new Map(b.skus)), quitados: [...b.quitados] }
-      : { ...planCargaId(b.r, b.estado, b.cargas, new Map(b.modos), new Map(b.cantidades), new Map(b.packs), new Map(b.tablas)), quitados: [...b.quitados] });
+      : { ...planCargaId(b.r, b.estado, b.cargas, new Map(b.modos), new Map(b.cantidades), new Map(b.packs), new Map(b.tablas)), quitados: [...b.quitados],
+        ...(b.noEntraron ? { noEntraron: b.noEntraron } : {}) });
   }
 
   /** Lo vendido en iD: separarlo (por defecto), cargarlo igual (si ya se separó antes) o cargarlo y pasar la venta a Martínez. */
@@ -928,7 +960,7 @@ export default function ControlFacturas() {
     const p = prov, eid = plan.entregaId, factura = r.factura.numero;
     const elegidas = accionesElegidas(plan, elecciones);
     const salen = ordenesQueSalen(plan, elecciones);
-    setAvisoPrecio(null); setAvisoTalles(null); setAvisoAdmin(null); setOrdenesCarga([]); setResultadoCarga(null); setAvisos([]);
+    setAvisoPrecio(null); setAvisoTalles(null); setAvisoAdmin(null); setOrdenesCarga([]); setNoEntraronCarga(null); setResultadoCarga(null); setAvisos([]);
     setOcupado('Cargando en Shopify… no cierres esta página.');
     try {
       const resultados = await ejecutarCargaFamily(plan, elecciones, {
@@ -943,6 +975,7 @@ export default function ControlFacturas() {
       if (sigue(p)) {
         setResultadoCarga({ resultados, conVentas: p === 'id' });
         setOrdenesCarga(salen);
+        if (plan.noEntraron?.length) setNoEntraronCarga({ items: plan.noEntraron, factura: factura || '' });
         const cambios = cambiosDePrecio(elegidas, resultados);
         const fecha = hoyAr().split('-').reverse().join('/');
         const proveedor = PROVS.find((x) => x.id === p)?.nombre ?? p;
@@ -1058,13 +1091,14 @@ export default function ControlFacturas() {
         <td style={td}><input type="date" value={p.fecha} style={inputSt}
           onChange={(e) => e.target.value && guardar({ accion: 'guardarPedido', pedido: { ...p, fecha: e.target.value } })} /></td>
         <td style={td}>{r.pedido}</td><td style={td}>{r.facturado}</td><td style={td}>{r.pendiente}</td>
-        <td style={{ ...td, color: consejos.get(p.id)?.tipo === 'finalizar' ? '#34d399' : consejos.get(p.id)?.tipo === 'parcial' ? '#fbbf24' : undefined }}
+        <td style={{ ...td, color: consejos.get(p.id)?.noEntro?.length ? '#fca5a5' : consejos.get(p.id)?.tipo === 'finalizar' ? '#34d399' : consejos.get(p.id)?.tipo === 'parcial' ? '#fbbf24' : undefined }}
           title={consejos.get(p.id) ? `${consejos.get(p.id)!.texto} ${consejos.get(p.id)!.tarjeta}` : undefined}>{consejos.get(p.id)?.corto ?? r.estado}</td>
         <td style={td}><button onClick={() => confirm(`¿Borrar la nota ${p.nombre}?${enlaceTrello(p) ? ' No se vuelve a traer de Trello.' : ''}`) && guardar({ accion: 'borrarPedido', id: p.id, nro: p.nroProveedor, huella: huellaPedido(p.lineas) })}
           style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer' }}>✕</button></td>
       </tr>
       {abierta === p.id && <tr><td colSpan={7} style={{ ...td, background: 'rgba(255,255,255,0.03)' }}>
         {consejos.get(p.id) && <div style={{ marginBottom: 6 }}>{consejos.get(p.id)!.texto} <strong>{consejos.get(p.id)!.tarjeta}</strong></div>}
+        {consejos.get(p.id)?.noEntro?.length ? <div style={{ marginBottom: 6, color: '#fca5a5' }}>⛔ No entraron: {textoNoEntro(consejos.get(p.id)!.noEntro!)}.</div> : null}
         <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem' }}>
           <thead><tr><th style={th}>Código</th><th style={th}>Descripción</th><th style={th}>Talle</th><th style={th}>Pedido</th><th style={th}>Facturado</th><th style={th}>Pendiente</th></tr></thead>
           <tbody>{det.map((d, i) => <tr key={i}><td style={td}>{d.codigo}</td><td style={td}>{d.descripcion}</td><td style={td}>{d.talle}</td><td style={td}>{d.pedido}</td>
@@ -1106,7 +1140,7 @@ export default function ControlFacturas() {
           onMailSolo: () => planCarga && armarMailTalles(r, planCarga, [], prov), explicacion: EXPLICA_DISTRINANDO,
         }),
       } : undefined} />;
-  const cambiarProv = (p: Prov) => { setResultadoCarga(null); setAvisoAdmin(null); setPlanCarga(null); setAvisoPrecio(null); setAvisoTalles(null); setOrdenesCarga([]); setVerRegistro(false); provRef.current = p; setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
+  const cambiarProv = (p: Prov) => { setResultadoCarga(null); setAvisoAdmin(null); setPlanCarga(null); setAvisoPrecio(null); setAvisoTalles(null); setOrdenesCarga([]); setNoEntraronCarga(null); setVerRegistro(false); provRef.current = p; setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
 
   const cabecera = (<>
     <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
@@ -1151,6 +1185,10 @@ export default function ControlFacturas() {
       {ordenesCarga.length > 0 && <div style={{ position: 'relative' }}>
         <OrdenesQueSalen ordenes={ordenesCarga} titulo="📦 Órdenes de iD de esta carga: qué separar" />
         <button style={{ ...botonChico, position: 'absolute', top: 6, right: 6, padding: '1px 8px' }} onClick={() => setOrdenesCarga([])}>cerrar</button>
+      </div>}
+      {noEntraronCarga && <div style={{ position: 'relative' }}>
+        <NoEntraron items={noEntraronCarga.items} factura={noEntraronCarga.factura} />
+        <button style={{ ...botonChico, position: 'absolute', top: 6, right: 6, padding: '1px 8px' }} onClick={() => setNoEntraronCarga(null)}>cerrar</button>
       </div>}
       {avisoPrecio && <AvisoPrecio aviso={avisoPrecio} mails={datos.mailsAviso ?? { para: [], copia: [] }} ocupado={!!ocupado}
         onGuardarMails={async (m) => { await api({ accion: 'guardarMailsAviso', ...m }); await recargar(); }} onCerrar={() => setAvisoPrecio(null)} />}
@@ -1542,6 +1580,15 @@ function Controles({ r, unidadesRemito, pendiente }: { r: ResultadoFactura; unid
  * se llega a leer»; la planilla marcada ya no hace falta porque la app mueve la tarjeta sola). Lo que llegó
  * talle por talle queda plegado.
  */
+/** «A10516C talle 039×2, 043×7 · CTO0325003 (3)» */
+function textoNoEntro(xs: NoEntro[]): string {
+  const por = new Map<string, NoEntro[]>();
+  for (const x of xs) por.set(x.codigo, [...(por.get(x.codigo) ?? []), x]);
+  return [...por.entries()].map(([cod, ls]) => (ls.every((l) => l.talle)
+    ? `${cod} talle ${ls.map((l) => `${l.talle}×${l.unidades}`).join(', ')}`
+    : `${cod} (${ls.reduce((s, l) => s + l.unidades, 0)} u.)`)).join(' · ');
+}
+
 function NotasEntrega({ r, res, pedidos, nombrePedido, consejos }: {
   r: ResultadoFactura; res: ResultadoGeneral; pedidos: PedidoGuardado[]; nombrePedido: (id: string) => string; consejos: Map<string, ConsejoNota>;
 }) {
@@ -1558,7 +1605,7 @@ function NotasEntrega({ r, res, pedidos, nombrePedido, consejos }: {
       {notas.map(({ id, p, m }) => {
         if (!p || !m) return null;
         const c = consejos.get(id);
-        const color = c?.tipo === 'finalizar' ? '#34d399' : c?.tipo === 'parcial' ? '#fbbf24' : undefined;
+        const color = c?.noEntro?.length ? '#fca5a5' : c?.tipo === 'finalizar' ? '#34d399' : c?.tipo === 'parcial' ? '#fbbf24' : undefined;
         return (
           <div key={id} style={{ marginTop: 6 }}>
             <div>
@@ -1568,6 +1615,9 @@ function NotasEntrega({ r, res, pedidos, nombrePedido, consejos }: {
             </div>
             {c && c.tipo !== 'nada' && <div style={{ opacity: 0.75 }}>{c.tarjeta}
               {c.tipo === 'parcial' && c.falta.length > 0 && <> Falta: {c.falta.slice(0, 3).map((x) => `${x.codigo} ${x.descripcion} (${x.unidades})`).join(' · ')}{c.falta.length > 3 ? ` y ${c.falta.length - 3} más` : ''}.</>}
+            </div>}
+            {c?.noEntro && c.noEntro.length > 0 && <div style={{ color: '#fca5a5' }}>
+              ⛔ No entraron (iD no los mandó): {textoNoEntro(c.noEntro)}. Las ventas que los esperan aparecen al armar la carga.
             </div>}
             {m.sinTalle.length > 0 && <div style={{ color: '#fbbf24' }}>Sin talle identificado: {m.sinTalle.map((x) => `${x.codigo} (${x.unidades})`).join(', ')}.</div>}
             {m.estaEntrega.length > 0 && <details style={{ opacity: 0.8 }}>

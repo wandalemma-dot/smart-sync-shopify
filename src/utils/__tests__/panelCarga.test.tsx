@@ -2,7 +2,7 @@
 // «yo los voy seleccionando, así los voy controlando»). Family sigue con todo tildado.
 import { describe, expect, it } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { OrdenesQueSalen, PanelCarga } from '../../PanelCarga';
+import { NoEntraron, OrdenesQueSalen, PanelCarga } from '../../PanelCarga';
 import type { PlanCarga } from '../cargaFamily';
 
 const plan = {
@@ -200,5 +200,21 @@ describe('vista previa de la carga: Distrinando (13-nov-2026)', () => {
     expect(h).toMatch(/\(hoy 44\)/);
     expect(h).toMatch(/1 → 3<\/td>/);
     expect(h).toMatch(/Talles que se renombran en Shopify \(mismo SKU y stock\): 44 → 43 \(RBK110S232647-11\) · 46.5 → 45 \(RBK110S232647-12.5\)/);
+  });
+});
+
+describe('iD: productos pedidos que no entraron (17-nov-2026, gax)', () => {
+  it('lista lo que no entró y las ventas que lo esperan, para atención al cliente', () => {
+    const items = [{ codigo: 'A10516C', descripcion: 'CHUCK', talle: '070', talleShopify: '39', unidades: 2, nota: 'N° 2595', producto: 'Zapatillas Converse Chuck Taylor Negro', ordenes: [{ nombre: '#210900', cantidad: 2 }] }];
+    const h = renderToStaticMarkup(<NoEntraron items={items} factura="0011-1" />);
+    expect(h).toMatch(/Productos pedidos que no entraron \(2 u\.\): a revisión/);
+    expect(h).toMatch(/Avisá a atención al cliente para solucionar esta venta/);
+    expect(h).toMatch(/talle 39/);
+    expect(h).toMatch(/#210900 ×2/);
+    expect(h).toMatch(/Copiar para atención al cliente/);
+    // En la vista previa de la carga también se ve.
+    expect(renderToStaticMarkup(<PanelCarga plan={{ ...plan, noEntraron: items }} ocupado={false} onConfirmar={() => undefined} onCancelar={() => undefined}
+      sucursal="DEPOSITO MARTINEZ" explicacion="" sinTildar />)).toMatch(/no entraron/);
+    expect(renderToStaticMarkup(<NoEntraron items={[]} factura="" />)).toBe('');
   });
 });

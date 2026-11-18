@@ -2,7 +2,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { accionesElegidas, ejecutarCargaFamily, leerPrecio, llegaAl50, precioAEscribir, resumenCarga, type CargaFamily, type DepsCarga, type ItemCarga } from '../cargaFamily';
 import {
-  ajusteDe, costoPromedio, entregaArchivada, estadoCargaFactura, firmaCargaId, formasCodigo, leerEstadoCargaId, leerPendientesId, leerVentasId, ordenesQueSalen, packDeCarga, planCargaId, precioYCostoAntes, separarDe, talleEnShopify, tablaCargaId,
+  ajusteDe, costoPromedio, entregaArchivada, estadoCargaFactura, firmaCargaId, formasCodigo, leerEstadoCargaId, leerPendientesId, leerVentasId, noEntraronId, ordenesQueSalen, textoNoEntraron, packDeCarga, planCargaId, precioYCostoAntes, separarDe, talleEnShopify, tablaCargaId,
   type EstadoCargaId, type OrdenPendienteId, type ProductoId, type VarianteId,
 } from '../cargaId';
 import { diferenciasDeTalles, netosDeCarga, textoAvisoTalles } from '../avisoTalles';
@@ -857,5 +857,47 @@ describe('iD: zapatilla Converse sin etiqueta TABLA DE TALLE (17-nov-2026, gax)'
     expect(con.estado).toBe('listo');
     expect(con.opciones[0].accion?.tipo === 'reposicion' && con.opciones[0].accion.etiquetas).toBeFalsy();
     expect(planCargaId(resultado([fila([{ talle: 'L', cantidad: 2 }])]), estado(), {}).items[0].tabla).toBeUndefined();
+  });
+});
+
+describe('iD: productos pedidos que no entraron (17-nov-2026, gax, caso A10516C)', () => {
+  const chuck = (etiquetas: string[]): ProductoId => ({
+    id: 'gid://shopify/Product/16', titulo: 'Zapatillas Converse Chuck Taylor Negro', vendor: 'Converse', estado: 'ACTIVE', etiquetas,
+    variantes: ['39', '40', '43'].map((t) => ({ ...variante(t, 0), id: `gid://shopify/ProductVariant/A${t}`, sku: `A10516C-${t}` })),
+  });
+  const orden = (nombre: string, cantidad: number, extra: Partial<OrdenPendienteId> = {}): OrdenPendienteId => ({ nombre, fecha: '2026-11-01', cantidad, cuenta: true, ...extra });
+  const e = (p: ProductoId): EstadoCargaId => ({
+    locationId: LOC, porCodigo: { A10516C: [p.id] }, productos: { [p.id]: p },
+    pendientesId: { 'gid://shopify/ProductVariant/A39': [orden('#210900', 1), orden('#210950', 1, { cuenta: false, motivo: 'sin pagar' })], 'gid://shopify/ProductVariant/A43': [orden('#210960', 2)] },
+  });
+  const falta = { codigo: 'A10516C', descripcion: 'CHUCK TAYLOR ALL STAR', nota: 'N° 2595' };
+
+  it('pasa el talle de iD al de Shopify y lista las ventas de iD que lo esperan', () => {
+    // TABLA DE TALLE CONVERSE 1: US 7 = 39.
+    const r = noEntraronId([{ ...falta, talle: '070', unidades: 2 }], e(chuck(['A10516C', 'TABLA DE TALLE CONVERSE 1'])));
+    expect(r[0]).toMatchObject({ talleShopify: '39', producto: 'Zapatillas Converse Chuck Taylor Negro', unidades: 2 });
+    expect(r[0].ordenes).toEqual([{ nombre: '#210900', cantidad: 1 }, { nombre: '#210950', cantidad: 1, motivo: 'sin pagar' }]);
+    expect(r[0].aviso).toBeUndefined();
+    const t = textoNoEntraron(r, '0011-00139953');
+    expect(t).toMatch(/factura 0011-00139953/);
+    expect(t).toMatch(/A10516C Zapatillas Converse Chuck Taylor Negro talle 39 \(2 u\. pedidas, nota N° 2595\): #210900, #210950 \[sin pagar\]/);
+  });
+
+  it('sin etiqueta de tabla o sin talle no adivina: muestra las ventas de todos los talles, avisando', () => {
+    const r = noEntraronId([{ ...falta, talle: '060', unidades: 2 }, { ...falta, talle: '', unidades: 7 }], e(chuck(['A10516C'])));
+    for (const x of r) {
+      expect(x.talleShopify).toBeUndefined();
+      expect(x.ordenes.map((o) => [o.nombre, o.talle])).toEqual([['#210900', '39'], ['#210950', '39'], ['#210960', '43']]);
+    }
+    expect(r[0].aviso).toMatch(/no tiene la etiqueta TABLA DE TALLE/);
+    expect(r[1].aviso).toMatch(/no sé de qué talle/);
+  });
+
+  it('no está en Shopify o no se pudieron leer las ventas: avisa', () => {
+    expect(noEntraronId([{ ...falta, codigo: 'A99999C', talle: '060', unidades: 1 }], e(chuck([])))[0].aviso).toMatch(/no lo encontré en Shopify/);
+    const sin = { ...e(chuck(['TABLA DE TALLE CONVERSE 1'])), pendientesId: undefined, errorPendientes: 'sin permiso' };
+    const r = noEntraronId([{ ...falta, talle: '060', unidades: 1 }], sin);
+    expect(r[0].ordenes).toEqual([]);
+    expect(r[0].aviso).toMatch(/no pude leer las ventas de iD \(sin permiso\)/);
   });
 });

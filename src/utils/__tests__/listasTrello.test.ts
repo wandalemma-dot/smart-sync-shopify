@@ -180,6 +180,15 @@ describe('mover las tarjetas solas (14-nov-2026, gax: «que haga todo automátic
     expect(movimientosTarjetas({ ...base, tarjetasEntrega: [T('b')], cerrada: true, consejos: () => ['nada'] }).mover).toEqual([]);
   });
 
+  it('iD: entró la nota menos lo que iD no mandó → FINALIZADO, aunque esté en la lista de parciales (17-nov-2026, gax)', () => {
+    const r = movimientosTarjetas({ ...base, tarjetasEntrega: [T('b'), T('c')], cerrada: true, consejos: () => ['cerrar', 'finalizar'] });
+    expect(r.mover.map((m) => [m.nombre, m.hacia.nombre])).toEqual([['LE COQ el 3/11', 'FINALIZADO'], ['CONVERSE', 'FINALIZADO']]);
+    expect(r.mover[0].motivo).toMatch(/iD no lo mandó/);
+    // Con otra nota de la tarjeta todavía en parte, sigue en parciales.
+    expect(movimientosTarjetas({ ...base, tarjetasEntrega: [T('b')], cerrada: true, consejos: () => ['cerrar', 'parcial'] }).mover[0].hacia.nombre)
+      .toBe('PENDIENDE DE INDUMENTARIA/CALZADO');
+  });
+
   it('sin la lista de destino avisa para moverla a mano', () => {
     const sin = TAB.filter((l) => l.id !== L(5) && l.id !== L(3));
     const r1 = movimientosTarjetas({ ...base, listas: sin, tarjetasEntrega: [T('a')], cerrada: false, consejos: () => [] });

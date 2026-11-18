@@ -295,6 +295,37 @@ describe('¿se cerró el pedido? qué hacer con la tarjeta', () => {
     expect(c).toMatchObject({ tipo: 'nada', tarjeta: '' });
   });
 
+  // iD prepara cada nota completa (17-nov-2026, gax, caso A10516C): lo que falta de un tipo del que llegó una parte no va a venir.
+  it('iD: entró parte del calzado y toda la ropa → lo que falta no entra y la tarjeta va a FINALIZADO', () => {
+    const res = analizarFacturas([nota], [factura('F1', '2026-11-06', [['LFN9924069', 3], ['LFO0125210', 4]])], {},
+      { F1: remito([['LFN9924069', [['43', 2], ['44', 1]]], ['LFO0125210', [['37', 1], ['38', 1], ['40', 2]]]]) });
+    const c = consejoNota(marcasDeNota(res, null, [nota], 'N1522'), { ...listas, listaFinal: 'FINALIZADO', completoPorTipo: true });
+    expect(c.tipo).toBe('finalizar');
+    expect(c.noEntro).toEqual([{ codigo: 'LFN9924069', descripcion: 'BREAKPOINT CLASSIC', talle: '044', unidades: 1 }]);
+    expect(c.texto).toMatch(/menos 1 u\. que iD no mandó/);
+    expect(c.corto).toBe('⛔ no entraron 1 u.: finalizar');
+    expect(c.tarjeta).toBe('Al cerrar la entrega, la app pasa la tarjeta a «FINALIZADO».');
+    // Distrinando (sin la regla) sigue como antes.
+    expect(consejoNota(marcasDeNota(res, null, [nota], 'N1522'), listas).tipo).toBe('parcial');
+  });
+
+  it('iD: un artículo entero del mismo tipo no vino → también entra en «no entraron»', () => {
+    const sinVerde = { ...nota, lineas: nota.lineas.map((l) => ({ ...l, entregado: undefined, entregadoDesde: undefined })) };
+    const res = analizarFacturas([sinVerde], [factura('F1', '2026-11-06', [['LFO0125210', 4]])], {},
+      { F1: remito([['LFO0125210', [['37', 1], ['38', 1], ['40', 2]]]]) });
+    // Calzado en parte (falta todo LFN9924069) y la ropa nada: la ropa puede venir aparte, la tarjeta queda en parciales.
+    const c = consejoNota(marcasDeNota(res, null, [sinVerde], 'N1522'), { ...listas, completoPorTipo: true });
+    expect(c.tipo).toBe('parcial');
+    expect(c.noEntro?.map((x) => [x.codigo, x.talle, x.unidades])).toEqual([['LFN9924069', '043', 2], ['LFN9924069', '044', 2]]);
+    expect(c.texto).toMatch(/⛔ No entraron 4 u\. \(LFN9924069\)/);
+  });
+
+  it('iD: de un tipo no llegó nada → todavía puede venir, sin «no entraron»', () => {
+    const c = consejoNota(marcasDeNota(analizarFacturas([nota], []), null, [nota], 'N1522'), { ...listas, completoPorTipo: true });
+    expect(c.tipo).toBe('parcial');
+    expect(c.noEntro).toBeUndefined();
+  });
+
   it('la lista de parciales del tablero', () => {
     expect(listaDeParciales([{ id: '1', nombre: 'PEDIDOS PENDIENTES' }, { id: '2', nombre: 'PENDIENDE DE INDUMENTARIA/CALZADO' }, { id: '3', nombre: 'RECIBIDOS' }])).toBe('PENDIENDE DE INDUMENTARIA/CALZADO');
     expect(listaDeParciales([{ id: '1', nombre: 'PEDIDOS PENDIENTES' }])).toBe('');

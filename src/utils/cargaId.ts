@@ -31,7 +31,7 @@
 // ============================================================================
 import { claveCodigo, fmt, type FilaChecklist, type RenglonFactura, type ResultadoFactura } from './controlFacturas';
 import {
-  llegaAl50, textoCarga, type TablaItem, type AjustePrecio, type CubiertaOrden, type EleccionesCarga, type LineaFOId, type LineaOrdenId, type ModoVenta, type MoverVenta, type SepararId, type CargaFamily, type ItemCarga, type LineaReposicion, type OpcionCarga, type PackCarga, type PlanCarga, type ReposicionFamily,
+  llegaAl50, textoCarga, type TablaItem, type AjustePrecio, type CubiertaOrden, type EleccionesCarga, type LineaFOId, type LineaOrdenId, type ModoVenta, type MoverVenta, type NoEntroCarga, type SepararId, type CargaFamily, type ItemCarga, type LineaReposicion, type OpcionCarga, type PackCarga, type PlanCarga, type ReposicionFamily,
 } from './cargaFamily';
 import { esPrecioSugerido } from './conversePreciosFijos';
 import { margenPct } from './margen';
@@ -691,6 +691,62 @@ export function ordenesQueSalen(plan: PlanCarga, elecciones: EleccionesCarga): O
     out.push({ orden, puede: !faltan.length, pasa: cs.some((c) => c.como === 'pasar'), llega, faltan });
   }
   return out.sort((a, b) => Number(b.puede) - Number(a.puede) || a.orden.localeCompare(b.orden));
+}
+
+/**
+ * Productos pedidos que no entraron (17-nov-2026, gax: «iD siempre va a preparar los pedidos completos… hay que poner
+ * a revisión y avisarle a atención al cliente»). Por cada artículo que falta de una nota, las ventas sin preparar en
+ * iD que lo esperan. El talle de iD se pasa al de Shopify con las mismas reglas de la carga; si no se sabe (sin tabla
+ * de talle o sin talle), se muestran las ventas de todos los talles del modelo, avisando. Solo lectura.
+ */
+export function noEntraronId(items: { codigo: string; descripcion: string; talle: string; unidades: number; nota: string }[], estado: EstadoCargaId): NoEntroCarga[] {
+  return items.map((x) => {
+    const base: NoEntroCarga = { ...x, ordenes: [] };
+    const prods = (estado.porCodigo[x.codigo.toUpperCase()] ?? []).map((id) => estado.productos[id]).filter((p): p is ProductoId => !!p);
+    if (!prods.length) return { ...base, aviso: 'no lo encontré en Shopify: buscá las ventas a mano' };
+    const avisos: string[] = [];
+    if (prods.length > 1) avisos.push(`está en ${prods.length} productos de Shopify`);
+    let variantes: { v: VarianteId; todos: boolean }[] = [];
+    for (const p of prods) {
+      const marca = marcaDe(p.vendor);
+      const conv = !x.talle ? { error: 'no sé de qué talle es lo que falta' }
+        : marca ? talleEnShopify(marca, x.talle, x.codigo, p.etiquetas, x.descripcion) : { talle: normTalleProv(x.talle) };
+      if ('error' in conv) {
+        avisos.push(`${sinTabla(conv.error) ? 'el producto no tiene la etiqueta TABLA DE TALLE' : conv.error}: te muestro las ventas de todos los talles`);
+        variantes.push(...p.variantes.map((v) => ({ v, todos: true })));
+        continue;
+      }
+      base.talleShopify = conv.talle;
+      variantes.push(...p.variantes.filter((v) => igualTalle(v.talle, conv.talle)).map((v) => ({ v, todos: false })));
+    }
+    base.producto = prods.map((p) => p.titulo).join(' / ');
+    if (estado.errorPendientes || !estado.pendientesId) avisos.push(`no pude leer las ventas de iD${estado.errorPendientes ? ` (${estado.errorPendientes})` : ''}`);
+    else {
+      variantes = variantes.filter((a, i) => variantes.findIndex((b) => b.v.id === a.v.id) === i);
+      for (const { v, todos } of variantes) {
+        for (const o of estado.pendientesId[v.id] ?? []) {
+          base.ordenes.push({ nombre: o.nombre, cantidad: o.cantidad, ...(todos ? { talle: v.talle } : {}), ...(o.motivo ? { motivo: o.motivo } : {}) });
+        }
+      }
+    }
+    return avisos.length ? { ...base, aviso: avisos.join('; ') } : base;
+  });
+}
+
+/** El texto para atención al cliente (se copia; la app no lo manda). */
+export function textoNoEntraron(items: NoEntroCarga[], factura: string): string {
+  const lineas = items.map((x) => {
+    const talle = x.talleShopify ? ` talle ${x.talleShopify}` : x.talle ? ` talle iD ${x.talle}` : '';
+    const ventas = x.ordenes.length
+      ? x.ordenes.map((o) => `${o.nombre}${o.talle ? ` (talle ${o.talle})` : ''}${o.cantidad > 1 ? ` ×${o.cantidad}` : ''}${o.motivo ? ` [${o.motivo}]` : ''}`).join(', ')
+      : 'sin ventas pendientes en iD';
+    return `- ${x.codigo} ${x.producto || x.descripcion}${talle} (${x.unidades} u. pedidas, nota ${x.nota}): ${ventas}.${x.aviso ? ` Ojo: ${x.aviso}.` : ''}`;
+  });
+  return [
+    `Productos pedidos a iD que no entraron${factura ? ` (factura ${factura})` : ''}.`,
+    'iD prepara cada nota completa: si no los mandó, posiblemente no tengan stock. Hay que solucionar estas ventas:',
+    ...lineas,
+  ].join('\n');
 }
 
 // ---------------------------------------------------------------------------

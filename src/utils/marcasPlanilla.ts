@@ -176,7 +176,13 @@ export interface ConsejoNota {
   /** Qué hacer con la tarjeta de Trello (la app no la mueve). */
   tarjeta: string;
   falta: { codigo: string; descripcion: string; unidades: number }[];
+  /**
+   * iD: lo pedido que no entró y ya no va a entrar (17-nov-2026, gax: «iD siempre prepara los pedidos completos»).
+   * Talle vacío = no se sabe de qué talle es lo que falta.
+   */
+  noEntro?: NoEntro[];
 }
+export interface NoEntro { codigo: string; descripcion: string; talle: string; unidades: number }
 
 const nombreTipo = { calzado: 'el calzado', indumentaria: 'la indumentaria' } as const;
 const deTipo = { calzado: 'del calzado', indumentaria: 'de la indumentaria' } as const;
@@ -189,17 +195,22 @@ const todoTipo = { calzado: 'todo el calzado', indumentaria: 'toda la indumentar
  * (ver movimientosTarjetas en listasTrello.ts): el texto dice adónde va o dónde quedó.
  * `listaActual` = lista donde está la tarjeta; `listaParcial` = la lista de entregas parciales del tablero.
  */
-export function consejoNota(m: MarcasNota, opts: { listaActual?: string; listaParcial?: string; listaFinal?: string } = {}): ConsejoNota {
+export function consejoNota(m: MarcasNota, opts: {
+  listaActual?: string; listaParcial?: string; listaFinal?: string;
+  /** iD (17-nov-2026): lo que falta de un tipo del que llegó una parte no va a entrar (ver noEntro). */
+  completoPorTipo?: boolean;
+} = {}): ConsejoNota {
   const pedido = m.codigos.reduce((s, c) => s + c.pedido, 0);
   const llegaron = m.codigos.reduce((s, c) => s + c.llegaron, 0);
   const falta = m.codigos.filter((c) => c.llegaron < c.pedido).map((c) => ({ codigo: c.codigo, descripcion: c.descripcion, unidades: c.pedido - c.llegaron }));
   const actual = opts.listaActual || '';
+  const aFinal = actual && actual === opts.listaFinal ? `La tarjeta ya está en «${actual}».`
+    : `Al cerrar la entrega, la app pasa la tarjeta a «${opts.listaFinal || 'FINALIZADO'}».`;
   if (m.completa) {
     return {
       tipo: 'finalizar', corto: '✅ llegó todo: finalizar', falta,
       texto: `✅ Pedido completo: llegó todo (${pedido} u.).`,
-      tarjeta: actual && actual === opts.listaFinal ? `La tarjeta ya está en «${actual}».`
-        : `Al cerrar la entrega, la app pasa la tarjeta a «${opts.listaFinal || 'FINALIZADO'}».`,
+      tarjeta: aFinal,
     };
   }
   if (llegaron <= 0) return { tipo: 'nada', corto: 'todavía no llegó nada', texto: `Todavía no llegó nada de esta nota (${pedido} u.).`, tarjeta: '', falta };
@@ -209,6 +220,18 @@ export function consejoNota(m: MarcasNota, opts: { listaActual?: string; listaPa
     const l = cs.reduce((s, c) => s + c.llegaron, 0);
     return { t, p, l, estado: p <= 0 ? 'no' : l >= p ? 'todo' : l > 0 ? 'parte' : 'nada' };
   }).filter((x) => x.estado !== 'no');
+  // iD prepara cada nota completa, con el calzado y la ropa por separado: si de un tipo llegó una parte, lo que
+  // falta de ese tipo no va a entrar. Un tipo del que no llegó nada todavía puede venir en otra entrega.
+  const noEntro = opts.completoPorTipo ? noEntroDe(m, new Set(tipos.filter((x) => x.estado === 'parte').map((x) => x.t))) : [];
+  const uNo = noEntro.reduce((s, x) => s + x.unidades, 0);
+  const avisoNo = uNo ? ` ⛔ No entraron ${uNo} u. (${[...new Set(noEntro.map((x) => x.codigo))].join(', ')}): iD no las mandó y no van a venir.` : '';
+  if (noEntro.length && tipos.every((x) => x.estado !== 'nada')) {
+    return {
+      tipo: 'finalizar', corto: `⛔ no entraron ${uNo} u.: finalizar`, falta, noEntro,
+      texto: `Entró la nota menos ${uNo} u. que iD no mandó: no van a entrar. Revisá las ventas que las esperan y avisá a atención al cliente.`,
+      tarjeta: aFinal,
+    };
+  }
   let texto: string;
   let corto: string;
   const todo = tipos.find((x) => x.estado === 'todo');
@@ -224,7 +247,26 @@ export function consejoNota(m: MarcasNota, opts: { listaActual?: string; listaPa
   }
   const destino = opts.listaParcial || 'pendientes de indumentaria/calzado';
   const ya = !!actual && !!opts.listaParcial && actual === opts.listaParcial;
-  return { tipo: 'parcial', corto, texto, falta, tarjeta: ya ? `La tarjeta ya está en «${destino}».` : `Al cerrar la entrega, la app pasa la tarjeta a «${destino}».` };
+  return {
+    tipo: 'parcial', corto, texto: texto + avisoNo, falta, ...(noEntro.length ? { noEntro } : {}),
+    tarjeta: ya ? `La tarjeta ya está en «${destino}».` : `Al cerrar la entrega, la app pasa la tarjeta a «${destino}».`,
+  };
+}
+
+/**
+ * Lo que falta de los artículos de esos tipos, por talle. Si los talles pendientes no cierran con lo que falta del
+ * artículo (llegó sin saber de qué talle), va el total del artículo sin talle: nunca se inventa el talle.
+ */
+function noEntroDe(m: MarcasNota, tipos: Set<TipoArticulo>): NoEntro[] {
+  const out: NoEntro[] = [];
+  for (const c of m.codigos) {
+    const falta = c.pedido - c.llegaron;
+    if (!tipos.has(c.tipo) || falta <= 0) continue;
+    const ls = m.pendiente.filter((x) => claveCodigo(x.codigo) === claveCodigo(c.codigo) && x.unidades > 0);
+    if (ls.reduce((s, x) => s + x.unidades, 0) === falta) for (const x of ls) out.push({ codigo: c.codigo, descripcion: c.descripcion, talle: x.talle, unidades: x.unidades });
+    else out.push({ codigo: c.codigo, descripcion: c.descripcion, talle: '', unidades: falta });
+  }
+  return out;
 }
 
 /**
