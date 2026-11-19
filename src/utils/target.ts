@@ -192,9 +192,9 @@ export function marcaTarget(descripcion: string): string | null {
 const TIPOS: { re: RegExp; tipo: string; gramos: number }[] = [
   { re: /^MOCHILA/, tipo: 'Mochila', gramos: 800 },
   { re: /^RINONERA/, tipo: 'Riñonera', gramos: 300 },
+  { re: /^(MATERA|BOLSO MATER[OA])\b/, tipo: 'Bolso Matero', gramos: 500 },
   { re: /^BOLSO/, tipo: 'Bolso', gramos: 800 },
   { re: /^MORRAL/, tipo: 'Morral', gramos: 400 },
-  { re: /^MATERA/, tipo: 'Matera', gramos: 500 },
   { re: /^BILLETERA/, tipo: 'Billetera', gramos: 150 },
   { re: /^(GORRA|CAP)\b/, tipo: 'Gorra', gramos: 150 },
   { re: /^(GORRO|PILUSO|SOMBRERO)\b/, tipo: 'Piluso', gramos: 150 },
@@ -217,7 +217,9 @@ export function tituloTarget(descripcion: string): string {
     .replace(/\bRinonera\b/gi, 'Riñonera')
     // gax (19-nov): «Cap» va como «Gorra» y «Gorro» como «Piluso». Primero el gorro, así la gorra nueva no cambia.
     .replace(/\bGorros\b/gi, 'Pilusos').replace(/\bGorro\b/gi, 'Piluso')
-    .replace(/\bCaps\b/gi, 'Gorras').replace(/\bCap\b/gi, 'Gorra');
+    .replace(/\bCaps\b/gi, 'Gorras').replace(/\bCap\b/gi, 'Gorra')
+    // gax (19-nov): la «Matera» va como «Bolso Matero», como los que ya tiene en la tienda.
+    .replace(/\b(?:Bolsos?\s+)?Materas\b/gi, 'Bolsos Materos').replace(/\b(?:Bolso\s+)?Matera\b/gi, 'Bolso Matero');
 }
 
 /** Lista × 2, sin la bonificación (gax, 19-nov-2026: «siempre por 2 el markup»). */

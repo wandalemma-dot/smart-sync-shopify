@@ -128,6 +128,12 @@ describe('alta de productos de Target', () => {
     expect(tipoTarget('Cap Discovery')?.tipo).toBe('Gorra');
     expect(tipoTarget('Gorro NBA Lakers')?.tipo).toBe('Piluso');
     expect(tipoTarget('Gorra Reebok')?.tipo).toBe('Gorra');
+    // gax (19-nov): Matera → Bolso Matero.
+    expect(tituloTarget('Matera Discovery T2')).toBe('Bolso Matero Discovery T2');
+    expect(tituloTarget('Bolso Matera Trendy')).toBe('Bolso Matero Trendy');
+    expect(tipoTarget('Matera Discovery T2')?.tipo).toBe('Bolso Matero');
+    expect(tipoTarget('Bolso Matero Trendy')?.tipo).toBe('Bolso Matero');
+    expect(tipoTarget('Bolso Discovery')?.tipo).toBe('Bolso');
     expect(precioTarget(49900)).toBe(120800); // sin descuento: costo 49.900 × 2,42 = 120.758 → 120.800
     expect(precioTarget(49900, 30)).toBe(99800); // con 30% la lista × 2 ya deja más del 50%
     expect(precioTarget(49900, 10)).toBe(108700); // costo 44.910 × 2,42 = 108.682,20 → 108.700
