@@ -5,6 +5,7 @@ import ExclusionPedidoId from './ExclusionPedidoId';
 import { entranteDe, textoEntrante } from './utils/entrantesId';
 import { leerEntrantes, type Entrantes } from './utils/leerEntrantes';
 import { fechaAr } from './utils/entregasUi';
+import NumeroPedidoId, { guardarUltimaDescarga, leerUltimaDescarga, type UltimaDescarga } from './NumeroPedidoId';
 import { etiquetarOrdenes, etiquetasPedidoId, hoyArgentina, ordenesAEtiquetar, type ResultadoEtiquetas } from './utils/etiquetaPedidoId';
 
 export default function PedidoId() {
@@ -21,6 +22,9 @@ export default function PedidoId() {
   const [errorEntrantes, setErrorEntrantes] = useState('');
   const [etiquetas, setEtiquetas] = useState<ResultadoEtiquetas & { fecha: string } | null>(null);
   const [etiquetando, setEtiquetando] = useState(false);
+  // Órdenes etiquetadas en la última descarga: ahí va después el número de pedido de iD (19-nov-2026).
+  const [ultima, setUltima] = useState<UltimaDescarga | null>(() => leerUltimaDescarga());
+  const cambiarUltima = (d: UltimaDescarga | null) => { setUltima(d); guardarUltimaDescarga(d); };
   const reset = () => { setEtiquetas(null); setEntrantes(null); setErrorEntrantes(''); setPendientes(null); setPlantilla(null); setOmitidas([]); setRevisado(false); setError(''); setEstado(''); };
   const resultado = useMemo(() => pendientes && plantilla
     ? cruzarPedido(pendientes.lineas, plantilla, pendientes.avisos, pendientes.ordenes, omitidas) : null, [pendientes, plantilla, omitidas]);
@@ -61,7 +65,11 @@ export default function PedidoId() {
     } catch (e: any) { setError(e.message); return; }
     if (!lista.length) return;
     setEtiquetando(true); setEtiquetas(null);
-    try { setEtiquetas({ ...await etiquetarOrdenes(lista, fecha), fecha }); }
+    try {
+      const r = await etiquetarOrdenes(lista, etiquetasPedidoId(fecha));
+      setEtiquetas({ ...r, fecha });
+      if (r.ok.length) cambiarUltima({ fecha, ordenes: lista.filter(o => r.ok.includes(o.orden)) });
+    }
     catch (e: any) { setEtiquetas({ ok: [], fallidas: lista.map(o => ({ orden: o.orden, error: e?.message?.slice(0, 160) || 'error' })), fecha }); }
     finally { setEtiquetando(false); }
   }
@@ -77,7 +85,7 @@ export default function PedidoId() {
   return <section className="glass-panel" style={{ padding: '1.5rem', border: '1px solid #6366f1' }}>
     <h2 style={{ color: '#a5b4fc', marginTop: 0 }}>📋 Armado de pedido iD</h2>
     <p>Órdenes pendientes → revisión por artículo y talle → Excel de iD completo.</p>
-    <p style={{ opacity: .8 }}>Incluye únicamente cantidades pendientes asignadas a iD en órdenes abiertas y pagadas. Excluye etiquetas «pedido id» y «solucionar». Conserva Martínez. No envía pedidos. Al descargar, etiqueta «pedido id» las órdenes que se piden completas.</p>
+    <p style={{ opacity: .8 }}>Incluye únicamente cantidades pendientes asignadas a iD en órdenes abiertas y pagadas. Excluye etiquetas «pedido id» y «solucionar». Conserva Martínez. No envía pedidos. Al descargar, etiqueta «pedido id» y la fecha en las órdenes que se piden completas; después podés sumar el número de pedido de iD.</p>
     <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
       <label className="dropzone" style={{ flex: 1, minWidth: 240 }}>1. Export de órdenes (.csv)
         <input aria-label="Export de órdenes" type="file" accept=".csv" disabled={ocupado} onChange={e => { reset(); setCsv(e.target.files?.[0] || null); }} />
@@ -90,6 +98,7 @@ export default function PedidoId() {
     <button className="btn-primary" style={{ background: '#6366f1', marginTop: 12 }} disabled={!csv || !excel || ocupado} onClick={armar}>{ocupado ? 'Consultando Shopify…' : 'Armar y revisar pedido'}</button>
     <p role="status">{estado}</p>
     {error && <p role="alert" style={{ color: '#fda4af', whiteSpace: 'pre-wrap' }}>{error}</p>}
+    {ultima && !etiquetando && <NumeroPedidoId key={`${ultima.fecha}|${ultima.ordenes.map(o => o.ordenId).join(',')}`} ultima={ultima} onCambio={cambiarUltima} />}
     {resultado && <>
       <h3>{resultado.ordenes} órdenes consultadas · {cantidad} unidades de compra propuestas · {faltantes.length} renglones con faltantes o revisión · {ordenesExcluidas} órdenes con exclusiones</h3>
       {mixtos.length > 0 && <div style={{ background: 'rgba(168,85,247,.17)', border: '1px solid #c084fc', borderRadius: 8, padding: 16, marginBottom: 16 }}>
@@ -145,7 +154,7 @@ export default function PedidoId() {
       </div>}
       <button className="btn-primary" style={{ background: '#6366f1' }} disabled={!revisado || !cantidad || etiquetando} onClick={() => void descargar()}>{etiquetando ? 'Etiquetando órdenes en Shopify…' : aEtiquetar?.etiquetar.length ? `Descargar plantilla y etiquetar ${aEtiquetar.etiquetar.length} orden(es)` : 'Descargar plantilla de pedido iD'}</button>
       {etiquetas && <div role="status" style={{ marginTop: 12 }}>
-        {etiquetas.ok.length > 0 && <p style={{ color: '#86efac', margin: '4px 0' }}>✅ Etiquetadas «pedido id {etiquetas.fecha}»: {etiquetas.ok.join(', ')}.</p>}
+        {etiquetas.ok.length > 0 && <p style={{ color: '#86efac', margin: '4px 0' }}>✅ Etiquetadas «pedido id» y «{etiquetas.fecha}»: {etiquetas.ok.join(', ')}.</p>}
         {etiquetas.sinPermiso
           ? <p role="alert" style={{ color: '#fda4af', margin: '4px 0' }}>No se etiquetó ninguna orden: falta el permiso <strong>write_orders</strong> en la app de Shopify (Configuración → Apps → Desarrollar apps → la app → Admin API). La plantilla se descargó igual; etiquetalas a mano.</p>
           : etiquetas.fallidas.length > 0 && <p role="alert" style={{ color: '#fda4af', margin: '4px 0' }}>No se pudo etiquetar: {etiquetas.fallidas.map(f => `${f.orden} (${f.error})`).join(', ')}. Etiquetalas a mano.</p>}
