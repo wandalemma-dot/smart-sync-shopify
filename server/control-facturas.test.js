@@ -263,6 +263,16 @@ describe('guardado del control de facturas', () => {
     expect(t.recepciones).toEqual({});
   });
 
+  it('Target (19-nov-2026): guarda la empresa que factura y la comparación por neto', async () => {
+    const { fn } = memoria();
+    await aplicar(fn, { proveedor: 'target', accion: 'guardarFactura', factura: { id: 'F-bag-1', numero: '0016-00004005', fecha: '2026-11-12', emisor: 'BAG COMPANY', soloNeto: true, renglones: [] } });
+    await aplicar(fn, { proveedor: 'target', accion: 'guardarFactura', factura: { id: 'F-x', numero: '1', fecha: '2026-11-12', soloNeto: 'si', renglones: [] } });
+    const t = await leerTodo(fn, 'target');
+    expect(t.facturas.find((f) => f.id === 'F-bag-1')).toMatchObject({ emisor: 'BAG COMPANY', soloNeto: true });
+    expect(t.facturas.find((f) => f.id === 'F-x').soloNeto).toBeUndefined();
+    expect((await leerTodo(fn, 'id')).facturas).toEqual([]);
+  });
+
   it('recuerda los adjuntos de Trello revisados y los pedidos de Trello borrados, por proveedor', async () => {
     const { fn } = memoria();
     const adj = 'a'.repeat(24);

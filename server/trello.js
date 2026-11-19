@@ -95,6 +95,11 @@ async function get(ruta, fetchImpl, comoBinario = false) {
 }
 
 const esExcel = (nombre) => /\.(xlsx|xls)$/i.test(String(nombre || ''));
+/**
+ * Target (19-nov-2026): la nota de pedido es un PDF («Detalle de solicitud»). Los PDF que sube la app
+ * («Factura …», «Remito …») no son notas.
+ */
+const esPdfNota = (nombre) => /\.pdf$/i.test(String(nombre || '')) && !/^(factura|remito)\b/i.test(String(nombre || '').trim());
 /** Fecha de creación de la tarjeta: los primeros 8 caracteres del id son un timestamp. */
 export const fechaCreacion = (id) => new Date(parseInt(String(id).slice(0, 8), 16) * 1000).toISOString().slice(0, 10);
 
@@ -127,6 +132,10 @@ export async function listarTarjetas(fetchImpl = fetch) {
       adjuntos: (t.attachments || [])
         .filter((a) => a.isUpload && esExcel(a.name) && RE_ID.test(a.id))
         .map((a) => ({ id: a.id, nombre: String(a.name), bytes: Number(a.bytes) || 0, fecha: String(a.date || '').slice(0, 10) })),
+      // PDF subidos (Target manda la nota de pedido en PDF). Solo los usa Target.
+      pdfs: (t.attachments || [])
+        .filter((a) => a.isUpload && esPdfNota(a.name) && RE_ID.test(a.id))
+        .map((a) => ({ id: a.id, nombre: String(a.name), bytes: Number(a.bytes) || 0, fecha: String(a.date || '').slice(0, 10) })),
       // Lo que no se puede leer como nota (un enlace, un PDF, una foto): solo para avisarlo.
       otrosAdjuntos: (t.attachments || [])
         .filter((a) => !(a.isUpload && esExcel(a.name) && RE_ID.test(a.id)))
@@ -156,6 +165,18 @@ export async function bajarAdjunto(tarjetaId, adjuntoId, fetchImpl = fetch) {
   ]);
   if (!tarjeta || !idTab || tarjeta.idBoard !== idTab) throw error('La tarjeta no es del tablero de compras.', 403);
   const adj = await get(`/cards/${tarjetaId}/attachments/${adjuntoId}?fields=id,name,bytes,isUpload,date`, fetchImpl);
+  if (adj?.isUpload && esPdfNota(adj.name)) {
+    // Target: el PDF va tal cual (el navegador lo pasa a texto). Sin verdes.
+    if (Number(adj.bytes) > MAX_ADJUNTO) throw error('El PDF pesa más de 3 MB: subilo a mano.', 413);
+    const pdf = await get(`/cards/${tarjetaId}/attachments/${adjuntoId}/download/${encodeURIComponent(adj.name)}`, fetchImpl, true);
+    if (pdf.length > MAX_ADJUNTO) throw error('El PDF pesa más de 3 MB: subilo a mano.', 413);
+    if (pdf.subarray(0, 5).toString('latin1') !== '%PDF-') throw error('El adjunto no es un PDF.', 400);
+    return {
+      nombre: String(adj.name), pdf: true, completo: true, verdes: [], origen: { r: 0, c: 0 },
+      fecha: /^\d{4}-\d{2}-\d{2}/.test(String(adj.date || '')) ? String(adj.date).slice(0, 10) : '',
+      datos: pdf.toString('base64'),
+    };
+  }
   if (!adj?.isUpload || !esExcel(adj.name)) throw error('El adjunto no es un Excel subido a la tarjeta.', 400);
   if (Number(adj.bytes) > MAX_DESCARGA) throw error('El Excel pesa más de 25 MB: subilo a mano.', 413);
   const datos = await get(`/cards/${tarjetaId}/attachments/${adjuntoId}/download/${encodeURIComponent(adj.name)}`, fetchImpl, true);

@@ -17,7 +17,9 @@ import {
   analizarFacturas, claveCodigo, notaDisponible, claveRecepcion, huellaPedido, compararRecepcion, fmt, mailPagos, mensajePagos, reporteReclamo, resumenPedidos,
   type ControlRenglon, type CopiaPlanilla, type Factura, type Pedido, type Recepcion, type Remito, type ResultadoFactura, type ResultadoGeneral,
 } from './utils/controlFacturas';
-import { leerFacturaDistrinando, leerFacturaId, leerPedidoAuto, leerTextoRemito, textoRemito, type HojaMarcada, type ItemPdf } from './utils/lectoresFacturas';
+import { filasPdf, leerFacturaDistrinando, leerFacturaId, leerPedidoAuto, leerTextoRemito, textoRemito, type HojaMarcada, type ItemPdf } from './utils/lectoresFacturas';
+import { esPedidoTarget, facturaTargetDeFoto, leerPedidoTarget, type FacturaFoto } from './utils/target';
+import { planCargaTarget } from './utils/cargaTarget';
 import { celdasVerdes, hojaVisible } from './utils/planillaVerde';
 import { consejoNota, fusionarPlanilla, marcasDeNota, type ConsejoNota, type MarcasNota, type NoEntro } from './utils/marcasPlanilla';
 import { conEstadoTrello, estadosTarjetas, listaDeParciales, listaFinalizado, listasDePendientes, movimientosTarjetas, tarjetaDeNota, type EstadoTarjeta, type ListaTrello } from './utils/listasTrello';
@@ -39,7 +41,7 @@ import {
   anotarEnPlanilla, comentarEnTrello, moverEnTrello, probarPlanilla,
 } from './utils/entregasUi';
 
-type Prov = 'distrinando' | 'id' | 'family';
+type Prov = 'distrinando' | 'id' | 'family' | 'target';
 type PedidoGuardado = Pedido & { nroProveedor?: string; origen?: string; enlace?: string };
 type RecepcionGuardada = Recepcion & { nota?: string; actualizado?: string };
 interface Datos {
@@ -73,11 +75,12 @@ const VACIO: Datos = { pedidos: [], facturas: [], asignaciones: {}, recepciones:
 const PROVS: { id: Prov; nombre: string }[] = [
   { id: 'id', nombre: 'iD (Converse, Le Coq)' },
   { id: 'distrinando', nombre: 'Distrinando (Reebok, Kappa, Crocs)' },
+  { id: 'target', nombre: 'Target (Discovery, Reebok, NBA…)' },
   { id: 'family', nombre: 'Family (sin factura)' },
 ];
 type Vista = 'entregas' | 'pedidos' | 'deposito' | 'reportes';
 interface AdjuntoTrello { id: string; nombre: string; fecha?: string }
-interface TarjetaTrello { id: string; nombre: string; enlace: string; lista: string; idLista?: string; creada: string; inicio: string; adjuntos: AdjuntoTrello[]; otrosAdjuntos?: string[] }
+interface TarjetaTrello { id: string; nombre: string; enlace: string; lista: string; idLista?: string; creada: string; inicio: string; adjuntos: AdjuntoTrello[]; otrosAdjuntos?: string[]; /** PDF subidos (Target). */ pdfs?: AdjuntoTrello[] }
 type EstadoTrello = 'cargada' | 'ya estaba' | 'borrada' | 'otra' | 'ilegible' | 'no es excel' | 'falla';
 /** Qué pasó con cada Excel de Trello en la última búsqueda (se muestra en la entrega). */
 interface FilaTrello {
@@ -112,7 +115,7 @@ const enlaceTrello = (p?: PedidoGuardado) => {
 };
 
 /** Excel bajado de Trello: los datos y lo pintado en verde (leído del archivo original en el servidor). */
-interface Bajado { buf: ArrayBuffer; nombre: string; fecha: string; completo: boolean; verdes: Set<string>; origen: { r: number; c: number } }
+interface Bajado { buf: ArrayBuffer; nombre: string; fecha: string; completo: boolean; verdes: Set<string>; origen: { r: number; c: number }; /** Target: es un PDF. */ pdf?: boolean }
 
 async function bajarAdjunto(tarjeta: string, adjunto: string): Promise<Bajado> {
   const r = await fetch(`/api/trello?accion=adjunto&tarjeta=${tarjeta}&adjunto=${adjunto}`, { cache: 'no-store' });
@@ -122,7 +125,7 @@ async function bajarAdjunto(tarjeta: string, adjunto: string): Promise<Bajado> {
   const buf = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
   return {
-    buf: buf.buffer, nombre: String(d.nombre || ''), fecha: String(d.fecha || ''), completo: d.completo !== false,
+    buf: buf.buffer, nombre: String(d.nombre || ''), fecha: String(d.fecha || ''), completo: d.completo !== false, pdf: d.pdf === true,
     verdes: new Set(Array.isArray(d.verdes) ? d.verdes.map(String) : []),
     origen: d.origen && Number.isInteger(d.origen.r) && Number.isInteger(d.origen.c) ? d.origen : { r: 0, c: 0 },
   };
@@ -157,19 +160,52 @@ function semaforoDe(r: ResultadoFactura, naranja?: boolean) {
   return naranja && r.semaforo === 'reclamar' ? { ...s, icono: '🟠', color: NARANJA } : s;
 }
 
+interface PaginaPdf {
+  getTextContent(): Promise<{ items: ItemPdf[] }>;
+  getViewport(o: { scale: number }): { width: number; height: number };
+  render(o: { canvasContext: CanvasRenderingContext2D; viewport: { width: number; height: number } }): { promise: Promise<void> };
+}
 interface PdfJs {
   GlobalWorkerOptions: { workerSrc: string };
-  getDocument(o: { data: ArrayBuffer }): { promise: Promise<{ numPages: number; getPage(i: number): Promise<{ getTextContent(): Promise<{ items: ItemPdf[] }> }> }> };
+  getDocument(o: { data: ArrayBuffer }): { promise: Promise<{ numPages: number; getPage(i: number): Promise<PaginaPdf> }> };
 }
 
-async function itemsPdf(file: File): Promise<ItemPdf[][]> {
+async function abrirPdf(datos: File | ArrayBuffer) {
   const pdfjsLib = (window as unknown as { pdfjsLib?: PdfJs }).pdfjsLib;
   if (!pdfjsLib) throw new Error('No cargó el lector de PDF. Refrescá la página con Ctrl+Shift+R.');
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
-  const pdf = await pdfjsLib.getDocument({ data: await file.arrayBuffer() }).promise;
+  // pdf.js se queda con el ArrayBuffer (lo pasa al worker): se le da una copia.
+  return pdfjsLib.getDocument({ data: datos instanceof ArrayBuffer ? datos.slice(0) : await datos.arrayBuffer() }).promise;
+}
+async function itemsPdf(datos: File | ArrayBuffer): Promise<ItemPdf[][]> {
+  const pdf = await abrirPdf(datos);
   const paginas: ItemPdf[][] = [];
   for (let i = 1; i <= pdf.numPages; i++) paginas.push((await (await pdf.getPage(i)).getTextContent()).items);
   return paginas;
+}
+/** Target: el texto del PDF renglón por renglón (para la nota de pedido «Detalle de solicitud»). */
+async function lineasPdf(datos: File | ArrayBuffer): Promise<string[]> {
+  return (await itemsPdf(datos)).flatMap((p) => filasPdf(p).map((f) => f.map((c) => c.s).join(' ')));
+}
+const esPdf = (f: File) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name);
+/** Target: una factura en PDF escaneado se pasa a fotos (una por página, hasta 5) para leerla como las fotos. */
+async function comoFotos(files: File[]): Promise<File[]> {
+  const out: File[] = [];
+  for (const f of files) {
+    if (!esPdf(f)) { out.push(f); continue; }
+    const pdf = await abrirPdf(f);
+    for (let i = 1; i <= Math.min(pdf.numPages, 5); i++) {
+      const pag = await pdf.getPage(i);
+      const vista = pag.getViewport({ scale: 2 });
+      const canvas = document.createElement('canvas');
+      canvas.width = vista.width; canvas.height = vista.height;
+      await pag.render({ canvasContext: canvas.getContext('2d')!, viewport: vista }).promise;
+      const blob = await new Promise<Blob | null>((ok) => canvas.toBlob(ok, 'image/jpeg', 0.85));
+      if (!blob) throw new Error(`No pude leer la página ${i} de ${f.name}.`);
+      out.push(new File([blob], `${f.name.replace(/\.pdf$/i, '')} pág ${i}.jpg`, { type: 'image/jpeg' }));
+    }
+  }
+  return out;
 }
 
 const api = (body?: object, proveedor?: Prov) => apiControl(body, proveedor);
@@ -209,7 +245,7 @@ function noEntroDeEntrega(facturaId: string, d: Datos, p: Prov): (NoEntro & { no
 function analizarControl(ctrl: (Pedido & { archivada?: boolean })[], d: Datos, p: Prov) {
   const res = analizarFacturas(ctrl, d.facturas, d.asignaciones, d.remitos);
   if (!ctrl.some((x) => x.archivada)) return res;
-  const cargaEnt = p === 'id' || p === 'distrinando';
+  const cargaEnt = p === 'id' || p === 'distrinando' || p === 'target';
   const abiertas = new Set(res.facturas.filter((r) => !(cargaEnt
     && entregaArchivada(r, estadoCargaFactura(r, d.cargas ?? {}, d.noLlego), d.archivo?.[r.factura.id]?.estado))).map((r) => r.factura.id));
   return analizarFacturas(ctrl, d.facturas, d.asignaciones, d.remitos, abiertas);
@@ -248,6 +284,8 @@ export default function ControlFacturas() {
   const [condiciones, setCondiciones] = useState('');
   const [ocupado, setOcupado] = useState('');
   const [nuevaFactura, setNuevaFactura] = useState<File | null>(null);
+  // Target: la factura llega en fotos (o en PDF escaneado), una o varias.
+  const [fotosFactura, setFotosFactura] = useState<File[]>([]);
   const [nuevasFotos, setNuevasFotos] = useState<File[]>([]);
   const [informe, setInforme] = useState<InformeTrello | null>(null);
   // Listas del tablero de Trello (para elegir de cuáles salen las notas). null = todavía no se leyeron.
@@ -260,9 +298,12 @@ export default function ControlFacturas() {
   /** La factura y las fotos del remito que se subieron en esta pantalla, para mandarlas a Trello sin elegirlas de nuevo. */
   const archivosEntrega = useRef(new Map<string, File[]>());
   const [, setRecordados] = useState(0);
+  /** Target: las fotos de la factura (van a Trello como «Factura …», no como remito). */
+  const fotosDeFactura = useRef(new WeakSet<File>());
+  const esFotoFactura = (f: File) => fotosDeFactura.current.has(f);
   const recordar = (facturaId: string, files: File[], reemplazarFotos: boolean) => {
     const antes = archivosEntrega.current.get(facturaId) ?? [];
-    const quedan = reemplazarFotos ? antes.filter((f) => f.type === 'application/pdf' || /\.pdf$/i.test(f.name)) : [];
+    const quedan = reemplazarFotos ? antes.filter((f) => esPdf(f) || esFotoFactura(f)) : [];
     archivosEntrega.current.set(facturaId, [...quedan, ...files]);
     setRecordados((n) => n + 1);
   };
@@ -381,7 +422,7 @@ export default function ControlFacturas() {
       const resF = analizarControl(ctrl, frescos, p);
       const rf = resF.facturas.find((x) => x.factura.id === facturaId);
       if (!rf) return [];
-      const carga = p === 'id' || p === 'distrinando' ? estadoCargaFactura(rf, frescos.cargas ?? {}, frescos.noLlego) : null;
+      const carga = p === 'id' || p === 'distrinando' || p === 'target' ? estadoCargaFactura(rf, frescos.cargas ?? {}, frescos.noLlego) : null;
       const cerrada = entregaArchivada(rf, carga, frescos.archivo?.[facturaId]?.estado);
       const pend = listasDePendientes(listas, frescos.listasTrello);
       const consejosDe = (tarjeta: string) => ctrl.filter((x) => tarjetaDeNota(x) === tarjeta).map((x) => {
@@ -432,15 +473,24 @@ export default function ControlFacturas() {
   }
 
   /** Lee un Excel de pedido. Devuelve el pedido listo para guardar, o por qué no se carga. */
-  function prepararPedido(buf: ArrayBuffer, archivo: string, fecha: string, extra: { id?: string; nombre?: string; origen: string; enlace?: string; copia?: CopiaPlanilla; bajado?: Bajado },
+  function prepararPedido(buf: ArrayBuffer, archivo: string, fecha: string, extra: { id?: string; nombre?: string; origen: string; enlace?: string; copia?: CopiaPlanilla; bajado?: Bajado; lineasPdf?: string[] },
     existentes: PedidoGuardado[]): { pedido?: PedidoGuardado; mensajes: string[]; descartado?: string; repetidoId?: string; leido?: { lineas: PedidoGuardado['lineas']; nroProveedor?: string } } {
-    // Lo pintado en verde ya entró: la fecha es la de la copia (en Trello) o la de hoy (subida a mano).
-    const { filas, hoja } = leerHoja(buf, extra.copia?.fecha || hoyAr(), extra.bajado);
     const nombre = extra.nombre || archivo.replace(/\.[^.]+$/, '');
-    const r = leerPedidoAuto(filas, '', nombre, fecha, hoja);
-    if (r.proveedor !== prov) {
-      const otro = r.proveedor === 'id' ? 'iD' : 'Distrinando';
-      return { mensajes: [`${archivo}: parece de ${otro}; cambiá el proveedor arriba.`], descartado: `es un pedido de ${otro}` };
+    let r: { pedido: Omit<Pedido, 'id'>; nroProveedor: string; fechaArchivo: string; avisos: string[] };
+    if (prov === 'target') {
+      // Target (19-nov-2026): la nota es el PDF «Detalle de solicitud» de su web.
+      if (!extra.lineasPdf) return { mensajes: [`${archivo}: la nota de Target es el PDF «Detalle de solicitud».`], descartado: 'no es un PDF' };
+      if (!esPedidoTarget(extra.lineasPdf)) return { mensajes: [`${archivo}: no es una nota de pedido de Target («Detalle de solicitud»).`], descartado: 'no es una nota de pedido de Target' };
+      r = leerPedidoTarget(extra.lineasPdf, nombre, fecha);
+    } else {
+      // Lo pintado en verde ya entró: la fecha es la de la copia (en Trello) o la de hoy (subida a mano).
+      const { filas, hoja } = leerHoja(buf, extra.copia?.fecha || hoyAr(), extra.bajado);
+      const auto = leerPedidoAuto(filas, '', nombre, fecha, hoja);
+      if (auto.proveedor !== prov) {
+        const otro = auto.proveedor === 'id' ? 'iD' : 'Distrinando';
+        return { mensajes: [`${archivo}: parece de ${otro}; cambiá el proveedor arriba.`], descartado: `es un pedido de ${otro}` };
+      }
+      r = auto;
     }
     if (!r.pedido.lineas.length) return { mensajes: [`${archivo}: no tiene cantidades pedidas.`], descartado: 'no tiene cantidades pedidas' };
     // iD trae la fecha de la nota en la fila 1; si no, la que se eligió (o la de la tarjeta).
@@ -473,7 +523,9 @@ export default function ControlFacturas() {
       const existentes = [...frescos.pedidos];
       for (const file of files) {
         try {
-          const r = prepararPedido(await file.arrayBuffer(), file.name, fecha, { origen: 'manual' }, existentes);
+          const buf = await file.arrayBuffer();
+          const lineas = p === 'target' && esPdf(file) ? await lineasPdf(buf) : undefined;
+          const r = prepararPedido(buf, file.name, fecha, { origen: 'manual', lineasPdf: lineas }, existentes);
           if (r.pedido) { await api({ proveedor: p, accion: 'guardarPedido', pedido: r.pedido }); existentes.push(r.pedido); asignar.push(r.pedido.id); }
           else if (paraFactura && r.repetidoId) asignar.push(r.repetidoId); // ya estaba cargada: igual se asocia a esta factura
           nuevos.push(...r.mensajes);
@@ -514,7 +566,8 @@ export default function ControlFacturas() {
       const r = await fetch('/api/trello?accion=tarjetas', { cache: 'no-store' });
       const d = await r.json().catch(() => ({}));
       if (!r.ok) throw new Error(d.sinTrello ? 'Trello no está conectado (faltan las claves en Vercel).' : d.error || `Error ${r.status}`);
-      const todas = (d.tarjetas || []) as TarjetaTrello[];
+      // Target: la nota es un PDF; el resto de los proveedores, Excel.
+      const todas = ((d.tarjetas || []) as TarjetaTrello[]).map((t) => (prov === 'target' ? { ...t, adjuntos: t.pdfs ?? [], otrosAdjuntos: [] } : t));
       const listas = (d.listas || []) as ListaTrello[];
       setListasTablero(listas);
       const deLista = listasDePendientes(listas, frescos.listasTrello);
@@ -627,7 +680,8 @@ export default function ControlFacturas() {
             try {
               let res: ReturnType<typeof prepararPedido>;
               try {
-                res = prepararPedido(bajado.buf, a.nombre, t.inicio || t.creada, { id: `T-${a.id}`, nombre: t.nombre, origen: `trello:${t.id}`, enlace: t.enlace, copia, bajado }, existentes);
+                const lineas = bajado.pdf ? await lineasPdf(bajado.buf) : undefined;
+                res = prepararPedido(bajado.buf, a.nombre, t.inicio || t.creada, { id: `T-${a.id}`, nombre: t.nombre, origen: `trello:${t.id}`, enlace: t.enlace, copia, bajado, lineasPdf: lineas }, existentes);
               } catch (e) { res = { mensajes: [], descartado: `no es un pedido (${mensaje(e)})` }; }
               const leido = res.pedido || res.leido;
               leidas = leido ? deLaFactura(leido.lineas) : 0;
@@ -798,7 +852,7 @@ export default function ControlFacturas() {
     setOcupado('Busco los artículos en Shopify para armar la carga…');
     try {
       const d = await api(undefined, p);
-      const dis = p === 'distrinando';
+      const dis = p === 'distrinando' || p === 'target';
       // iD: lo que no entró de las notas de esta entrega (17-nov-2026, gax). Se leen también esos productos para
       // mostrar las ventas que lo esperan.
       const faltan = dis ? [] : noEntroDeEntrega(r.factura.id, d, p);
@@ -819,6 +873,13 @@ export default function ControlFacturas() {
   function rearmar() {
     const b = baseCarga.current;
     if (!b) return;
+    if (b.prov === 'target') {
+      // Target: sin talles; la cantidad escrita a mano va en «u.».
+      const cant = new Map<string, number>();
+      for (const [c, x] of b.cantidades) if (x['u.'] !== undefined) cant.set(c, x['u.']);
+      setPlanCarga({ ...planCargaTarget(b.r, b.estado, b.cargas, cant), quitados: [...b.quitados] });
+      return;
+    }
     setPlanCarga(b.prov === 'distrinando'
       ? { ...planCargaDistrinando(b.r, b.estado, b.cargas, b.pedidos, new Map(b.tablas), new Map(b.cantidades), new Map(b.destinos), new Map(b.skus)), quitados: [...b.quitados] }
       : { ...planCargaId(b.r, b.estado, b.cargas, new Map(b.modos), new Map(b.cantidades), new Map(b.packs), new Map(b.tablas), new Map(b.destinos)), quitados: [...b.quitados],
@@ -931,7 +992,7 @@ export default function ControlFacturas() {
     setOcupado('Subiendo a Trello…');
     const hechos: string[] = [];
     try {
-      const archivos = await archivosParaTrello(files, r.factura.numero, r.remito?.numero || r.factura.remito || '');
+      const archivos = await archivosParaTrello(files, r.factura.numero, r.remito?.numero || r.factura.remito || '', esFotoFactura);
       for (const [i, t] of tarjetas.entries()) {
         const subidos: string[] = [], ya: string[] = [];
         for (const a of archivos) { const x = await adjuntarATrello(t, a); (x.yaEstaba ? ya : subidos).push(x.nombre); }
@@ -1028,7 +1089,7 @@ export default function ControlFacturas() {
     const files = archivosEntrega.current.get(r.factura.id) ?? [];
     let archivos: Awaited<ReturnType<typeof archivosParaTrello>> = [];
     if (files.length) {
-      try { archivos = await archivosParaTrello(files, r.factura.numero, r.remito?.numero || r.factura.remito || ''); }
+      try { archivos = await archivosParaTrello(files, r.factura.numero, r.remito?.numero || r.factura.remito || '', esFotoFactura); }
       catch (e) { hechos.push(`Trello: no pude preparar la factura y las fotos del remito (${mensaje(e)}). Subilas con «📎 Subir factura y remito a Trello».`); }
     } else hechos.push('Trello: la factura y las fotos del remito no se subieron porque no están en esta pantalla (se recargó la página). Subilas con «📎 Subir factura y remito a Trello».');
     for (const t of tarjetas) {
@@ -1067,18 +1128,30 @@ export default function ControlFacturas() {
 
   /** Nueva entrega: factura (PDF) + fotos del remito. La nota de pedido se busca sola en Trello. */
   async function controlarEntrega() {
-    if (!nuevaFactura) return;
     const p = prov;
+    const archivosFactura = p === 'target' ? fotosFactura : nuevaFactura ? [nuevaFactura] : [];
+    if (!archivosFactura.length) return;
+    const nombreArchivo = archivosFactura.map((f) => f.name).join(', ');
     const nuevos: string[] = [];
     let factura: Factura;
     let av: string[];
-    setOcupado('Leyendo la factura…');
+    let paraTrello = archivosFactura;
+    setOcupado(p === 'target' ? 'Leyendo la foto de la factura… (puede tardar un minuto)' : 'Leyendo la factura…');
     try {
-      const paginas = await itemsPdf(nuevaFactura);
-      const leida = p === 'id' ? leerFacturaId(paginas, '') : leerFacturaDistrinando(paginas, '');
-      factura = { ...leida.factura, id: `F-${slug(leida.factura.numero || nuevaFactura.name)}` };
-      av = leida.avisos;
-    } catch (e) { setAvisos([`${nuevaFactura.name}: ${mensaje(e)}`]); return; }
+      if (p === 'target') {
+        // Target (19-nov-2026): la factura llega en fotos; se lee como el remito y se controlan sus cuentas.
+        paraTrello = await comoFotos(archivosFactura);
+        const leida = facturaTargetDeFoto(await leerFotos<FacturaFoto>(paraTrello, 'factura'));
+        if (!leida.factura.numero) throw new Error('no encontré el número de la factura en la foto.');
+        factura = { ...leida.factura, id: `F-${slug(leida.factura.emisor || 'target')}-${slug(leida.factura.numero)}` };
+        av = leida.avisos;
+      } else {
+        const paginas = await itemsPdf(archivosFactura[0]);
+        const leida = p === 'id' ? leerFacturaId(paginas, '') : leerFacturaDistrinando(paginas, '');
+        factura = { ...leida.factura, id: `F-${slug(leida.factura.numero || archivosFactura[0].name)}` };
+        av = leida.avisos;
+      }
+    } catch (e) { setAvisos([`${nombreArchivo}: ${mensaje(e)}`]); return; }
     finally { setOcupado(''); }
     if (!sigue(p)) return;
     const { avisos: deTrello, informe: inf } = await sincronizarTrello({ factura, profunda: 'si-falta' });
@@ -1087,12 +1160,13 @@ export default function ControlFacturas() {
     try {
       const ya = datos.facturas.some((f) => f.id === factura.id);
       await api({ proveedor: p, accion: 'guardarFactura', factura });
-      nuevos.push(`Factura ${factura.numero} ${ya ? 'actualizada (ya estaba cargada)' : 'guardada'}: ${factura.renglones.length} renglones.`, ...av);
-    } catch (e) { setAvisos([`${nuevaFactura.name}: ${mensaje(e)}`]); return; }
-    recordar(factura.id, [nuevaFactura, ...nuevasFotos], false);
+      nuevos.push(`Factura ${factura.emisor ? `${factura.emisor} ` : ''}${factura.numero} ${ya ? 'actualizada (ya estaba cargada)' : 'guardada'}: ${factura.renglones.length} renglones.`, ...av);
+    } catch (e) { setAvisos([`${nombreArchivo}: ${mensaje(e)}`]); return; }
+    if (p === 'target') for (const f of paraTrello) fotosDeFactura.current.add(f);
+    recordar(factura.id, [...paraTrello, ...nuevasFotos], false);
     if (nuevasFotos.length) nuevos.push(...await remitoDeFotos(factura.id, nuevasFotos));
     if (!sigue(p)) return;
-    setNuevaFactura(null); setNuevasFotos([]);
+    setNuevaFactura(null); setFotosFactura([]); setNuevasFotos([]);
     await recargar();
     setAvisos([...nuevos, ...deTrello]);
     setAbierta(factura.id);
@@ -1134,15 +1208,16 @@ export default function ControlFacturas() {
   const excelTrello = Object.entries(datos.trelloVistos).filter(([k]) => /^[a-f0-9]{24}$/.test(k)).map(([, v]) => v);
   const facturasRes = [...res.facturas].reverse();
   // Entregas con la carga terminada: van al apartado verde (14-nov-2026, gax: «que quede como en archivadas»).
-  const cargaEnt = prov === 'id' || prov === 'distrinando';
+  const cargaEnt = prov === 'id' || prov === 'distrinando' || prov === 'target';
+  const hayFactura = prov === 'target' ? fotosFactura.length > 0 : !!nuevaFactura;
   const esCerrada = (r: ResultadoFactura) => cargaEnt && planCarga?.entregaId !== r.factura.id
     && entregaArchivada(r, estadoCargaFactura(r, datos.cargas ?? {}, datos.noLlego), datos.archivo?.[r.factura.id]?.estado);
   const cerradasEnt = facturasRes.filter(esCerrada);
   const abiertas = facturasRes.filter((r) => !esCerrada(r));
-  const tarjeta = (r: ResultadoFactura) => <TarjetaEntrega key={r.factura.id} r={r} naranja={prov === 'id'} abierta={abierta === r.factura.id}
+  const tarjeta = (r: ResultadoFactura) => <TarjetaEntrega key={r.factura.id} r={r} naranja={prov === 'id' || prov === 'target'} abierta={abierta === r.factura.id}
       onAbrir={() => setAbierta(abierta === r.factura.id ? null : r.factura.id)} pedidos={pedidosOrd} cerradas={cerradas} nombrePedido={nombrePedido}
       manual={datos.asignaciones[r.factura.id] || []} condiciones={condiciones} ocupado={!!ocupado}
-      mailsAdmin={datos.mailsAdmin ?? { para: [], copia: [] }} proveedor={prov === 'distrinando' ? 'Distrinando' : 'ID'}
+      mailsAdmin={datos.mailsAdmin ?? { para: [], copia: [] }} proveedor={prov === 'distrinando' ? 'Distrinando' : prov === 'target' ? 'Target' : 'ID'}
       onAsignar={async (ids) => { const p = prov; if (await guardar({ accion: 'guardarAsignacion', facturaId: r.factura.id, pedidos: ids })) await avanzarYAvisar(p, r.factura.id); }}
       onBorrar={() => confirm(`¿Borrar la entrega de la factura ${r.factura.numero}? Se borran también el remito y lo que contó el depósito.`) && guardar({ accion: 'borrarFactura', id: r.factura.id })}
       onDeposito={() => { setFacturaDeposito(r.factura.id); setVista('deposito'); }}
@@ -1153,18 +1228,18 @@ export default function ControlFacturas() {
       onTrello={() => buscarEnTrelloParaFactura(r.factura)} recordados={archivosEntrega.current.get(r.factura.id)?.length ?? 0}
       onSubirTrello={(f) => subirATrello(r, f)} res={res} todas={pedidosControl} consejos={consejos}
       informe={informe?.prov === prov && informe.facturaId === r.factura.id ? informe : null} onRecargarBorrada={recargarBorrada}
-      carga={prov === 'id' || prov === 'distrinando' ? {
+      carga={cargaEnt ? {
         cargas: datos.cargas ?? {}, noLlego: datos.noLlego ?? {}, plan: planCarga?.entregaId === r.factura.id ? planCarga : null,
         cerrada: esCerrada(r), onArchivar: (estado) => archivar(r, estado),
         onQuitar: (codigo, quitar) => quitarArticulo(r.factura.id, codigo, quitar),
         onArmar: () => armarCarga(r), onConfirmar: (e) => planCarga && confirmarCarga(r, planCarga, e),
         onCancelar: () => setPlanCarga(null), onLiberar: (codigo, c) => liberarCarga(r.factura.id, codigo, c), onCantidad: cantidadCarga,
-        ...(prov === 'id' ? { onModoVenta: modoVenta, onPack: packCarga, onTabla: tablaCarga, onTalleId: destinoCarga, explicacion: EXPLICA_ID } : {
+        ...(prov === 'id' ? { onModoVenta: modoVenta, onPack: packCarga, onTabla: tablaCarga, onTalleId: destinoCarga, explicacion: EXPLICA_ID } : prov === 'target' ? { explicacion: EXPLICA_TARGET } : {
           onTabla: tablaCarga, onDestino: destinoCarga, onSku: skuCarga, onQuitarTalle: quitarTalle,
           onMailSolo: () => planCarga && armarMailTalles(r, planCarga, [], prov), explicacion: EXPLICA_DISTRINANDO,
         }),
       } : undefined} />;
-  const cambiarProv = (p: Prov) => { setResultadoCarga(null); setAvisoAdmin(null); setPlanCarga(null); setAvisoPrecio(null); setAvisoTalles(null); setOrdenesCarga([]); setNoEntraronCarga(null); setVerRegistro(false); provRef.current = p; setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setNuevasFotos([]); };
+  const cambiarProv = (p: Prov) => { setResultadoCarga(null); setAvisoAdmin(null); setPlanCarga(null); setAvisoPrecio(null); setAvisoTalles(null); setOrdenesCarga([]); setNoEntraronCarga(null); setVerRegistro(false); provRef.current = p; setProv(p); setAvisos([]); setInforme(null); setAbierta(null); setFacturaDeposito(''); setVista('entregas'); setNuevaFactura(null); setFotosFactura([]); setNuevasFotos([]); };
 
   const cabecera = (<>
     <div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', alignItems: 'center', marginBottom: 8 }}>
@@ -1228,12 +1303,15 @@ export default function ControlFacturas() {
           <div style={{ border: '1px solid rgba(99,102,241,0.55)', borderRadius: 10, padding: '12px 14px', background: 'rgba(99,102,241,0.08)', marginBottom: 16 }}>
             <strong style={{ fontSize: '1rem' }}>Nueva entrega</strong>
             <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
-              <Archivo etiqueta="1 · 🧾 Factura (PDF)" accept=".pdf" disabled={!!ocupado} onArchivos={(f) => setNuevaFactura(f[0])} />
-              <span style={{ fontSize: '0.82rem', opacity: nuevaFactura ? 1 : 0.5 }}>{nuevaFactura ? `✔ ${nuevaFactura.name}` : 'sin elegir'}</span>
+              {prov === 'target'
+                ? <><Archivo etiqueta="1 · 🧾 Foto de la factura" accept="image/*,.pdf" multiple disabled={!!ocupado} onArchivos={(f) => setFotosFactura(f)} />
+                  <span style={{ fontSize: '0.82rem', opacity: fotosFactura.length ? 1 : 0.5 }}>{fotosFactura.length ? `✔ ${fotosFactura.length} archivo(s)` : 'sin elegir'}</span></>
+                : <><Archivo etiqueta="1 · 🧾 Factura (PDF)" accept=".pdf" disabled={!!ocupado} onArchivos={(f) => setNuevaFactura(f[0])} />
+                  <span style={{ fontSize: '0.82rem', opacity: nuevaFactura ? 1 : 0.5 }}>{nuevaFactura ? `✔ ${nuevaFactura.name}` : 'sin elegir'}</span></>}
               <Archivo etiqueta="2 · 📷 Foto del remito" accept="image/*" multiple disabled={!!ocupado} onArchivos={(f) => setNuevasFotos(f)} />
               <span style={{ fontSize: '0.82rem', opacity: nuevasFotos.length ? 1 : 0.5 }}>{nuevasFotos.length ? `✔ ${nuevasFotos.length} foto(s)` : 'sin elegir'}</span>
-              <button style={{ ...botonPrincipal, opacity: nuevaFactura && !ocupado ? 1 : 0.5, cursor: nuevaFactura && !ocupado ? 'pointer' : 'not-allowed' }}
-                disabled={!nuevaFactura || !!ocupado} onClick={controlarEntrega}>Controlar</button>
+              <button style={{ ...botonPrincipal, opacity: hayFactura && !ocupado ? 1 : 0.5, cursor: hayFactura && !ocupado ? 'pointer' : 'not-allowed' }}
+                disabled={!hayFactura || !!ocupado} onClick={controlarEntrega}>Controlar</button>
             </div>
             <p style={{ fontSize: '0.8rem', opacity: 0.75, margin: '8px 0 0' }}>
               La nota de pedido la busco sola en Trello. Si no la encuentro, te la pido en la entrega. Primero controlo que el remito traiga lo mismo que la factura; después, que la nota de pedido coincida con lo facturado y lo que llegó. Hasta tener las tres cosas, la entrega queda «incompleta».
@@ -1250,7 +1328,7 @@ export default function ControlFacturas() {
                 <button style={{ ...enlace, margin: '4px 0' }} onClick={() => setVerCerrada(null)}>▴ Achicar</button>
                 {tarjeta(r)}
               </div>
-              : <FilaCerrada key={r.factura.id} r={r} naranja={prov === 'id'} enShopify={estadoCargaFactura(r, datos.cargas ?? {}, datos.noLlego)} manual={datos.archivo?.[r.factura.id]?.estado === 'cerrada'}
+              : <FilaCerrada key={r.factura.id} r={r} naranja={prov === 'id' || prov === 'target'} enShopify={estadoCargaFactura(r, datos.cargas ?? {}, datos.noLlego)} manual={datos.archivo?.[r.factura.id]?.estado === 'cerrada'}
                 ocupado={!!ocupado} onVer={() => setVerCerrada(r.factura.id)} onAbrir={() => archivar(r, 'abierta')} />)}
           </details>}
 
@@ -1271,12 +1349,12 @@ export default function ControlFacturas() {
           <h3 style={{ fontSize: '1rem', marginTop: 0 }}>📋 Notas de pedido cargadas</h3>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginBottom: 6 }}>
             <button style={boton} disabled={!!ocupado} onClick={buscarEnTrello}>🗂️ Buscar notas nuevas en Trello</button>
-            <Archivo etiqueta="➕ Subir nota(s) Excel" accept=".xlsx,.xls" multiple disabled={!!ocupado} onArchivos={(f) => subirPedidos(f, fechaPedido)} />
+            <Archivo etiqueta={prov === 'target' ? '➕ Subir nota(s) PDF' : '➕ Subir nota(s) Excel'} accept={prov === 'target' ? '.pdf' : '.xlsx,.xls'} multiple disabled={!!ocupado} onArchivos={(f) => subirPedidos(f, fechaPedido)} />
             {prov === 'distrinando' && <label style={{ fontSize: '0.85rem' }}>fecha en que se mandó{' '}
               <input type="date" value={fechaPedido} onChange={(e) => setFechaPedido(e.target.value)} style={inputSt} /></label>}
           </div>
           <p style={{ fontSize: '0.78rem', opacity: 0.7, marginTop: 0 }}>
-            {prov === 'id' ? 'La fecha de cada nota sale de la fila 1 del Excel de iD.' : 'Distrinando no trae la fecha en el Excel: poné la del día que lo mandaste.'} La fecha ordena qué nota se factura primero; se puede corregir abajo.
+            {prov === 'id' ? 'La fecha de cada nota sale de la fila 1 del Excel de iD.' : prov === 'target' ? 'La nota de Target es el PDF «Detalle de solicitud»; la fecha sale del PDF.' : 'Distrinando no trae la fecha en el Excel: poné la del día que lo mandaste.'} La fecha ordena qué nota se factura primero; se puede corregir abajo.
           </p>
           <ListasTrelloCaja listas={listasTablero} elegidas={datos.listasTrello} ocupado={!!ocupado} onElegir={elegirListas} />
           <PlanillaCaja />
@@ -1345,6 +1423,7 @@ function estadoRenglon(x: ControlRenglon, nombrePedido: (id: string) => string, 
 
 
 const EXPLICA_ID = 'Lo que llegó (el remito, menos lo que salió para órdenes y lo que ya está vendido en iD, que se separa) se SUMA al stock de Martínez; el stock de iD lo lleva la sincronización. Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (si un talle que llega ya tenía stock, lleva el promedio ponderado), y si el margen no llega al 50% hay que poner un precio nuevo para toda la curva. Lo que viene en packs (X6 en la factura, en el nombre de Shopify o en la lista de packs de la plantilla de iD) se carga por unidad, con el costo dividido. Una zapatilla Converse sin la etiqueta TABLA DE TALLE no se carga hasta que elijas su tabla (mirá la caja): la elegida se agrega a las etiquetas. Los productos que no están en Shopify se crean desde Sincronización.';
+const EXPLICA_TARGET = 'Lo que llegó (el remito) se SUMA al stock de Martínez. Target no trae talles: un producto por código. Los que no están en Shopify se crean (activos y en Point of Sale) con el nombre de la factura (lo podés cambiar), la marca del producto, las etiquetas «Target» y el código, SKU = código, precio = lista × 2 y costo = lista menos la bonificación de esa factura. Los que ya están (con la etiqueta «Target») suman stock y costo nuevo (promedio ponderado si ya había stock); si el precio no llega a la lista × 2 hay que poner uno nuevo.';
 const EXPLICA_DISTRINANDO = 'Lo que llegó (el remito) se SUMA al stock de Martínez. Cada talle US entra en el talle de Shopify que da el SKU del proveedor, el AR que informa la nota o la tabla de talle que elijas; al lado de cada talle podés escribir otro si entró en otro. La tabla elegida se agrega a las etiquetas. Los talles que no existen se crean (SKU del proveedor, precio de la curva, costo de la factura) y los modelos nuevos se crean con precio Reebok (Mayorista × 1,8755, terminado en 999). Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (con stock: promedio ponderado). Por ahora solo Reebok calzado.';
 
 function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, recordados, onSubirTrello, informe, onRecargarBorrada, res, todas, consejos, carga, mailsAdmin, proveedor, naranja }: {
@@ -1409,7 +1488,7 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
   return (
     <div style={{ border: `1px solid ${s.color}66`, borderRadius: 10, padding: '10px 12px', marginBottom: 12, background: `${s.color}0d` }}>
       <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', cursor: 'pointer' }} onClick={onAbrir}>
-        <strong>{abierta ? '▾' : '▸'} Factura {f.numero}</strong>
+        <strong>{abierta ? '▾' : '▸'} Factura {f.emisor ? `${f.emisor} ` : ''}{f.numero}</strong>
         <span style={{ opacity: 0.8, fontSize: '0.85rem' }}>{fechaAr(f.fecha)} · {r.unidades} u. · {fmt(f.total)}{f.vencimiento ? ` · vence ${fechaAr(f.vencimiento)}` : ''}</span>
         <span style={{ color: s.color, fontWeight: 'bold' }}>{s.icono} {s.texto}</span>
       </div>

@@ -18,7 +18,7 @@ export default async function handler(req, res) {
     return res.status(503).json({ error: 'La lectura de fotos no está activada (falta la clave de Anthropic en Vercel). Escribí el remito a mano.', sinClave: true });
   }
   try {
-    const tipo = req.body?.tipo === 'entrega' ? 'entrega' : 'remito';
+    const tipo = ['entrega', 'factura'].includes(req.body?.tipo) ? req.body.tipo : 'remito';
     return res.status(200).json(await leerRemito({ fotos: req.body?.fotos, tipo }));
   } catch (e) {
     if (e && typeof e === 'object' && 'propio' in e) return res.status(400).json({ error: e.message });

@@ -6,7 +6,7 @@
 // remito y la factura de la entrega, para ver después qué se cargó y cuándo.
 // Los archivos se leen en el navegador; acá solo se valida y se guarda el JSON.
 // No toca Shopify: la carga la hace el navegador por /api/shopify, con confirmación.
-export const PROVEEDORES = ['distrinando', 'id', 'family'];
+export const PROVEEDORES = ['distrinando', 'id', 'family', 'target'];
 // «entregas»: planillas de Family (marketplace, sin factura). El resto, factura + remito + nota.
 const TIPOS = ['pedidos', 'facturas', 'asignaciones', 'recepciones', 'remitos', 'entregas'];
 const RE_ID = /^[A-Za-z0-9_.-]{1,80}$/;
@@ -73,6 +73,9 @@ export function limpiarFactura(f) {
     })),
     subtotal: num(f?.subtotal || 0), iva: num(f?.iva || 0), percepcionCaba: num(f?.percepcionCaba || 0),
     percepcionBsAs: num(f?.percepcionBsAs || 0), total: num(f?.total || 0),
+    // Target (19-nov-2026): la empresa del grupo que factura y la comparación de precio por neto.
+    ...(f?.emisor ? { emisor: txt(f.emisor, 40) } : {}),
+    ...(f?.soloNeto === true ? { soloNeto: true } : {}),
   };
 }
 
@@ -155,7 +158,7 @@ export function limpiarEntrega(e) {
 // ---------------------------------------------------------------------------
 // Family desde el 11-nov; iD (Converse/Le Coq, a Martínez) desde el 12-nov-2026.
 // Distrinando (Reebok, a Martínez) desde el 13-nov-2026.
-const CARGAN = ['family', 'id', 'distrinando'];
+const CARGAN = ['family', 'id', 'distrinando', 'target'];
 const RE_COD_CARGA = /^[A-Z0-9][A-Z0-9._/-]{1,79}$/;
 const ESTADOS_CARGA = ['cargada', 'parcial', 'dudosa'];
 const campoCarga = (body) => {

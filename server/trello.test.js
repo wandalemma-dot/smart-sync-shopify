@@ -79,6 +79,33 @@ describe('Trello (solo lectura)', () => {
     await expect(bajarAdjunto('../x', ATT, falso(base))).rejects.toThrow(/inválido/);
   });
 
+  it('Target (19-nov-2026): lista los PDF de nota aparte (no los de factura o remito) y los baja tal cual', async () => {
+    vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
+    const P1 = '1'.repeat(24), P2 = '2'.repeat(24), P3 = '3'.repeat(24);
+    const f = falso({
+      '/boards/RzHl0YNS?': { name: 'COMPRAS Y ENTREGAS' },
+      '/boards/RzHl0YNS/lists': [],
+      '/boards/RzHl0YNS/cards': [{ id: CARD, name: 'TARGET', attachments: [
+        { id: P1, name: 'pedido_46941.pdf', bytes: 100, isUpload: true }, { id: P2, name: 'Factura 0003-00172534.pdf', isUpload: true },
+        { id: P3, name: 'Remito 0009-00084143.pdf', isUpload: true }, { id: ATT, name: 'pedido.xlsx', isUpload: true }] }],
+    });
+    const r = await listarTarjetas(f);
+    expect(r.tarjetas[0].pdfs.map((a) => a.nombre)).toEqual(['pedido_46941.pdf']);
+    expect(r.tarjetas[0].adjuntos.map((a) => a.nombre)).toEqual(['pedido.xlsx']);
+    const base = {
+      [`/boards/RzHl0YNS?`]: { id: BOARD_ID },
+      [`/cards/${CARD}?`]: { idBoard: BOARD_ID },
+      [`/cards/${CARD}/attachments/${P1}/download/`]: '%PDF-1.4 nota',
+      [`/cards/${CARD}/attachments/${P1}?`]: { id: P1, name: 'pedido_46941.pdf', bytes: 13, isUpload: true, date: '2026-11-11T10:00:00.000Z' },
+      [`/cards/${CARD}/attachments/${P2}?`]: { id: P2, name: 'Factura 0003-00172534.pdf', bytes: 13, isUpload: true },
+    };
+    const ok = await bajarAdjunto(CARD, P1, falso(base));
+    expect(ok).toMatchObject({ pdf: true, nombre: 'pedido_46941.pdf', fecha: '2026-11-11', verdes: [] });
+    expect(Buffer.from(ok.datos, 'base64').toString()).toBe('%PDF-1.4 nota');
+    await expect(bajarAdjunto(CARD, P2, falso(base))).rejects.toThrow(/no es un Excel/);
+    await expect(bajarAdjunto(CARD, P1, falso({ ...base, [`/cards/${CARD}/attachments/${P1}/download/`]: 'no soy pdf' }))).rejects.toThrow(/no es un PDF/);
+  });
+
   it('lo pintado en verde se lee del original, también si la planilla pesa más de 3 MB (12-nov-2026)', async () => {
     vi.stubEnv('TRELLO_KEY', 'k'); vi.stubEnv('TRELLO_TOKEN', 't');
     for (const pesada of [false, true]) {
