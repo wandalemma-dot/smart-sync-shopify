@@ -120,6 +120,14 @@ describe('alta de productos de Target', () => {
     expect(tipoTarget('Baston Trecking Discovery')?.tipo).toBe('Bastón de Trekking');
     expect(tipoTarget('Cosa rara')).toBeNull();
     expect(tituloTarget('Baston  Trecking Discovery')).toBe('Bastón Trekking Discovery');
+    // gax (19-nov): Cap → Gorra y Gorro → Piluso, en el título y el tipo.
+    expect(tituloTarget('Cap Discovery')).toBe('Gorra Discovery');
+    expect(tituloTarget('Gorro NBA Lakers')).toBe('Piluso NBA Lakers');
+    expect(tituloTarget('Gorra Reebok')).toBe('Gorra Reebok');
+    expect(tituloTarget('Capa Trendy')).toBe('Capa Trendy');
+    expect(tipoTarget('Cap Discovery')?.tipo).toBe('Gorra');
+    expect(tipoTarget('Gorro NBA Lakers')?.tipo).toBe('Piluso');
+    expect(tipoTarget('Gorra Reebok')?.tipo).toBe('Gorra');
     expect(precioTarget(49900)).toBe(120800); // sin descuento: costo 49.900 × 2,42 = 120.758 → 120.800
     expect(precioTarget(49900, 30)).toBe(99800); // con 30% la lista × 2 ya deja más del 50%
     expect(precioTarget(49900, 10)).toBe(108700); // costo 44.910 × 2,42 = 108.682,20 → 108.700
