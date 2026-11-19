@@ -217,14 +217,37 @@ function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, onTabla, o
       {it.opciones.filter((o) => o.bloqueo && it.opciones.length > 1).map((o) => <div key={o.clave} style={{ opacity: 0.75 }}>· {o.etiqueta}: {o.bloqueo}</div>)}
       {a?.tipo === 'alta' && <div style={{ marginTop: 4 }}>
         Crear producto nuevo: <input value={eleccion?.titulo ?? a.titulo} onChange={(ev) => onElegir({ titulo: ev.target.value })} style={{ ...inputSt, width: 'min(420px, 100%)' }} />
+        {a.precioEditable && <PrecioAlta a={a} precio={eleccion?.precio} disabled={ocupado} onPrecio={(precio) => onElegir({ precio })} />}
         <div style={{ opacity: 0.8, marginTop: 2 }}>
-          {a.vendor ? `Marca ${a.vendor} · ` : ''}Tipo {a.productType} · precio {fmt(a.precio)}{a.lista ? (a.precio > Math.round(a.lista * 2) ? ` (lista ${fmt(a.lista)} × 2 = ${fmt(Math.round(a.lista * 2))} no llega al 50%: subido)` : ` (lista ${fmt(a.lista)} × 2)`) : ''} · costo {fmt(a.costo)}{a.lista && a.bonificacion ? ` (lista − ${a.bonificacion}%)` : ''}{a.lista ? ` · margen ${pct(margenPct(a.precio, a.costo))}` : ''} · {a.variantes.map((v) => `${v.talle === 'Default Title' ? 'sin talle' : v.talle}:${v.cantidad}`).join(' ')} · SKU {a.variantes[0]?.sku}{a.variantes.length > 1 ? '…' : ''} · etiquetas {a.etiquetas.join(', ')}
+          {a.vendor ? `Marca ${a.vendor} · ` : ''}Tipo {a.productType}{a.precioEditable ? '' : ` · precio ${fmt(a.precio)}`}{a.lista ? (a.precio > Math.round(a.lista * 2) ? ` (lista ${fmt(a.lista)} × 2 = ${fmt(Math.round(a.lista * 2))} no llega al 50%: subido)` : ` (lista ${fmt(a.lista)} × 2)`) : ''} · costo {fmt(a.costo)}{a.lista && a.bonificacion ? ` (lista − ${a.bonificacion}%)` : ''}{a.lista ? ` · margen ${pct(margenPct(a.precio, a.costo))}` : ''} · {a.variantes.map((v) => `${v.talle === 'Default Title' ? 'sin talle' : v.talle}:${v.cantidad}`).join(' ')} · SKU {a.variantes[0]?.sku}{a.variantes.length > 1 ? '…' : ''} · etiquetas {a.etiquetas.join(', ')}
         </div>
       </div>}
       {a?.tipo === 'reposicion' && <Reposicion a={a} enFilas={onDestino && onCantidad && it.talles?.length ? it.talles.map((t) => t.destino ?? '') : []} />}
       {a?.tipo === 'reposicion' && a.ajuste && <Ajuste a={a.ajuste} precio={eleccion?.precio} onPrecio={(precio) => onElegir({ precio })} />}
       {op?.avisos.map((x, i) => <div key={i} style={{ color: AMARILLO, marginTop: 6, fontSize: '0.8rem' }}>⚠️ {x}</div>)}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Ullua (19-nov-2026): el precio de venta del producto nuevo es una sugerencia (c/u sin IVA × 2, al 999) y se puede
+ * cambiar antes de crear. Vacío = el sugerido.
+ */
+function PrecioAlta({ a, precio, disabled, onPrecio }: { a: AltaFamily; precio?: number; disabled: boolean; onPrecio: (p: number | undefined) => void }) {
+  const [texto, setTexto] = useState(precio === undefined ? '' : String(precio));
+  const valido = precio !== undefined && Number.isFinite(precio) && precio > 0;
+  const final = valido ? Math.round(precio!) : a.precio;
+  return (
+    <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 4 }}>
+      <span>Precio de venta:</span>
+      <input value={texto} disabled={disabled} inputMode="numeric" placeholder={String(a.precio)}
+        onChange={(ev) => { setTexto(ev.target.value); onPrecio(ev.target.value.trim() ? leerPrecio(ev.target.value) : undefined); }}
+        style={{ ...inputSt, width: 110, borderColor: texto.trim() && !valido ? ROJO : undefined }} />
+      <span style={{ opacity: 0.8 }}>
+        {texto.trim() && !valido ? <span style={{ color: ROJO }}>no es un precio: se usa el sugerido {fmt(a.precio)}</span>
+          : <>sugerido {fmt(a.precio)}{a.precioBase ? ` (c/u sin IVA ${fmt(a.precioBase)} × 2)` : ''} · margen {pct(margenPct(final, a.costo))}</>}
+      </span>
     </div>
   );
 }

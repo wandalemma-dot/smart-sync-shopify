@@ -27,6 +27,26 @@ function memoria() {
   return { db, fn };
 }
 
+describe('Ullua: entregas con remito o factura (19-nov-2026)', () => {
+  it('guarda la entrega con su papel (tipo, número, remito y total) y la carga va en su propia base', async () => {
+    const { fn } = memoria();
+    const entrega = {
+      id: 'E-2026-11-18-u', nombre: 'Factura 0002-00001234', fecha: '2026-11-18', origen: 'foto',
+      renglones: [{ codigo: '364480C', descripcion: 'TH T-SHIRT SKATE MAG', precioMayor: 20000, precioPublico: 0, cantidad: 8, talles: [{ talle: 'S', cantidad: 1 }] }],
+      documento: { tipo: 'factura', numero: '0002-00001234', remito: '7680', total: 258940, extra: 'x' },
+    };
+    await aplicar(fn, { proveedor: 'ullua', accion: 'guardarEntrega', entrega });
+    const t = await leerTodo(fn, 'ullua');
+    expect(t.entregas[0].documento).toEqual({ tipo: 'factura', numero: '0002-00001234', remito: '7680', total: 258940 });
+    expect((await leerTodo(fn, 'family')).entregas).toEqual([]);
+    await aplicar(fn, { proveedor: 'ullua', accion: 'guardarEntrega', entrega: { ...entrega, documento: { tipo: 'otro', numero: 5 } } });
+    expect((await leerTodo(fn, 'ullua')).entregas[0].documento).toEqual({ tipo: 'remito', numero: '5', remito: '', total: 0 });
+    const r = await aplicar(fn, { proveedor: 'ullua', accion: 'reservarCarga', entregaId: entrega.id, codigo: '364480C', firma: '2026-11-18|364480C|8|S:1', detalle: {} });
+    expect(r.ok).toBe(true);
+    expect((await leerTodo(fn, 'ullua')).cargas[`${entrega.id}|364480C`].estado).toBe('en curso');
+  });
+});
+
 describe('Family: entregas sin factura (11-nov-2026)', () => {
   it('guarda la planilla con su consulta a Shopify, la lee y la borra junto con su remito', async () => {
     const { fn } = memoria();

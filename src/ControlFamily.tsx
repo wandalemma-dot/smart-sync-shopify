@@ -9,8 +9,13 @@
 // «⬆️ Cargar en Shopify» (pedido de gax, 11-nov-2026): crea los nuevos y suma
 // la reposición en FAMILYARG, con vista previa y confirmación. Cada artículo se
 // carga una sola vez. La lógica: utils/cargaFamily.ts.
+// ULLUA (19-nov-2026, gax: «es igual que Family prácticamente»): misma pantalla con
+// prov="ullua". En lugar de planilla + remito, la entrega es UN papel (remito con
+// IVA o factura sin IVA) que se lee de la foto; las curvas y el precio c/u salen
+// de utils/ullua.ts y el stock va a su sucursal.
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { costoUllua, entregaDeDocumentoUllua, ULLUA, type DocumentoUllua } from './utils/ullua';
 import * as XLSX from 'xlsx';
 import { Archivo, Copiar, Parte } from './EntregasPartes';
 import { PanelCarga } from './PanelCarga';
@@ -18,11 +23,11 @@ import type { Remito } from './utils/controlFacturas';
 import { fmt } from './utils/controlFacturas';
 import {
   consultarShopifyFamily, controlarEntregaFamily, leerEntregaFamily, leerTextoEntregaFamily, resumenFamily, textoEntregaFamily,
-  type EntregaFamily, type FilaFamily, type RenglonFamily, type ResultadoFamily,
+  type EntregaFamily, type FilaFamily, type OpcionesControl, type RenglonFamily, type ResultadoFamily,
 } from './utils/controlFamily';
 import {
-  cargasDeEntrega, ejecutarCargaFamily, estadoShopifyEntrega, leerEstadoCarga, planCargaFamily, resumenCarga, SUCURSAL_FAMILY, textoCarga,
-  type CargaFamily, type EleccionesCarga, type PlanCarga, type ResultadoCarga,
+  cargasDeEntrega, ejecutarCargaFamily, estadoShopifyEntrega, FAMILY, leerEstadoCarga, planCargaFamily, resumenCarga, textoCarga,
+  type CargaFamily, type EleccionesCarga, type Marketplace, type PlanCarga, type ResultadoCarga,
 } from './utils/cargaFamily';
 import { ResultadosCarga } from './ResultadosCarga';
 import { leerTextoRemito, textoRemito } from './utils/lectoresFacturas';
@@ -32,7 +37,17 @@ import {
 } from './utils/entregasUi';
 import { filaPlanillaFamily } from './utils/avisoAdmin';
 import { listaFinalizado } from './utils/listasTrello';
-import { descripcionTarjetaFamily, nombreTarjetaFamily } from './utils/trelloFamily';
+import { descripcionTarjetaFamily, nombreTarjetaFamily, papel } from './utils/trelloFamily';
+
+/** Lo que cambia entre Family y Ullua. */
+interface Config { prov: 'family' | 'ullua'; m: Marketplace; opciones: OpcionesControl; planilla: string; ullua: boolean }
+const CONFIG: Record<Config['prov'], Config> = {
+  family: { prov: 'family', m: FAMILY, opciones: {}, planilla: 'Familyarg', ullua: false },
+  ullua: {
+    prov: 'ullua', m: ULLUA, planilla: 'ULLUA', ullua: true,
+    opciones: { nombre: 'Ullua', mayor: 'c/u sin IVA', sinRemito: true, costoEsperado: ULLUA.costoEsperado },
+  },
+};
 
 const SEMAFORO = {
   ok: { icono: '✅', texto: 'Todo coincide', color: '#34d399' },
@@ -42,10 +57,16 @@ const SEMAFORO = {
 } as const;
 const AMARILLO = '#fbbf24', VERDE = '#34d399';
 const tdN: React.CSSProperties = { ...td, whiteSpace: 'nowrap' };
-const api = (body?: object) => (body ? apiControl({ proveedor: 'family', ...body }) : apiControl(undefined, 'family'));
 const esExcel = (f: File) => /\.(xlsx|xls)$/i.test(f.name);
 const firma = (rs: RenglonFamily[]) => rs.map((r) => `${r.codigo}:${r.cantidad}`).sort().join('|');
-type Leida = { fecha: string; renglones: RenglonFamily[]; dudas?: string[]; origen: 'excel' | 'foto' | 'manual'; nombre: string; avisos: string[] };
+type Leida = { fecha: string; renglones: RenglonFamily[]; dudas?: string[]; origen: 'excel' | 'foto' | 'manual'; nombre: string; avisos: string[]; documento?: EntregaFamily['documento'] };
+
+/** Ullua: el remito o la factura (fotos, o PDF pasado a fotos) leído con IA y pasado a la entrega. */
+async function leerDocumentoUllua(files: File[], aFotos?: (f: File[]) => Promise<File[]>): Promise<Leida> {
+  const doc = await leerFotos<DocumentoUllua>(aFotos ? await aFotos(files) : files, 'ullua');
+  const { entrega, avisos } = entregaDeDocumentoUllua(doc, hoy());
+  return { ...entrega, origen: 'foto', avisos };
+}
 
 /** Lee la planilla de entrega: Excel (por encabezados) o fotos (con IA). */
 async function leerPlanilla(files: File[]): Promise<Leida> {
@@ -61,7 +82,10 @@ async function leerPlanilla(files: File[]): Promise<Leida> {
   return { fecha: d.fecha || hoy(), renglones: d.renglones, dudas: d.dudas, origen: 'foto', nombre: 'Planilla (foto)', avisos: d.fecha ? [] : ['La foto no trae la fecha: se usó la de hoy (se puede corregir).'] };
 }
 
-export default function ControlFamily() {
+export default function ControlFamily({ prov = 'family', aFotos }: { prov?: 'family' | 'ullua'; aFotos?: (f: File[]) => Promise<File[]> } = {}) {
+  const cfg = CONFIG[prov];
+  const nombre = cfg.m.nombre, sucursal = cfg.m.sucursal;
+  const api = useMemo(() => (body?: object) => (body ? apiControl({ proveedor: prov, ...body }) : apiControl(undefined, prov)), [prov]);
   const [entregas, setEntregas] = useState<EntregaFamily[]>([]);
   const [remitos, setRemitos] = useState<Record<string, Remito>>({});
   const [cargando, setCargando] = useState(false);
@@ -91,12 +115,12 @@ export default function ControlFamily() {
       setEntregas(d.entregas ?? []); setRemitos(d.remitos ?? {}); setCargas(d.cargas ?? {}); setSinBase(false); setArmado(null);
     } catch (e) { setError(mensaje(e)); setSinBase(!!(e as { sinBase?: boolean }).sinBase); setEntregas([]); setRemitos({}); setCargas({}); }
     finally { setCargando(false); }
-  }, []);
+  }, [api]);
   // eslint-disable-next-line react-hooks/set-state-in-effect -- carga inicial
   useEffect(() => { recargar(); }, [recargar]);
 
   const resultados = useMemo(() => [...entregas].sort((a, b) => (b.fecha + b.id).localeCompare(a.fecha + a.id))
-    .map((e) => controlarEntregaFamily(e, remitos[e.id], entregas)), [entregas, remitos]);
+    .map((e) => controlarEntregaFamily(e, remitos[e.id], entregas, cfg.opciones)), [entregas, remitos, cfg]);
   // Pedido de gax (11-nov-2026): arriba lo que falta cargar en Shopify, en amarillo; abajo, después
   // de una línea, las entregas ya cargadas enteras. Dentro de cada grupo, la más nueva primero.
   const tarjetas = useMemo(() => resultados.map((r) => {
@@ -115,7 +139,7 @@ export default function ControlFamily() {
   /** Busca en Shopify (solo lectura) si cada código ya existe. */
   async function conShopify(e: EntregaFamily): Promise<EntregaFamily> {
     setOcupado('Buscando los artículos en Shopify…');
-    try { return { ...e, shopify: await consultarShopifyFamily(e.renglones.map((r) => r.codigo), shopifyGraphQL) }; }
+    try { return { ...e, shopify: await consultarShopifyFamily(e.renglones.map((r) => r.codigo), shopifyGraphQL, cfg.m) }; }
     finally { setOcupado(''); }
   }
 
@@ -131,16 +155,20 @@ export default function ControlFamily() {
   }
 
   /** Guarda una planilla nueva (o actualiza la misma si ya estaba) y le suma el remito. */
-  async function guardarNueva(leida: Leida, fotos: File[], planillaFiles: File[] = []) {
+  async function guardarNueva(leida: Leida, fotos: File[], planillaFiles: File[] = [], papelFiles: File[] = []) {
     const nuevos: string[] = [];
     const repetida = entregas.find((x) => x.fecha === leida.fecha && firma(x.renglones) === firma(leida.renglones));
     const id = repetida?.id || `E-${leida.fecha}-${slug(leida.nombre).slice(0, 30)}-${Date.now().toString(36)}`;
-    let entrega: EntregaFamily = { id, nombre: leida.nombre, fecha: leida.fecha, origen: leida.origen, renglones: leida.renglones, dudas: leida.dudas ?? [] };
+    let entrega: EntregaFamily = {
+      id, nombre: leida.nombre, fecha: leida.fecha, origen: leida.origen, renglones: leida.renglones, dudas: leida.dudas ?? [],
+      ...(leida.documento ?? repetida?.documento ? { documento: leida.documento ?? repetida?.documento } : {}),
+    };
     entrega = await conShopify(entrega);
     await api({ accion: 'guardarEntrega', entrega });
-    guardarArchivos(id, planillaFiles, fotos);
+    // Ullua: las fotos del remito o la factura van a Trello como «Remito …» / «Factura …».
+    guardarArchivos(id, planillaFiles, fotos.length ? fotos : papelFiles);
     const u = leida.renglones.reduce((s, r) => s + r.cantidad, 0);
-    nuevos.push(`Planilla del ${fechaAr(leida.fecha)} ${repetida ? 'actualizada (ya estaba cargada)' : 'guardada'}: ${leida.renglones.length} artículos, ${u} unidades.`, ...leida.avisos);
+    nuevos.push(`${cfg.ullua ? leida.nombre : 'Planilla'} del ${fechaAr(leida.fecha)} ${repetida ? 'actualizada (ya estaba cargada)' : 'guardada'}: ${leida.renglones.length} artículos, ${u} unidades.`, ...leida.avisos);
     if (entrega.shopify?.error) nuevos.push(`No pude consultar Shopify: ${entrega.shopify.error}`);
     if (fotos.length) nuevos.push(await remitoDeFotos(id, fotos));
     await recargar();
@@ -151,6 +179,15 @@ export default function ControlFamily() {
   async function controlar() {
     if (!planilla.length) return;
     let leida: Leida;
+    if (cfg.ullua) {
+      setOcupado('Leyendo el remito o la factura… (puede tardar un minuto)');
+      try { leida = await leerDocumentoUllua(planilla, aFotos); }
+      catch (e) { setAvisos([`No pude leer el remito o la factura: ${mensaje(e)} Podés escribirlo a mano.`]); setOcupado(''); return; }
+      setOcupado('');
+      try { await guardarNueva(leida, [], [], planilla); } catch (e) { setAvisos([mensaje(e)]); return; }
+      setPlanilla([]);
+      return;
+    }
     setOcupado(planilla.some(esExcel) ? 'Leyendo la planilla…' : 'Leyendo la foto de la planilla… (puede tardar un minuto)');
     try { leida = await leerPlanilla(planilla); }
     catch (e) { setAvisos([`No pude leer la planilla de entrega: ${mensaje(e)}${planilla.some(esExcel) ? '' : ' Podés escribirla a mano.'}`]); setOcupado(''); return; }
@@ -163,7 +200,7 @@ export default function ControlFamily() {
     const { fecha, renglones, errores } = leerTextoEntregaFamily(aMano ?? '');
     if (errores.length) { setAvisos(errores); return; }
     if (!renglones.length) { setAvisos(['Escribí al menos un artículo.']); return; }
-    try { await guardarNueva({ fecha: fecha || hoy(), renglones, origen: 'manual', nombre: 'Planilla escrita a mano', avisos: fecha ? [] : ['Sin fecha: se usó la de hoy.'] }, fotosRemito); }
+    try { await guardarNueva({ fecha: fecha || hoy(), renglones, origen: 'manual', nombre: cfg.ullua ? 'Entrega escrita a mano' : 'Planilla escrita a mano', avisos: fecha ? [] : ['Sin fecha: se usó la de hoy.'] }, cfg.ullua ? [] : fotosRemito); }
     catch (e) { setAvisos([mensaje(e)]); return; }
     setAMano(null); setFotosRemito([]);
   }
@@ -178,9 +215,9 @@ export default function ControlFamily() {
     setOcupado('Busco los artículos en Shopify para armar la carga…');
     try {
       const d = await api();
-      const estado = await leerEstadoCarga(r.entrega.renglones, shopifyGraphQL);
+      const estado = await leerEstadoCarga(r.entrega.renglones, shopifyGraphQL, cfg.m);
       setCargas(d.cargas ?? {});
-      setArmado(planCargaFamily(r, estado, d.cargas ?? {}));
+      setArmado(planCargaFamily(r, estado, d.cargas ?? {}, cfg.m));
       setAbierta(r.entrega.id);
     } catch (e) { setAvisos([`No pude armar la carga: ${mensaje(e)} No se cargó nada.`]); }
     finally { setOcupado(''); }
@@ -189,7 +226,7 @@ export default function ControlFamily() {
   async function confirmarCarga(plan: PlanCarga, elecciones: EleccionesCarga) {
     const res = resumenCarga(plan, elecciones);
     if (!res.altas && !res.reposiciones) return;
-    const texto = [`Se va a cargar en Shopify (${SUCURSAL_FAMILY}):`, ...res.lineas, '',
+    const texto = [`Se va a cargar en Shopify (${sucursal}):`, ...res.lineas, '',
       `${res.altas} producto(s) nuevo(s) y ${res.reposiciones} reposición(es), ${res.unidades} unidades en total.`,
       'Los precios de los productos que ya existen no se tocan. ¿Confirmás?'].join('\n');
     if (!confirm(texto)) return;
@@ -206,6 +243,7 @@ export default function ControlFamily() {
         terminar: async (codigo, estado, detalle) => { await api({ accion: 'terminarCarga', entregaId: eid, codigo, estado, detalle }); },
         liberar: async (codigo) => { await api({ accion: 'liberarCarga', entregaId: eid, codigo }); },
         clave: () => crypto.randomUUID(),
+        buscador: cfg.m,
         onProgreso: (h, t) => setOcupado(`Cargando en Shopify… ${h} de ${t}. No cierres esta página.`),
       });
       setAvisos([]);
@@ -222,14 +260,18 @@ export default function ControlFamily() {
    * con captura de cómo la anotaban a mano). Si el remito ya está anotado, la planilla no la repite.
    */
   async function anotarFamily(r: ResultadoFamily): Promise<string> {
-    const remito = r.remito?.numero?.trim() ?? '';
-    if (!remito) return 'Planilla de ingreso: el remito no tiene número, así que no agregué la fila. Escribí el número en «✏️ Ver o corregir» del remito y anotala a mano.';
+    // Ullua: el número sale del papel de la entrega (remito, o factura con el remito que menciona).
+    const doc = r.entrega.documento;
+    const factura = doc?.tipo === 'factura' ? doc.numero.trim() : '';
+    const remito = (doc ? doc.remito : r.remito?.numero)?.trim() ?? '';
+    if (!remito && !factura) return `Planilla de ingreso: ${cfg.ullua ? 'el remito o la factura' : 'el remito'} no tiene número, así que no agregué la fila. ${cfg.ullua ? 'Anotala a mano.' : 'Escribí el número en «✏️ Ver o corregir» del remito y anotala a mano.'}`;
+    const que = factura ? `la factura ${factura}` : `el remito ${remito}`;
     const hoyAr = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
     try {
-      const a = await anotarEnPlanilla(filaPlanillaFamily({ fecha: r.entrega.fecha, remito, hoy: hoyAr }));
+      const a = await anotarEnPlanilla(filaPlanillaFamily({ fecha: r.entrega.fecha, remito, hoy: hoyAr, proveedor: cfg.planilla, factura, monto: doc?.total ?? null }));
       if (a.sinPlanilla) return 'Planilla de ingreso: todavía no está conectada (ver «Planilla de ingreso» en Notas de pedido de iD o Distrinando).';
-      if (a.yaEstaba) return `Planilla de ingreso: el remito ${remito} ya estaba anotado${a.fila ? ` (fila ${a.fila})` : ''}.`;
-      return `Planilla de ingreso: agregué el remito ${remito} de Family${a.fila ? ` en la fila ${a.fila}` : ''}.`;
+      if (a.yaEstaba) return `Planilla de ingreso: ${que} ya estaba anotado${a.fila ? ` (fila ${a.fila})` : ''}.`;
+      return `Planilla de ingreso: agregué ${que} de ${nombre}${a.fila ? ` en la fila ${a.fila}` : ''}.`;
     } catch (e) { return `Planilla de ingreso: no pude agregar la fila (${mensaje(e)}). Anotala a mano.`; }
   }
 
@@ -240,34 +282,36 @@ export default function ControlFamily() {
    */
   async function tarjetaFamily(r: ResultadoFamily, elegidos?: { planilla: File[]; remito: File[] }): Promise<string[]> {
     const hechos: string[] = [];
-    const nombre = nombreTarjetaFamily(r);
+    const tit = nombreTarjetaFamily(r, nombre);
     let tarjeta: { id: string; enlace: string; yaEstaba: boolean };
     try {
       const final = listaFinalizado(await listasDeTrello());
       if (!final) return ['Trello: no encontré una sola lista «FINALIZADO» en el tablero. Creá la tarjeta a mano.'];
       const hoyAr = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
-      tarjeta = await crearEnTrello(final.id, nombre, descripcionTarjetaFamily(r, SUCURSAL_FAMILY, hoyAr));
-      hechos.push(tarjeta.yaEstaba ? `Trello: la tarjeta «${nombre}» ya estaba.` : `Trello: creé la tarjeta «${nombre}» en «${final.nombre}».`);
+      tarjeta = await crearEnTrello(final.id, tit, descripcionTarjetaFamily(r, sucursal, hoyAr, nombre));
+      hechos.push(tarjeta.yaEstaba ? `Trello: la tarjeta «${tit}» ya estaba.` : `Trello: creé la tarjeta «${tit}» en «${final.nombre}».`);
       if (tarjeta.enlace) setEnTrello((t) => ({ ...t, [r.entrega.id]: tarjeta.enlace }));
     } catch (e) { return [`Trello: no pude crear la tarjeta (${mensaje(e)}). Creala a mano en «FINALIZADO».`]; }
     const files = elegidos ?? archivos[r.entrega.id] ?? { planilla: [], remito: [] };
     if (!files.planilla.length && !files.remito.length) {
-      hechos.push('Trello: no tengo en esta pantalla la planilla ni la foto del remito (se suben de nuevo si se recargó la página). Adjuntalos con «📎» en la parte Trello de la entrega.');
+      hechos.push(cfg.ullua
+        ? 'Trello: no tengo en esta pantalla las fotos del remito o la factura (se suben de nuevo si se recargó la página). Adjuntalas con «📎» en la parte Trello de la entrega.'
+        : 'Trello: no tengo en esta pantalla la planilla ni la foto del remito (se suben de nuevo si se recargó la página). Adjuntalos con «📎» en la parte Trello de la entrega.');
       return hechos;
     }
     try {
-      for (const a of await archivosFamily(files.planilla, files.remito, r.remito?.numero?.trim() ?? '', r.entrega.fecha)) {
+      for (const a of await archivosFamily(files.planilla, files.remito, r.remito?.numero?.trim() ?? '', r.entrega.fecha, papel(r))) {
         try { const x = await adjuntarATrello(tarjeta.id, a); hechos.push(`Trello: ${x.yaEstaba ? `«${x.nombre}» ya estaba en la tarjeta` : `adjunté «${x.nombre}»`}.`); }
         catch (e) { hechos.push(`Trello: no pude adjuntar «${a.nombre}» (${mensaje(e)}).`); }
       }
     } catch (e) { hechos.push(`Trello: ${mensaje(e)}`); }
-    if (!files.planilla.length) hechos.push('Trello: la planilla no está en esta pantalla; adjuntala con «📎 Planilla».');
-    if (!files.remito.length) hechos.push('Trello: la foto del remito no está en esta pantalla; adjuntala con «📎 Remito».');
+    if (!files.planilla.length && !cfg.ullua) hechos.push('Trello: la planilla no está en esta pantalla; adjuntala con «📎 Planilla».');
+    if (!files.remito.length) hechos.push(cfg.ullua ? 'Trello: las fotos del remito o la factura no están en esta pantalla; adjuntalas con «📎».' : 'Trello: la foto del remito no está en esta pantalla; adjuntala con «📎 Remito».');
     return hechos;
   }
 
   async function adjuntarElegidos(r: ResultadoFamily, que: 'planilla' | 'remito', files: File[]) {
-    if (!confirm(`Se ${files.length === 1 ? 'adjunta 1 archivo' : `adjuntan ${files.length} archivos`} como ${que} a la tarjeta «${nombreTarjetaFamily(r)}» de Trello (si no existe, se crea en «FINALIZADO»). ¿Confirmás?`)) return;
+    if (!confirm(`Se ${files.length === 1 ? 'adjunta 1 archivo' : `adjuntan ${files.length} archivos`} como ${cfg.ullua ? (papel(r).split(' ')[0] || 'remito').toLowerCase() : que} a la tarjeta «${nombreTarjetaFamily(r, nombre)}» de Trello (si no existe, se crea en «FINALIZADO»). ¿Confirmás?`)) return;
     guardarArchivos(r.entrega.id, que === 'planilla' ? files : [], que === 'remito' ? files : []);
     setOcupado('Subiendo a Trello…');
     try { setAvisos(await tarjetaFamily(r, { planilla: que === 'planilla' ? files : [], remito: que === 'remito' ? files : [] })); }
@@ -295,29 +339,35 @@ export default function ControlFamily() {
       {error && !sinBase && <p style={{ color: '#f87171', fontWeight: 'bold' }}>⚠ {error}</p>}
       {ocupado && <p style={{ fontSize: '0.88rem', color: '#93c5fd' }}>⏳ {ocupado}</p>}
       {cargando && <p style={{ fontSize: '0.8rem', opacity: 0.7 }}>Cargando…</p>}
-      {resultadoCarga && <ResultadosCarga resultados={resultadoCarga} sucursal={SUCURSAL_FAMILY} conVentas={false} onCerrar={() => setResultadoCarga(null)} />}
+      {resultadoCarga && <ResultadosCarga resultados={resultadoCarga} sucursal={sucursal} conVentas={false} onCerrar={() => setResultadoCarga(null)} />}
       {avisos.length > 0 && <div style={{ fontSize: '0.84rem', margin: '6px 0 12px', padding: '8px 10px', background: 'rgba(255,255,255,0.04)', borderRadius: 8 }}>
         {avisos.map((a, i) => <div key={i}>• {a}</div>)}
       </div>}
 
       <div style={{ border: '1px solid rgba(99,102,241,0.55)', borderRadius: 10, padding: '12px 14px', background: 'rgba(99,102,241,0.08)', marginBottom: 16 }}>
-        <strong style={{ fontSize: '1rem' }}>Nueva entrega de Family</strong>
+        <strong style={{ fontSize: '1rem' }}>Nueva entrega de {nombre}</strong>
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
-          <Archivo etiqueta="1 · 📄 Planilla de entrega (Excel o foto)" accept=".xlsx,.xls,image/*" multiple disabled={!!ocupado} onArchivos={(f) => { setPlanilla(f); setAMano(null); }} />
+          {cfg.ullua
+            ? <Archivo etiqueta="🧾 Remito o factura (foto o PDF)" accept="image/*,.pdf" multiple disabled={!!ocupado} onArchivos={(f) => { setPlanilla(f); setAMano(null); }} />
+            : <Archivo etiqueta="1 · 📄 Planilla de entrega (Excel o foto)" accept=".xlsx,.xls,image/*" multiple disabled={!!ocupado} onArchivos={(f) => { setPlanilla(f); setAMano(null); }} />}
           <span style={{ fontSize: '0.82rem', opacity: planilla.length ? 1 : 0.5 }}>{planilla.length ? `✔ ${planilla.length === 1 ? planilla[0].name : `${planilla.length} fotos`}` : 'sin elegir'}</span>
-          <Archivo etiqueta="2 · 📷 Foto del remito" accept="image/*" multiple disabled={!!ocupado} onArchivos={(f) => setFotosRemito(f)} />
-          <span style={{ fontSize: '0.82rem', opacity: fotosRemito.length ? 1 : 0.5 }}>{fotosRemito.length ? `✔ ${fotosRemito.length} foto(s)` : 'sin elegir'}</span>
+          {!cfg.ullua && <>
+            <Archivo etiqueta="2 · 📷 Foto del remito" accept="image/*" multiple disabled={!!ocupado} onArchivos={(f) => setFotosRemito(f)} />
+            <span style={{ fontSize: '0.82rem', opacity: fotosRemito.length ? 1 : 0.5 }}>{fotosRemito.length ? `✔ ${fotosRemito.length} foto(s)` : 'sin elegir'}</span>
+          </>}
           <button style={{ ...botonPrincipal, opacity: planilla.length && !ocupado ? 1 : 0.5, cursor: planilla.length && !ocupado ? 'pointer' : 'not-allowed' }}
             disabled={!planilla.length || !!ocupado} onClick={controlar}>Controlar</button>
-          <button style={enlace} onClick={() => { setAMano(aMano === null ? 'Fecha \n' : null); setPlanilla([]); }}>{aMano === null ? 'o escribir la planilla a mano' : 'cancelar'}</button>
+          <button style={enlace} onClick={() => { setAMano(aMano === null ? 'Fecha \n' : null); setPlanilla([]); }}>{aMano === null ? `o escribir ${cfg.ullua ? 'la entrega' : 'la planilla'} a mano` : 'cancelar'}</button>
         </div>
-        {aMano !== null && <EditorTexto texto={aMano} onTexto={setAMano} onGuardar={guardarAMano} onCancelar={() => setAMano(null)} ayuda={AYUDA_PLANILLA} etiqueta="💾 Guardar y controlar" />}
+        {aMano !== null && <EditorTexto texto={aMano} onTexto={setAMano} onGuardar={guardarAMano} onCancelar={() => setAMano(null)} ayuda={cfg.ullua ? AYUDA_ULLUA : AYUDA_PLANILLA} etiqueta="💾 Guardar y controlar" />}
         <p style={{ fontSize: '0.8rem', opacity: 0.75, margin: '8px 0 0' }}>
-          Family no factura: controlo la planilla contra el remito, te digo qué artículos son nuevos y cuáles reposición (los busco en Shopify) y te aviso si cambió algún precio. Con «⬆️ Cargar en Shopify» creo los nuevos y sumo la reposición en {SUCURSAL_FAMILY}, siempre con tu confirmación. Los precios de lo que ya existe no los toco.
+          {cfg.ullua
+            ? <>Subí la foto del remito (los precios traen IVA: los divido por 1,21) o de la factura (sin IVA). El precio de cada renglón es el de la curva: lo divido por las unidades de la curva (S1 M2 L3 XL2 = 8; mujer S2 M2 L2 XL2). Costo = precio c/u sin IVA − 15%; los nuevos se crean con el precio c/u × 2 (se puede cambiar). Te digo cuáles son nuevos y cuáles reposición, y con «⬆️ Cargar en Shopify» sumo el stock en {sucursal}, siempre con tu confirmación. Los precios de lo que ya existe no los toco.</>
+            : <>Family no factura: controlo la planilla contra el remito, te digo qué artículos son nuevos y cuáles reposición (los busco en Shopify) y te aviso si cambió algún precio. Con «⬆️ Cargar en Shopify» creo los nuevos y sumo la reposición en {sucursal}, siempre con tu confirmación. Los precios de lo que ya existe no los toco.</>}
         </p>
       </div>
 
-      {!resultados.length && !cargando && <p style={{ opacity: 0.7, fontSize: '0.85rem' }}>Todavía no hay entregas de Family cargadas.</p>}
+      {!resultados.length && !cargando && <p style={{ opacity: 0.7, fontSize: '0.85rem' }}>Todavía no hay entregas de {nombre} cargadas.</p>}
       {/* Una sola lista con claves: una entrega que pasa de pendiente a cargada (o vuelve) se MUEVE, no se
           vuelve a montar, así no se pierde lo que se estaba escribiendo en su remito o planilla. */}
       {[
@@ -331,7 +381,7 @@ export default function ControlFamily() {
   );
 
   function tarjeta({ r, cargas: deEntrega }: (typeof tarjetas)[number]) {
-    return <TarjetaFamily key={r.entrega.id} r={r} abierta={abierta === r.entrega.id} ocupado={!!ocupado}
+    return <TarjetaFamily key={r.entrega.id} cfg={cfg} r={r} abierta={abierta === r.entrega.id} ocupado={!!ocupado}
         cargas={deEntrega}
         plan={armado?.entregaId === r.entrega.id ? armado : null}
         onArmar={() => armarCarga(r)} onConfirmar={(el) => armado && confirmarCarga(armado, el)} onCancelarCarga={() => setArmado(null)}
@@ -344,7 +394,7 @@ export default function ControlFamily() {
         onGuardarEntrega={async (e) => { try { return await guardar({ accion: 'guardarEntrega', entrega: await conShopify(e) }); } catch (err) { setError(mensaje(err)); return false; } }}
         onFecha={(fecha) => guardar({ accion: 'guardarEntrega', entrega: { ...r.entrega, fecha } })}
         onConsultar={() => reconsultar(r.entrega)}
-        onBorrar={() => confirm(`¿Borrar la entrega del ${fechaAr(r.entrega.fecha)}? Se borra también su remito.`) && guardar({ accion: 'borrarEntrega', id: r.entrega.id })} />;
+        onBorrar={() => confirm(`¿Borrar la entrega del ${fechaAr(r.entrega.fecha)}?${cfg.ullua ? '' : ' Se borra también su remito.'}`) && guardar({ accion: 'borrarEntrega', id: r.entrega.id })} />;
   }
 }
 
@@ -360,6 +410,8 @@ function Separador({ color, texto }: { color: string; texto: string }) {
 
 const AYUDA_PLANILLA = <>Una línea por artículo: código, talle/cantidad, precio por mayor y precio público (con $), y la descripción. Ej.:<br />
   <code>Fecha 30/10/2026</code><br /><code>SHBSPEC S/2 M/4 L/4 XL/6 2XL/4 $34500 $69000 Short Spectrum Basket Negro/Multi</code></>;
+const AYUDA_ULLUA = <>Una línea por artículo: código, talle/cantidad (en unidades, no curvas), el precio c/u SIN IVA (con $) y la descripción. Ej.:<br />
+  <code>Fecha 18/11/2026</code><br /><code>580580C S/1 M/2 L/3 XL/2 $50000 SP Hoodie OG Classic Melange</code><br />Sin talles: <code>251451 6 $9000 Medias Thrasher</code></>;
 const AYUDA_REMITO = <>Una línea por artículo: código y cantidad. Ej.: <code>SHBSPEC 20</code>. Si trae talles: <code>SHBSPEC S/2 M/4</code>. Arriba podés poner <code>Remito 0001-00002715</code>.</>;
 
 function EditorTexto({ texto, onTexto, onGuardar, onCancelar, ayuda, etiqueta, errores = [], dudas = [], extra }: {
@@ -385,18 +437,18 @@ function EditorTexto({ texto, onTexto, onGuardar, onCancelar, ayuda, etiqueta, e
 }
 
 /** Aviso corto de un artículo para la tabla. */
-function estadoFila(f: FilaFamily): [string, string] {
+function estadoFila(f: FilaFamily, sinRemito = false): [string, string] {
   const rojo = '#f87171', amarillo = '#fbbf24';
   if (f.remito !== null && f.remito !== f.entrega) return [`❌ el remito trae ${f.remito}`, rojo];
   if (f.cambiosPrecio.length) return ['⚠️ cambió el precio', amarillo];
   if (f.sumaMal) return ['⚠️ talles no suman el total', amarillo];
   if (f.tallesNuevos.length) return [`⚠️ talle ${f.tallesNuevos.join(', ')} nuevo`, amarillo];
-  if (f.remito === null) return ['⏳ falta el remito', '#94a3b8'];
+  if (f.remito === null && !sinRemito) return ['⏳ falta el remito', '#94a3b8'];
   return ['✅', '#34d399'];
 }
 
-function TarjetaFamily({ r, abierta, ocupado, cargas, plan, onArmar, onConfirmar, onCancelarCarga, onLiberar, onAbrir, onFotos, enTrello, onTrello, onGuardarRemito, onBorrarRemito, onGuardarEntrega, onFecha, onConsultar, onBorrar }: {
-  r: ResultadoFamily; abierta: boolean; ocupado: boolean; cargas: Record<string, CargaFamily>; plan: PlanCarga | null;
+function TarjetaFamily({ cfg, r, abierta, ocupado, cargas, plan, onArmar, onConfirmar, onCancelarCarga, onLiberar, onAbrir, onFotos, enTrello, onTrello, onGuardarRemito, onBorrarRemito, onGuardarEntrega, onFecha, onConsultar, onBorrar }: {
+  cfg: Config; r: ResultadoFamily; abierta: boolean; ocupado: boolean; cargas: Record<string, CargaFamily>; plan: PlanCarga | null;
   onArmar: () => void; onConfirmar: (e: EleccionesCarga) => void; onCancelarCarga: () => void; onLiberar: (codigo: string, c: CargaFamily) => void;
   onAbrir: () => void; onFotos: (f: File[]) => void;
   enTrello: string; onTrello: (que: 'planilla' | 'remito', f: File[]) => void;
@@ -451,22 +503,27 @@ function TarjetaFamily({ r, abierta, ocupado, cargas, plan, onArmar, onConfirmar
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
-        <Parte ok titulo="Planilla" detalle={`${r.filas.length} artículos${e.origen === 'foto' ? ' (de la foto)' : e.origen === 'manual' ? ' (escrita a mano)' : ''}`}>
+        <Parte ok titulo={cfg.ullua ? 'Artículos' : 'Planilla'} detalle={`${r.filas.length} artículos${e.origen === 'foto' ? ' (de la foto)' : e.origen === 'manual' ? ' (escrita a mano)' : ''}`}>
           <button style={botonChico} onClick={() => abrir('planilla')}>✏️ Ver o corregir</button>
         </Parte>
-        <Parte ok={!!r.remito} titulo="Remito" detalle={r.remito ? `${r.remito.numero || ''} · ${unidadesRemito} u.${r.remito.origen === 'foto' ? ' (de la foto)' : ''}` : 'falta'}>
-          {!r.remito && <Archivo etiqueta="📷 Subir foto" accept="image/*" multiple disabled={ocupado} estilo={botonChico} onArchivos={onFotos} />}
-          <button style={botonChico} onClick={() => abrir('remito')}>{r.remito ? '✏️ Ver o corregir' : '✏️ Escribirlo'}</button>
-        </Parte>
+        {cfg.ullua
+          ? <Parte ok={!!e.documento} titulo={e.documento?.tipo === 'factura' ? 'Factura' : 'Remito'}
+            detalle={e.documento ? `${e.documento.numero || 'sin número'}${e.documento.total ? ` · ${fmt(e.documento.total)}` : ''}${e.documento.tipo === 'remito' ? ' (con IVA)' : ' (sin IVA)'}${e.documento.tipo === 'factura' && e.documento.remito ? ` · remito ${e.documento.remito}` : ''}` : 'escrita a mano'}>
+            {null}
+          </Parte>
+          : <Parte ok={!!r.remito} titulo="Remito" detalle={r.remito ? `${r.remito.numero || ''} · ${unidadesRemito} u.${r.remito.origen === 'foto' ? ' (de la foto)' : ''}` : 'falta'}>
+            {!r.remito && <Archivo etiqueta="📷 Subir foto" accept="image/*" multiple disabled={ocupado} estilo={botonChico} onArchivos={onFotos} />}
+            <button style={botonChico} onClick={() => abrir('remito')}>{r.remito ? '✏️ Ver o corregir' : '✏️ Escribirlo'}</button>
+          </Parte>}
         <Parte ok={enShopify.completa} titulo="Shopify" detalle={cargados ? `${cargados} de ${enShopify.total} cargados` : 'sin cargar'}>
           {!enShopify.completa && !plan && <button style={{ ...botonChico, opacity: puedeCargar && !ocupado ? 1 : 0.5 }} disabled={ocupado}
-            title={puedeCargar ? 'Crea los nuevos y suma la reposición, con vista previa y confirmación' : 'Primero la planilla tiene que coincidir con el remito'}
+            title={puedeCargar ? 'Crea los nuevos y suma la reposición, con vista previa y confirmación' : cfg.ullua ? 'Revisá los avisos primero' : 'Primero la planilla tiene que coincidir con el remito'}
             onClick={onArmar}>⬆️ Cargar en Shopify</button>}
         </Parte>
         {cargados > 0 && <Parte ok={!!enTrello} titulo="Trello" detalle={enTrello ? 'tarjeta en FINALIZADO' : 'se crea al cargar'}>
           {enTrello && <a href={enTrello} target="_blank" rel="noreferrer" style={{ ...botonChico, textDecoration: 'none' }}>🗂️ Ver tarjeta</a>}
-          <Archivo etiqueta="📎 Planilla" accept="image/*,.pdf,.xlsx,.xls" multiple disabled={ocupado} estilo={botonChico} onArchivos={(f) => onTrello('planilla', f)} />
-          <Archivo etiqueta="📎 Remito" accept="image/*,.pdf" multiple disabled={ocupado} estilo={botonChico} onArchivos={(f) => onTrello('remito', f)} />
+          {!cfg.ullua && <Archivo etiqueta="📎 Planilla" accept="image/*,.pdf,.xlsx,.xls" multiple disabled={ocupado} estilo={botonChico} onArchivos={(f) => onTrello('planilla', f)} />}
+          <Archivo etiqueta={cfg.ullua ? `📎 ${e.documento?.tipo === 'factura' ? 'Factura' : 'Remito'}` : '📎 Remito'} accept="image/*,.pdf" multiple disabled={ocupado} estilo={botonChico} onArchivos={(f) => onTrello('remito', f)} />
         </Parte>}
       </div>
       {aRevisar.length > 0 && <div style={{ marginTop: 8, fontSize: '0.84rem', color: '#fbbf24' }}>
@@ -475,8 +532,10 @@ function TarjetaFamily({ r, abierta, ocupado, cargas, plan, onArmar, onConfirmar
           <button style={{ ...botonChico, padding: '1px 7px' }} disabled={ocupado} onClick={() => onLiberar(codigo, c)}>🔓 Ya lo revisé: liberar</button>
         </div>)}
       </div>}
-      {plan && <PanelCarga plan={plan} ocupado={ocupado} onConfirmar={onConfirmar} onCancelar={onCancelarCarga} sucursal={SUCURSAL_FAMILY}
-        explicacion="Los nuevos se crean activos y solo en Point of Sale (las fotos se agregan a mano), con el precio público de la planilla y el costo por mayor − 15%. La reposición se SUMA a lo que hay. Los precios de lo que ya existe no se tocan." />}
+      {plan && <PanelCarga plan={plan} ocupado={ocupado} onConfirmar={onConfirmar} onCancelar={onCancelarCarga} sucursal={cfg.m.sucursal}
+        explicacion={cfg.ullua
+          ? 'Los nuevos se crean activos y solo en Point of Sale (las fotos se agregan a mano), con el precio c/u sin IVA × 2 al 999 (lo podés cambiar) y el costo c/u sin IVA − 15%. La reposición se SUMA a lo que hay. Los precios de lo que ya existe no se tocan.'
+          : 'Los nuevos se crean activos y solo en Point of Sale (las fotos se agregan a mano), con el precio público de la planilla y el costo por mayor − 15%. La reposición se SUMA a lo que hay. Los precios de lo que ya existe no se tocan.'} />}
 
       {editando === 'remito' && <EditorTexto texto={texto} onTexto={setTexto} onGuardar={guardarRemito} onCancelar={() => setEditando(null)}
         ayuda={AYUDA_REMITO} etiqueta="💾 Guardar remito" errores={errores} dudas={r.remito?.dudas ?? []}
@@ -485,7 +544,7 @@ function TarjetaFamily({ r, abierta, ocupado, cargas, plan, onArmar, onConfirmar
           <button style={{ ...botonChico, color: '#f87171' }} onClick={onBorrarRemito}>Borrar remito</button>
         </>} />}
       {editando === 'planilla' && <EditorTexto texto={texto} onTexto={setTexto} onGuardar={guardarPlanilla} onCancelar={() => setEditando(null)}
-        ayuda={AYUDA_PLANILLA} etiqueta="💾 Guardar planilla" errores={errores} dudas={e.dudas ?? []} />}
+        ayuda={cfg.ullua ? AYUDA_ULLUA : AYUDA_PLANILLA} etiqueta={cfg.ullua ? '💾 Guardar' : '💾 Guardar planilla'} errores={errores} dudas={e.dudas ?? []} />}
 
       {motivos.length > 0 && <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: '0.84rem' }}>{motivos.map((m, i) => <li key={i}>{m}</li>)}</ul>}
       {!abierta && <button style={{ ...enlace, marginTop: 6 }} onClick={onAbrir}>Ver el detalle artículo por artículo</button>}
@@ -494,31 +553,34 @@ function TarjetaFamily({ r, abierta, ocupado, cargas, plan, onArmar, onConfirmar
         <div style={{ marginTop: 10 }}>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem', width: '100%' }}>
-              <thead><tr><th style={th}>Código</th><th style={th}>Descripción</th><th style={th}>Tipo</th><th style={th}>Planilla</th><th style={th}>Remito</th>
-                <th style={th}>Por mayor</th><th style={th}>Público</th><th style={th}>En Shopify</th><th style={th}>Estado</th></tr></thead>
+              <thead><tr><th style={th}>Código</th><th style={th}>Descripción</th><th style={th}>Tipo</th><th style={th}>{cfg.ullua ? 'Unidades' : 'Planilla'}</th>{!cfg.ullua && <th style={th}>Remito</th>}
+                <th style={th}>{cfg.ullua ? 'c/u sin IVA' : 'Por mayor'}</th><th style={th}>{cfg.ullua ? 'Costo (−15%)' : 'Público'}</th><th style={th}>En Shopify</th><th style={th}>Estado</th></tr></thead>
               <tbody>{r.filas.map((f) => {
-                const [estado, color] = estadoFila(f);
+                const [estado, color] = estadoFila(f, cfg.ullua);
                 const talles = e.renglones.find((x) => x.codigo === f.codigo)?.talles ?? [];
                 const precios = [...new Set(f.productos.flatMap((p) => p.precios.map(fmt)))];
+                const costos = [...new Set(f.productos.flatMap((p) => p.costos.map(fmt)))];
                 return <tr key={f.codigo}>
                   <td style={td}>{f.codigo}</td>
                   <td style={td}>{f.descripcion}{talles.length ? <div style={{ opacity: 0.7 }}>{talles.map((t) => `${t.talle}:${t.cantidad}`).join(' ')}</div> : null}</td>
                   <td style={tdN}>{f.tipo === 'nuevo' ? '🆕 Nuevo' : f.tipo === 'reposicion' ? '🔁 Reposición' : '? sin consultar'}
                     {cargas[f.codigo] && <div style={{ color: cargas[f.codigo].estado === 'cargada' ? '#34d399' : '#fbbf24' }}>{cargas[f.codigo].estado === 'cargada' ? '✔ cargado' : `⚠️ ${cargas[f.codigo].estado}`}</div>}</td>
                   <td style={td}>{f.entrega}</td>
-                  <td style={td}>{f.remito ?? '—'}</td>
+                  {!cfg.ullua && <td style={td}>{f.remito ?? '—'}</td>}
                   <td style={tdN}>{f.precioMayor ? fmt(f.precioMayor) : '—'}{f.anterior && f.anterior.precioMayor && f.anterior.precioMayor !== f.precioMayor ? <div style={{ opacity: 0.7 }}>antes {fmt(f.anterior.precioMayor)}</div> : null}</td>
-                  <td style={tdN}>{f.precioPublico ? fmt(f.precioPublico) : '—'}{f.anterior && f.anterior.precioPublico && f.anterior.precioPublico !== f.precioPublico ? <div style={{ opacity: 0.7 }}>antes {fmt(f.anterior.precioPublico)}</div> : null}</td>
-                  <td style={td}>{f.tipo === 'reposicion' ? <><span style={{ whiteSpace: 'nowrap' }}>{precios.join(' / ')}</span><div style={{ opacity: 0.7 }}>{f.productos.map((p) => p.titulo).join(' · ')}</div></> : '—'}</td>
+                  {cfg.ullua
+                    ? <td style={tdN}>{f.precioMayor ? fmt(costoUllua(f.precioMayor)) : '—'}</td>
+                    : <td style={tdN}>{f.precioPublico ? fmt(f.precioPublico) : '—'}{f.anterior && f.anterior.precioPublico && f.anterior.precioPublico !== f.precioPublico ? <div style={{ opacity: 0.7 }}>antes {fmt(f.anterior.precioPublico)}</div> : null}</td>}
+                  <td style={td}>{f.tipo === 'reposicion' ? <><span style={{ whiteSpace: 'nowrap' }}>{precios.join(' / ')}{cfg.ullua && costos.length ? ` · costo ${costos.join(' / ')}` : ''}</span><div style={{ opacity: 0.7 }}>{f.productos.map((p) => p.titulo).join(' · ')}</div></> : '—'}</td>
                   <td style={{ ...td, color }}>{estado}</td>
                 </tr>;
               })}</tbody>
             </table>
           </div>
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10, fontSize: '0.82rem' }}>
-            <Copiar etiqueta="📋 Copiar resumen" texto={resumenFamily(r)} />
+            <Copiar etiqueta="📋 Copiar resumen" texto={resumenFamily(r, cfg.m.nombre, cfg.opciones.mayor)} />
             <button style={botonChico} disabled={ocupado} onClick={onConsultar}>🔄 Consultar Shopify de nuevo</button>
-            <label>fecha de la planilla <input type="date" value={e.fecha} style={inputSt} onChange={(ev) => ev.target.value && onFecha(ev.target.value)} /></label>
+            <label>fecha {cfg.ullua ? 'de la entrega' : 'de la planilla'} <input type="date" value={e.fecha} style={inputSt} onChange={(ev) => ev.target.value && onFecha(ev.target.value)} /></label>
             {e.shopify?.fecha && <span style={{ opacity: 0.65 }}>Shopify consultado el {fechaAr(e.shopify.fecha)}</span>}
             {!enShopify.completa && !plan && <button style={botonChico} disabled={ocupado} onClick={onArmar}>⬆️ Cargar en Shopify</button>}
             {Object.entries(cargas).filter(([, c]) => c.estado === 'cargada').map(([codigo, c]) => (

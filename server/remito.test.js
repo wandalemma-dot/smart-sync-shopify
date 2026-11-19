@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { COOKIE, makeSession } from './access.js';
-import { leerRemito, normalizarEntrega, normalizarFactura, normalizarRemito, validarFotos } from './remito.js';
+import { leerRemito, normalizarEntrega, normalizarFactura, normalizarRemito, normalizarUllua, validarFotos } from './remito.js';
 import handler from '../api/leer-remito.js';
 
 const foto = { media: 'image/jpeg', datos: 'QUJD' };
@@ -63,6 +63,22 @@ describe('lectura de la foto del remito', () => {
     expect(r).toMatchObject({ empresa: 'BAG COMPANY S.R.L.', numero: 'A001600004005', pedido: '211310', bonificacionPct: 30, neto: 84000, total: 101640, origen: 'foto' });
     expect(r.renglones).toEqual([{ codigo: '15188', descripcion: 'Riñonera Camping Alpine Skate', unidad: 'Unidad', cantidad: 12, precioUnitario: 10000, importe: 120000 }]);
     expect(normalizarFactura({ fecha: '12/11/2026', bonificacionPct: 150, renglones: [] })).toMatchObject({ fecha: '', bonificacionPct: 0 });
+  });
+
+  it('con tipo ullua lee el remito o la factura de Ullua con la descripción completa (curva) y el precio de la curva', async () => {
+    const { create, cliente: c } = cliente(json({
+      tipo: 'remito', numero: '0001-00007680', fecha: '2026-11-18', remito: '', subtotal: 0, iva: 0, total: 968000, dudas: [],
+      renglones: [{ codigo: ' 580580c ', descripcion: 'SP HOODIE OG CLASSIC MELANGE CURVA S1 M2 L3', cantidad: 2, precio: 484000, total: 968000 },
+        { codigo: '', descripcion: 'sin código', cantidad: 1, precio: 1, total: 1 }],
+    }));
+    const r = await leerRemito({ fotos: [foto], cliente: c, tipo: 'ullua' });
+    const pedido = create.mock.calls[0][0];
+    expect(pedido.output_config.format.schema.properties.tipo.enum).toEqual(['remito', 'factura']);
+    expect(pedido.messages[0].content.at(-1).text).toMatch(/CURVA/);
+    expect(r).toMatchObject({ tipo: 'remito', numero: '0001-00007680', total: 968000, origen: 'foto' });
+    expect(r.renglones).toEqual([{ codigo: '580580C', descripcion: 'SP HOODIE OG CLASSIC MELANGE CURVA S1 M2 L3', cantidad: 2, precio: 484000, total: 968000 }]);
+    expect(normalizarUllua({ tipo: 'otro', fecha: '18/11/2026', renglones: [{ codigo: 'X1C', cantidad: -2, precio: 'abc' }] }))
+      .toMatchObject({ tipo: 'remito', fecha: '', renglones: [{ codigo: 'X1C', cantidad: 0, precio: 0 }] });
   });
 
   it('rechaza fotos inválidas, demasiadas y respuestas sin artículos', async () => {

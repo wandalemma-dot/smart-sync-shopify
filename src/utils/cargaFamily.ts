@@ -20,8 +20,8 @@
 // ============================================================================
 import { fmt } from './controlFacturas';
 import {
-  busquedaCodigos, codigoBuscable, etiquetaEsDelCodigo, skuEsDelCodigo, talleFamily,
-  type FilaFamily, type RenglonFamily, type ResultadoFamily,
+  BUSCADOR_FAMILY, codigoBuscable, etiquetaEsDelCodigo, talleFamily,
+  type BuscadorShopify, type FilaFamily, type RenglonFamily, type ResultadoFamily,
 } from './controlFamily';
 import { mismaSucursal } from './shopify';
 import { confirmarCantidades } from './confirmarStock';
@@ -160,8 +160,9 @@ const Q_VARIANTES = `query($q: String!, $cursor: String) {
     nodes { sku product { id tags } }
   }
 }`;
-const Q_FAMILY = `query($cursor: String) {
-  products(first: 100, after: $cursor, query: "vendor:Familyarg") {
+// La búsqueda va escrita en la consulta (es una constante del marketplace, «vendor:Familyarg»).
+const Q_FAMILY = (q: string) => `query($cursor: String) {
+  products(first: 100, after: $cursor, query: ${JSON.stringify(q)}) {
     pageInfo { hasNextPage endCursor }
     nodes { id title status tags }
   }
@@ -181,7 +182,7 @@ type NodoProducto = {
 };
 
 /** Productos que llevan el código en el SKU o en una etiqueta (lectura). */
-export async function productosDelCodigo(codigos: string[], gql: Gql): Promise<Record<string, string[]>> {
+export async function productosDelCodigo(codigos: string[], gql: Gql, m: BuscadorShopify = BUSCADOR_FAMILY): Promise<Record<string, string[]>> {
   const out: Record<string, Set<string>> = {};
   const validos = [...new Set(codigos)].filter(codigoBuscable);
   for (const c of validos) out[c] = new Set();
@@ -189,9 +190,9 @@ export async function productosDelCodigo(codigos: string[], gql: Gql): Promise<R
     const lote = validos.slice(i, i + 10);
     let cursor: string | null = null;
     for (let pagina = 0; pagina < 30; pagina++) {
-      const d = (await gql(Q_VARIANTES, { q: busquedaCodigos(lote), cursor })) as { productVariants: Pagina<NodoVariante> };
+      const d = (await gql(Q_VARIANTES, { q: m.busqueda(lote), cursor })) as { productVariants: Pagina<NodoVariante> };
       for (const n of d.productVariants.nodes) {
-        for (const c of lote) if (skuEsDelCodigo(n.sku || '', c) || etiquetaEsDelCodigo(n.product.tags, c)) out[c].add(n.product.id);
+        for (const c of lote) if (m.esDelCodigo(n.sku || '', n.product.tags, c)) out[c].add(n.product.id);
       }
       if (!d.productVariants.pageInfo.hasNextPage) break;
       cursor = d.productVariants.pageInfo.endCursor;
@@ -201,23 +202,24 @@ export async function productosDelCodigo(codigos: string[], gql: Gql): Promise<R
 }
 
 /** Lee todo lo que hace falta para armar la carga. Solo lectura; si algo falla, no se arma nada. */
-export async function leerEstadoCarga(renglones: RenglonFamily[], gql: Gql): Promise<EstadoCarga> {
+export async function leerEstadoCarga(renglones: RenglonFamily[], gql: Gql, m: Marketplace = FAMILY): Promise<EstadoCarga> {
   const suc = (await gql(Q_SUCURSALES)) as { locations: { nodes: { id: string; name: string }[] } };
-  const loc = suc.locations.nodes.find((l) => mismaSucursal(l.name, SUCURSAL_FAMILY));
-  if (!loc) throw new Error(`No encontré la sucursal ${SUCURSAL_FAMILY} en Shopify. No se cargó nada.`);
+  const loc = suc.locations.nodes.find((l) => mismaSucursal(l.name, m.sucursal));
+  if (!loc) throw new Error(`No encontré la sucursal ${m.sucursal} en Shopify. No se cargó nada.`);
   const can = (await gql(Q_CANALES)) as { publications: { nodes: { id: string; name: string }[] } };
   const pos = can.publications.nodes.find((p) => {
     const n = String(p.name || '').toLowerCase();
     return n.includes('point of sale') || n.includes('punto de venta') || n === 'pos';
   });
 
-  const porCodigo = await productosDelCodigo(renglones.map((r) => r.codigo), gql);
+  const porCodigo = await productosDelCodigo(renglones.map((r) => r.codigo), gql, m);
   const familia: ProductoLista[] = [];
-  const sinProducto = renglones.filter((r) => codigoBuscable(r.codigo) && !porCodigo[r.codigo]?.length);
-  if (sinProducto.length) {
+  // Por nombre solo Family (hay Family sin SKU); Ullua siempre tiene SKU o etiqueta con el código.
+  const sinProducto = m.consultaNombre ? renglones.filter((r) => codigoBuscable(r.codigo) && !porCodigo[r.codigo]?.length) : [];
+  if (sinProducto.length && m.consultaNombre) {
     let cursor: string | null = null;
     for (let pagina = 0; pagina < 30; pagina++) {
-      const d = (await gql(Q_FAMILY, { cursor })) as { products: Pagina<{ id: string; title: string; status: string; tags?: string[] }> };
+      const d = (await gql(Q_FAMILY(m.consultaNombre), { cursor })) as { products: Pagina<{ id: string; title: string; status: string; tags?: string[] }> };
       for (const p of d.products.nodes) familia.push({ id: p.id, titulo: p.title, estado: p.status, etiquetas: p.tags ?? [] });
       if (!d.products.pageInfo.hasNextPage) break;
       cursor = d.products.pageInfo.endCursor;
@@ -268,6 +270,10 @@ export interface AltaFamily {
   /** Target: precio de lista y descuento de la factura, para mostrar el margen que deja (19-nov-2026, gax). */
   lista?: number;
   bonificacion?: number;
+  /** Ullua (19-nov-2026): el precio de venta es una sugerencia (c/u sin IVA × 2) y se puede cambiar en la vista previa. */
+  precioEditable?: boolean;
+  /** Ullua: precio c/u sin IVA (para mostrar de dónde sale el precio y el costo). */
+  precioBase?: number;
 }
 export interface LineaReposicion { talle: string; inventoryItemId: string; actual: number | null; suma: number }
 /**
@@ -525,7 +531,7 @@ function opcionAlta(r: RenglonFamily): OpcionCarga {
   };
 }
 
-function opcionReposicion(r: RenglonFamily, p: ProductoCarga | undefined, fila: FilaFamily | undefined, porNombre: string | null): OpcionCarga {
+function opcionReposicion(r: RenglonFamily, p: ProductoCarga | undefined, fila: FilaFamily | undefined, porNombre: string | null, m: Marketplace = FAMILY): OpcionCarga {
   if (!p) return { clave: 'falta', etiqueta: 'Producto que no pude leer', accion: null, bloqueo: 'No pude leer ese producto en Shopify.', avisos: [] };
   const avisos: string[] = [];
   const base = { clave: `repo:${p.id}`, etiqueta: `Sumar el stock en «${p.titulo}»${porNombre ? ` (${porNombre})` : ''}`, avisos };
@@ -543,19 +549,39 @@ function opcionReposicion(r: RenglonFamily, p: ProductoCarga | undefined, fila: 
   if (faltan.length) return { ...base, accion: null, bloqueo: `En «${p.titulo}» no existe el talle ${faltan.join(', ')}: crealo en Shopify y armá la carga de nuevo.` };
   if (dobles.length) return { ...base, accion: null, bloqueo: `«${p.titulo}» tiene dos variantes del talle ${dobles.join(', ')}: cargalo a mano.` };
   if (sinControl.length) return { ...base, accion: null, bloqueo: `En «${p.titulo}» el talle ${sinControl.join(', ')} no lleva control de stock: cargalo a mano.` };
-  for (const l of lineas) if (l.actual === null) avisos.push(`Talle ${l.talle}: no está dado de alta en ${SUCURSAL_FAMILY}; se da de alta con ${l.suma}.`);
+  for (const l of lineas) if (l.actual === null) avisos.push(`Talle ${l.talle}: no está dado de alta en ${m.sucursal}; se da de alta con ${l.suma}.`);
   if (p.estado !== 'ACTIVE') avisos.push(`El producto está ${p.estado === 'DRAFT' ? 'en borrador' : 'archivado'} en Shopify: se le suma igual el stock.`);
-  if (fila?.cambiosPrecio.length) avisos.push('Family cambió el precio: el precio de Shopify NO se cambia (si querés, cambialo a mano).');
+  if (fila?.cambiosPrecio.length) avisos.push(`${m.nombre} cambió el precio: el precio de Shopify NO se cambia (si querés, cambialo a mano).`);
   const etiquetar = !!porNombre && !etiquetaEsDelCodigo(p.etiquetas, r.codigo);
   if (etiquetar) avisos.push(`Se le agrega la etiqueta ${r.codigo} para reconocerlo en las próximas entregas.`);
   return { ...base, accion: { tipo: 'reposicion', productoId: p.id, titulo: p.titulo, lineas, etiquetar } };
 }
 
 /**
+ * Un marketplace que deja su mercadería en una sucursal propia (Family; Ullua desde el 19-nov-2026, en ullua.ts):
+ * cómo se reconocen sus productos, en qué sucursal se suma el stock y cómo se crea un producto nuevo.
+ */
+export interface Marketplace extends BuscadorShopify {
+  id: 'family' | 'ullua';
+  /** Para los mensajes. */
+  nombre: string;
+  sucursal: string;
+  /** Búsqueda de Shopify de todos sus productos, para encontrar por nombre los que no tienen el código (null = no se busca). */
+  consultaNombre: string | null;
+  alta: (r: RenglonFamily) => OpcionCarga;
+  /** El costo que tiene que tener en Shopify un artículo de la entrega (para avisar si es otro). */
+  costoEsperado?: (r: RenglonFamily) => number | null;
+}
+export const FAMILY: Marketplace = {
+  id: 'family', nombre: 'Family', sucursal: SUCURSAL_FAMILY, consultaNombre: `vendor:${VENDOR_FAMILY}`,
+  ...BUSCADOR_FAMILY, alta: opcionAlta,
+};
+
+/**
  * Arma la vista previa de la carga de una entrega. No escribe nada.
  * `cargas` son las marcas guardadas (de todas las entregas), leídas recién de la base.
  */
-export function planCargaFamily(r: ResultadoFamily, estado: EstadoCarga, cargas: Record<string, CargaFamily>): PlanCarga {
+export function planCargaFamily(r: ResultadoFamily, estado: EstadoCarga, cargas: Record<string, CargaFamily>, m: Marketplace = FAMILY): PlanCarga {
   const e = r.entrega;
   const avisos: string[] = [];
   if (!estado.posId) avisos.push('No encontré el canal «Point of Sale»: los nuevos se crean activos, pero sin publicar en ningún canal.');
@@ -574,22 +600,22 @@ export function planCargaFamily(r: ResultadoFamily, estado: EstadoCarga, cargas:
 
     const ids = estado.porCodigo[ren.codigo] ?? [];
     if (ids.length) {
-      const opciones = ids.map((id) => opcionReposicion(ren, estado.productos[id], fila, null));
+      const opciones = ids.map((id) => opcionReposicion(ren, estado.productos[id], fila, null, m));
       if (ids.length === 1) return opciones[0].bloqueo ? bloqueado(opciones[0].bloqueo) : { ...base, estado: 'listo', motivo: '', opciones };
       return { ...base, estado: 'elegir', motivo: `El código está en ${ids.length} productos de Shopify: elegí en cuál sumar el stock.`, opciones: [NO_CARGAR, ...opciones] };
     }
-    const alta = opcionAlta(ren);
-    const parecidos = candidatosPorNombre(ren.descripcion, estado.familia).slice(0, 4);
+    const alta = m.alta(ren);
+    const parecidos = m.consultaNombre ? candidatosPorNombre(ren.descripcion, estado.familia).slice(0, 4) : [];
     if (parecidos.length) {
       return {
         ...base, estado: 'elegir',
         motivo: `No hay ningún producto con este código, pero ${parecidos.length === 1 ? 'hay uno parecido' : `hay ${parecidos.length} parecidos`} (puede ser el mismo, cargado sin SKU). Elegí si es ese o si se crea nuevo.`,
-        opciones: [NO_CARGAR, ...parecidos.map((c) => opcionReposicion(ren, estado.productos[c.id], fila, c.motivo)), alta],
+        opciones: [NO_CARGAR, ...parecidos.map((c) => opcionReposicion(ren, estado.productos[c.id], fila, c.motivo, m)), alta],
       };
     }
     return alta.bloqueo ? bloqueado(alta.bloqueo) : { ...base, estado: 'listo', motivo: '', opciones: [alta] };
   });
-  return { entregaId: e.id, locationId: estado.locationId, posId: estado.posId, items, avisos };
+  return { entregaId: e.id, locationId: estado.locationId, posId: estado.posId, items, avisos, sucursal: m.sucursal };
 }
 
 /** Elección de la usuaria por artículo: qué opción y, si se crea, con qué título. */
@@ -612,7 +638,10 @@ export function accionesElegidas(plan: PlanCarga, elecciones: EleccionesCarga): 
     }
     if (accion.tipo === 'alta') {
       const titulo = (elecciones[it.codigo]?.titulo ?? accion.titulo).replace(/\s+/g, ' ').trim();
-      accion = { ...accion, titulo: titulo || accion.titulo };
+      // Ullua: el precio escrito en la vista previa (entero y mayor a cero) reemplaza al sugerido.
+      const precio = elecciones[it.codigo]?.precio;
+      const elegido = accion.precioEditable && precio !== undefined && Number.isFinite(precio) && precio > 0 ? Math.round(precio) : accion.precio;
+      accion = { ...accion, titulo: titulo || accion.titulo, precio: elegido };
     }
     out.push({ codigo: it.codigo, firma: it.firma, accion });
   }
@@ -680,6 +709,8 @@ export interface DepsCarga {
   onProgreso?: (hechos: number, total: number) => void;
   /** iD: precio y costo antes de sumar el stock. Si falla, el stock no se suma. */
   antes?: (codigo: string, accion: ReposicionFamily) => Promise<{ estado: 'ok'; mensaje: string } | { estado: 'error' | 'dudosa'; mensaje: string }>;
+  /** Ullua: cómo se reconocen sus productos (para revisar antes de crear). Family por defecto. */
+  buscador?: BuscadorShopify;
 }
 /** Un talle que Shopify confirmó: antes null = se dio de alta en la sucursal; nuevo = talle (o producto) creado. */
 export interface TalleSumado { talle: string; antes: number | null; suma: number; nuevo?: boolean }
@@ -718,7 +749,7 @@ const motivo = (e: unknown) => (e instanceof Error ? e.message : 'error').slice(
 async function crearAlta(codigo: string, a: AltaFamily, plan: PlanCarga, deps: DepsCarga): Promise<Paso> {
   // Revisión fresca: si mientras tanto alguien lo creó con este código, no se duplica.
   try {
-    const ya = await productosDelCodigo([codigo], deps.gql);
+    const ya = await productosDelCodigo([codigo], deps.gql, deps.buscador);
     if (ya[codigo]?.length) return { estado: 'error', mensaje: 'Mientras tanto apareció en Shopify un producto con este código: no se creó nada. Armá la carga de nuevo.' };
   } catch (e) {
     return { estado: 'error', mensaje: `No pude revisar Shopify antes de crear (${motivo(e)}): no se creó nada.` };

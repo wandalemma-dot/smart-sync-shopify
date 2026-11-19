@@ -167,6 +167,50 @@ Reglas:
 - No hagas cuentas para completar lo que no se lee: la app las controla.
 - Ignorá firmas, sellos y marcas a mano (anotalas en «dudas» si parecen importantes).`;
 
+// Ullua (19-nov-2026, gax): marketplace (Thrasher, Spitfire, DTS). Trae un REMITO (precios CON IVA) o una
+// FACTURA (precios SIN IVA). El precio es el de la CURVA entera y la curva está en la descripción
+// («CURVA S1 M2 L3 XL2»). La app divide por 1,21 (remito) y por las unidades de la curva (ullua.ts).
+const ESQUEMA_ULLUA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['tipo', 'numero', 'fecha', 'remito', 'renglones', 'subtotal', 'iva', 'total', 'dudas'],
+  properties: {
+    tipo: { type: 'string', enum: ['remito', 'factura'], description: 'remito si dice REMITO (documento no válido como factura); factura si dice FACTURA.' },
+    numero: { type: 'string', description: 'Número del comprobante tal como está impreso (por ejemplo 0001-00007680).' },
+    fecha: { type: 'string', description: 'Fecha del comprobante en formato AAAA-MM-DD, o vacío.' },
+    remito: { type: 'string', description: 'En una factura, el número de remito que menciona («REMITO: 7680»), o vacío.' },
+    renglones: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['codigo', 'descripcion', 'cantidad', 'precio', 'total'],
+        properties: {
+          codigo: { type: 'string', description: 'Código del artículo tal cual (580580C, 5101-A80C, 251451).' },
+          descripcion: { type: 'string', description: 'La descripción COMPLETA tal como está impresa, incluida la curva («CURVA S1 M2 L3 XL2»), aunque esté cortada.' },
+          cantidad: { type: 'number', description: 'Cantidad del renglón (curvas o unidades), tal como figura.' },
+          precio: { type: 'number', description: 'Precio unitario del renglón, sin $ ni separadores de miles.' },
+          total: { type: 'number', description: 'Importe total del renglón.' },
+        },
+      },
+    },
+    subtotal: { type: 'number', description: 'Subtotal (sin IVA) del pie, o 0 si no hay.' },
+    iva: { type: 'number', description: 'Importe del IVA del pie, o 0 si no hay.' },
+    total: { type: 'number', description: 'Total del comprobante.' },
+    dudas: { type: 'array', items: { type: 'string' } },
+  },
+};
+
+const INSTRUCCIONES_ULLUA = `Transcribí este comprobante (remito o factura) de Ullua (Thrasher, Spitfire, DTS). Puede venir en varias fotos: son páginas del mismo comprobante; la foto puede estar girada.
+Columnas de los renglones: código | descripción | cantidad | precio unitario | importe.
+- La descripción va COMPLETA, con la curva tal como está impresa («SP HOODIE OG CLASSIC MELANGE CURVA S1 M2 L3 XL2»). Si está cortada por el ancho de la columna, transcribí lo que se ve, sin completarla.
+- Números sin $ ni separadores de miles: 484.000,00 → 484000.
+- En la factura, el pie trae subtotal, IVA 21% y total; si menciona un remito («REMITO: 7680»), anotalo.
+Reglas:
+- No corrijas, no completes y no adivines. Si algo no se lee con seguridad, transcribí lo más probable y explicalo en «dudas» (código y qué no se lee).
+- No hagas cuentas para completar lo que no se lee: la app las controla.
+- Ignorá firmas y sellos; las marcas a mano anotalas en «dudas».`;
+
 /** Valida las fotos que manda la pantalla. */
 export function validarFotos(fotos) {
   if (!Array.isArray(fotos) || !fotos.length) throw falla('Falta la foto del remito.');
@@ -262,6 +306,29 @@ export function normalizarFactura(crudo) {
   };
 }
 
+/** Normaliza el remito o la factura de Ullua. Las curvas, el IVA y las cuentas se resuelven en la app (ullua.ts). */
+export function normalizarUllua(crudo) {
+  const dudas = (Array.isArray(crudo?.dudas) ? crudo.dudas : []).slice(0, 50).map((d) => txt(d, 300)).filter(Boolean);
+  const renglones = [];
+  for (const r of (Array.isArray(crudo?.renglones) ? crudo.renglones : []).slice(0, 300)) {
+    const codigo = txt(r?.codigo, 40).toUpperCase().replace(/\s+/g, '');
+    if (!codigo) continue;
+    const n = Number(r?.cantidad);
+    renglones.push({
+      codigo, descripcion: txt(r?.descripcion, 200),
+      cantidad: Number.isFinite(n) && n >= 0 && n <= 100000 ? Math.round(n * 100) / 100 : 0,
+      precio: importe(r?.precio), total: importe(r?.total),
+    });
+  }
+  return {
+    tipo: crudo?.tipo === 'factura' ? 'factura' : 'remito',
+    numero: txt(crudo?.numero, 40),
+    fecha: /^\d{4}-\d{2}-\d{2}$/.test(String(crudo?.fecha || '')) ? crudo.fecha : '',
+    remito: txt(crudo?.remito, 40),
+    renglones, subtotal: importe(crudo?.subtotal), iva: importe(crudo?.iva), total: importe(crudo?.total), dudas, origen: 'foto',
+  };
+}
+
 /**
  * Lee el remito (o, con tipo 'entrega', la planilla de entrega de Family) de las fotos.
  * `cliente` se inyecta en los tests para no llamar a la API real.
@@ -270,25 +337,26 @@ export async function leerRemito({ fotos, cliente, tipo = 'remito' }) {
   const validas = validarFotos(fotos);
   const esEntrega = tipo === 'entrega';
   const esFactura = tipo === 'factura';
+  const esUllua = tipo === 'ullua';
   const client = cliente || new Anthropic({ apiKey: claveEnv('ANTHROPIC_API_KEY') });
   const content = [
     ...validas.map((f) => ({ type: 'image', source: { type: 'base64', media_type: f.media, data: f.datos } })),
-    { type: 'text', text: esFactura ? INSTRUCCIONES_FACTURA : esEntrega ? INSTRUCCIONES_ENTREGA : INSTRUCCIONES },
+    { type: 'text', text: esUllua ? INSTRUCCIONES_ULLUA : esFactura ? INSTRUCCIONES_FACTURA : esEntrega ? INSTRUCCIONES_ENTREGA : INSTRUCCIONES },
   ];
   const respuesta = await client.beta.messages.create({
     model: process.env.ANTHROPIC_MODEL || MODELO_POR_DEFECTO,
     max_tokens: 16000,
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
-    output_config: { effort: process.env.ANTHROPIC_EFFORT || 'medium', format: { type: 'json_schema', schema: esFactura ? ESQUEMA_FACTURA : esEntrega ? ESQUEMA_ENTREGA : ESQUEMA } },
+    output_config: { effort: process.env.ANTHROPIC_EFFORT || 'medium', format: { type: 'json_schema', schema: esUllua ? ESQUEMA_ULLUA : esFactura ? ESQUEMA_FACTURA : esEntrega ? ESQUEMA_ENTREGA : ESQUEMA } },
     messages: [{ role: 'user', content }],
   });
   if (respuesta.stop_reason === 'refusal') throw falla('No se pudo leer la foto. Escribí el remito a mano.');
-  if (respuesta.stop_reason === 'max_tokens') throw falla(`${esFactura ? 'La factura' : 'El remito'} es demasiado largo para leerlo de una vez: subí las fotos de a menos.`);
+  if (respuesta.stop_reason === 'max_tokens') throw falla(`${esFactura ? 'La factura' : esUllua ? 'El comprobante' : 'El remito'} es demasiado largo para leerlo de una vez: subí las fotos de a menos.`);
   const texto = (respuesta.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
   let crudo;
   try { crudo = JSON.parse(texto); } catch { throw falla('No se pudo leer la foto. Probá de nuevo o escribí el remito a mano.'); }
-  const leido = esFactura ? normalizarFactura(crudo) : esEntrega ? normalizarEntrega(crudo) : normalizarRemito(crudo);
-  if (!leido.renglones.length) throw falla(`No encontré artículos en la foto. ¿Es ${esFactura ? 'la factura' : esEntrega ? 'la planilla de entrega' : 'el remito'}? Probá con una foto más clara${esFactura ? '' : ' o escribilo a mano'}.`);
+  const leido = esUllua ? normalizarUllua(crudo) : esFactura ? normalizarFactura(crudo) : esEntrega ? normalizarEntrega(crudo) : normalizarRemito(crudo);
+  if (!leido.renglones.length) throw falla(`No encontré artículos en la foto. ¿Es ${esUllua ? 'el remito o la factura' : esFactura ? 'la factura' : esEntrega ? 'la planilla de entrega' : 'el remito'}? Probá con una foto más clara${esFactura ? '' : ' o escribilo a mano'}.`);
   return leido;
 }
