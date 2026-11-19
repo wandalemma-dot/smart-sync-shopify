@@ -9,8 +9,10 @@
 //   sin faltante en su renglón. Si algo no se pudo pedir (sin stock, otra marca,
 //   otra plantilla, talle dudoso), la orden NO se etiqueta: la etiqueta excluye
 //   la orden entera del próximo armado y eso que falta no se volvería a pedir.
-// - Dos etiquetas: «pedido id» (la que ya usa el armado para excluir) y
-//   «pedido id dd/mm/aaaa» con la fecha de Argentina.
+// - Etiquetas SEPARADAS (19-nov-2026, gax): «pedido id» (la que ya usa el armado
+//   para excluir) y la fecha sola «dd/mm/aaaa» (Argentina). El número de pedido de
+//   iD lo da la web de iD después de subir el Excel: se escribe en la app y va como
+//   otra etiqueta sola («00002616») a las órdenes que se etiquetaron en esa descarga.
 // - Escribe con tagsAdd (agrega, nunca reemplaza ni borra etiquetas).
 //   Necesita el permiso write_orders de la app de Shopify.
 // ============================================================================
@@ -25,7 +27,13 @@ export function hoyArgentina(ahora = new Date()): string {
   return `${d.slice(8, 10)}/${d.slice(5, 7)}/${d.slice(0, 4)}`;
 }
 
-export const etiquetasPedidoId = (fecha: string) => [ETIQUETA_PEDIDO_ID, `${ETIQUETA_PEDIDO_ID} ${fecha}`];
+export const etiquetasPedidoId = (fecha: string) => [ETIQUETA_PEDIDO_ID, fecha];
+
+/** Número de pedido de iD tal cual lo da su web (solo dígitos, conserva los ceros). Vacío si no es válido. */
+export function numeroPedidoId(texto: string): string {
+  const t = String(texto ?? '').trim().replace(/^(n[°º.]?|nro\.?|pedido)\s*/i, '').trim();
+  return /^\d{1,12}$/.test(t) ? t : '';
+}
 
 export interface OrdenEtiqueta { orden: string; ordenId: string }
 export interface OrdenSinEtiqueta { orden: string; motivos: string[] }
@@ -60,14 +68,14 @@ export interface ResultadoEtiquetas { ok: string[]; fallidas: { orden: string; e
 
 const TAGS_ADD = `mutation EtiquetaPedidoId($id: ID!, $tags: [String!]!) { tagsAdd(id: $id, tags: $tags) { node { id } userErrors { field message } } }`;
 
-/** Agrega «pedido id» y «pedido id dd/mm/aaaa» a cada orden. Una orden que falla no frena las demás. */
-export async function etiquetarOrdenes(ordenes: OrdenEtiqueta[], fecha: string): Promise<ResultadoEtiquetas> {
+/** Agrega las etiquetas a cada orden. Una orden que falla no frena las demás. */
+export async function etiquetarOrdenes(ordenes: OrdenEtiqueta[], tags: string[]): Promise<ResultadoEtiquetas> {
   const res: ResultadoEtiquetas = { ok: [], fallidas: [] };
   if (!ordenes.length) return res;
   const permisos: any = await shopifyGraphQL(`query PedidoIdPermisoEtiqueta { currentAppInstallation { accessScopes { handle } } }`);
   const scopes = new Set((permisos?.currentAppInstallation?.accessScopes || []).map((s: any) => s.handle));
   if (!scopes.has('write_orders')) return { ...res, sinPermiso: true, fallidas: ordenes.map(o => ({ orden: o.orden, error: 'falta el permiso write_orders' })) };
-  const tags = etiquetasPedidoId(fecha);
+  if (!tags.length) return res;
   for (const o of ordenes) {
     try {
       const d: any = await shopifyGraphQL(TAGS_ADD, { id: o.ordenId, tags });

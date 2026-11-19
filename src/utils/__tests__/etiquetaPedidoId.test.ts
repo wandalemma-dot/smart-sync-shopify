@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as XLSX from 'xlsx';
 import { leerPlantillaId, type PendienteId } from '../pedidoId';
-import { etiquetarOrdenes, etiquetasPedidoId, hoyArgentina, ordenesAEtiquetar } from '../etiquetaPedidoId';
+import { etiquetarOrdenes, etiquetasPedidoId, hoyArgentina, numeroPedidoId, ordenesAEtiquetar } from '../etiquetaPedidoId';
 const { api } = vi.hoisted(() => ({ api: vi.fn() }));
 vi.mock('../shopify', async original => ({ ...await original<typeof import('../shopify')>(), shopifyGraphQL: api }));
 
@@ -46,7 +46,7 @@ describe('etiqueta «pedido id» al descargar', () => {
 
   it('fecha de Argentina y las dos etiquetas', () => {
     expect(hoyArgentina(new Date('2026-11-18T02:30:00Z'))).toBe('17/11/2026');
-    expect(etiquetasPedidoId('18/11/2026')).toEqual(['pedido id', 'pedido id 18/11/2026']);
+    expect(etiquetasPedidoId('18/11/2026')).toEqual(['pedido id', '18/11/2026']);
   });
 
   it('agrega las etiquetas con tagsAdd y cuenta solo lo que Shopify confirmó', async () => {
@@ -56,19 +56,33 @@ describe('etiqueta «pedido id» al descargar', () => {
       if (v.id.endsWith('/3')) return { tagsAdd: null };
       return { tagsAdd: { node: { id: v.id }, userErrors: [] } };
     });
-    const r = await etiquetarOrdenes(['1', '2', '3'].map(n => ({ orden: `#${n}`, ordenId: `gid://shopify/Order/${n}` })), '18/11/2026');
+    const r = await etiquetarOrdenes(['1', '2', '3'].map(n => ({ orden: `#${n}`, ordenId: `gid://shopify/Order/${n}` })), ['pedido id', '18/11/2026']);
     expect(r.ok).toEqual(['#1']);
     expect(r.fallidas.map(f => f.orden)).toEqual(['#2', '#3']);
     expect(r.fallidas[0].error).toContain('archivada');
     const llamada = api.mock.calls.find(c => String(c[0]).includes('tagsAdd'))!;
-    expect(llamada[1]).toEqual({ id: 'gid://shopify/Order/1', tags: ['pedido id', 'pedido id 18/11/2026'] });
+    expect(llamada[1]).toEqual({ id: 'gid://shopify/Order/1', tags: ['pedido id', '18/11/2026'] });
   });
 
   it('sin permiso write_orders no escribe nada', async () => {
     api.mockResolvedValue({ currentAppInstallation: { accessScopes: [{ handle: 'read_orders' }] } });
-    const r = await etiquetarOrdenes([{ orden: '#1', ordenId: 'gid://shopify/Order/1' }], '18/11/2026');
+    const r = await etiquetarOrdenes([{ orden: '#1', ordenId: 'gid://shopify/Order/1' }], ['pedido id', '18/11/2026']);
     expect(r.sinPermiso).toBe(true);
     expect(r.ok).toEqual([]);
     expect(api).toHaveBeenCalledTimes(1);
+  });
+
+  it('número de pedido de iD: solo dígitos, conserva los ceros', async () => {
+    expect(numeroPedidoId(' 00002616 ')).toBe('00002616');
+    expect(numeroPedidoId('N° 00002616')).toBe('00002616');
+    expect(numeroPedidoId('Pedido 2616')).toBe('2616');
+    expect(numeroPedidoId('2616a')).toBe('');
+    expect(numeroPedidoId('')).toBe('');
+    api.mockImplementation(async (q: string, v: any) => q.includes('PedidoIdPermisoEtiqueta')
+      ? { currentAppInstallation: { accessScopes: [{ handle: 'write_orders' }] } }
+      : { tagsAdd: { node: { id: v.id }, userErrors: [] } });
+    const r = await etiquetarOrdenes([{ orden: '#1', ordenId: 'gid://shopify/Order/1' }], ['00002616']);
+    expect(r.ok).toEqual(['#1']);
+    expect(api.mock.calls.find(c => String(c[0]).includes('tagsAdd'))?.[1]).toEqual({ id: 'gid://shopify/Order/1', tags: ['00002616'] });
   });
 });
