@@ -18,6 +18,7 @@
 // ============================================================================
 import type { Factura, LineaPedido, Pedido, RenglonFactura } from './controlFacturas';
 import { redondear2 } from './syncLogic';
+import { margenPct } from './margen';
 
 export const ETIQUETA_TARGET = 'Target';
 export const esDeTarget = (etiquetas: string[]) => etiquetas.some((t) => String(t).trim().toUpperCase() === ETIQUETA_TARGET.toUpperCase());
@@ -220,3 +221,9 @@ export function tituloTarget(descripcion: string): string {
 export const precioTarget = (lista: number) => Math.round(lista * 2);
 /** Costo: la lista menos la bonificación de esa factura, con centavos. */
 export const costoTarget = (lista: number, bonificacion: number) => redondear2(lista * (1 - (bonificacion || 0) / 100));
+/**
+ * Margen que deja el precio a lista × 2 con el descuento de la factura (gax, 19-nov-2026: «el margen depende
+ * de la factura»), sin el IVA de la venta (mismo cálculo que iD). 50% → 69,7% · 30% → 57,6% · 10% → 45,5%.
+ * No frena nada: el precio sigue siendo la lista × 2.
+ */
+export const margenTarget = (bonificacion: number): number | null => margenPct(200, 100 - (bonificacion || 0));

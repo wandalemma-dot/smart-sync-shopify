@@ -265,6 +265,9 @@ export interface AltaFamily {
   tabla?: { nombre: string; json: unknown };
   /** Target: nombre de la opción ('Title' = producto sin talles, variante «Default Title»). Por defecto 'Talle'. */
   opcion?: string;
+  /** Target: precio de lista y descuento de la factura, para mostrar el margen que deja (19-nov-2026, gax). */
+  lista?: number;
+  bonificacion?: number;
 }
 export interface LineaReposicion { talle: string; inventoryItemId: string; actual: number | null; suma: number }
 /**

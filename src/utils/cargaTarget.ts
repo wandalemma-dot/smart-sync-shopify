@@ -15,7 +15,9 @@
 import { claveCodigo, type ResultadoFactura } from './controlFacturas';
 import { textoCarga, type CargaFamily, type ItemCarga, type OpcionCarga, type PlanCarga } from './cargaFamily';
 import { ajusteDe, formasCodigo, SUCURSAL_CARGA_ID, type EstadoCargaId, type ProductoId } from './cargaId';
-import { costoTarget, esDeTarget, ETIQUETA_TARGET, marcaTarget, precioTarget, tipoTarget, tituloTarget } from './target';
+import { costoTarget, esDeTarget, ETIQUETA_TARGET, marcaTarget, margenTarget, precioTarget, tipoTarget, tituloTarget } from './target';
+
+const pctTexto = (m: number) => `${Math.floor(m * 10) / 10}%`.replace('.', ',');
 
 const NO_CARGAR: OpcionCarga = { clave: 'no', etiqueta: 'No cargar este artículo', accion: null, avisos: [] };
 
@@ -56,7 +58,7 @@ function opcionAlta(codigo: string, descripcion: string, unidades: number, lista
     ...base, accion: {
       tipo: 'alta', titulo, productType: tipo?.tipo ?? (descripcion.split(/\s+/)[0] || 'Accesorio'), etiquetas: [ETIQUETA_TARGET, codigo],
       gramos: tipo?.gramos ?? 400, precio: precioTarget(lista), costo: costoTarget(lista, bonif), vendor: marca ?? ETIQUETA_TARGET,
-      variantes: [{ talle: 'Default Title', sku: codigo, cantidad: unidades }], opcion: 'Title',
+      variantes: [{ talle: 'Default Title', sku: codigo, cantidad: unidades }], opcion: 'Title', lista, bonificacion: bonif,
     },
   };
 }
@@ -118,6 +120,12 @@ export function planCargaTarget(r: ResultadoFactura, estado: EstadoCargaId, carg
     if (opciones.length === 1) return opciones[0].bloqueo ? bloqueado(opciones[0].bloqueo) : { ...base, estado: 'listo', motivo: '', opciones };
     return { ...base, estado: 'elegir', motivo: `El código está en ${opciones.length} productos de Target en Shopify: elegí en cuál sumar el stock.`, opciones: [NO_CARGAR, ...opciones] };
   });
+  // El precio es siempre la lista × 2: el margen lo decide el descuento de la factura (gax, 19-nov-2026).
+  const bonifs = [...new Set(f.renglones.map((x) => Number(x.bonificacion) || 0))];
+  if (bonifs.length === 1) {
+    const m = margenTarget(bonifs[0]);
+    if (m !== null) avisos.push(`Esta factura tiene ${bonifs[0]}% de descuento: con el precio a lista × 2, el margen queda en ${pctTexto(m)} (calculado sin el IVA de la venta).`);
+  }
   if (repetidos) avisos.push(`${repetidos} productos nuevos tienen el mismo nombre que otro de la factura: les agregué el código al título. Si sabés el color o el modelo, escribilo en el título antes de crear.`);
   return { entregaId: f.id, locationId: estado.locationId, posId: estado.posId ?? null, items, avisos, sucursal: SUCURSAL_CARGA_ID };
 }

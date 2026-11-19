@@ -4,7 +4,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   costoTarget, empresaTarget, esDeTarget, esPedidoTarget, facturaTargetDeFoto, leerPedidoTarget, marcaTarget, numeroFacturaTarget,
-  precioTarget, tipoTarget, tituloTarget, type FacturaFoto,
+  margenTarget, precioTarget, tipoTarget, tituloTarget, type FacturaFoto,
 } from '../target';
 import { analizarFacturas, type Factura, type Pedido, type Remito } from '../controlFacturas';
 import { planCargaTarget } from '../cargaTarget';
@@ -125,6 +125,14 @@ describe('alta de productos de Target', () => {
     expect(esDeTarget(['target', '10001'])).toBe(true);
     expect(esDeTarget(['10001'])).toBe(false);
   });
+
+  it('el margen de lista × 2 lo decide el descuento de la factura (sin IVA de la venta)', () => {
+    const r1 = (m: number | null) => Math.round((m ?? NaN) * 10) / 10;
+    expect(r1(margenTarget(50))).toBe(69.8);
+    expect(r1(margenTarget(30))).toBe(57.7);
+    expect(r1(margenTarget(10))).toBe(45.6);
+    expect(r1(margenTarget(0))).toBe(39.5);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -149,7 +157,9 @@ describe('carga de una entrega de Target', () => {
     expect(a).toMatchObject({
       tipo: 'alta', titulo: 'Riñonera Camping Alpine Skate', vendor: 'Alpine Skate', productType: 'Riñonera', etiquetas: ['Target', '10001'],
       precio: 20000, costo: 7000, opcion: 'Title', variantes: [{ talle: 'Default Title', sku: '10001', cantidad: 12 }],
+      lista: 10000, bonificacion: 30,
     });
+    expect(plan.avisos.join(' ')).toMatch(/30% de descuento: con el precio a lista × 2, el margen queda en 57,6%/);
     expect((plan.items[1].opciones[0].accion as AltaFamily).vendor).toBe('Reebok');
   });
 
