@@ -14,8 +14,10 @@ export const fechaCorta = (iso: string) => {
 };
 
 /** Proveedor como en la planilla: DISTRINANDO, ID CONVERSE, ID LE COQ (o los dos). */
-export function proveedorPlanilla(prov: 'id' | 'distrinando', titulos: string[]): string {
+export function proveedorPlanilla(prov: 'id' | 'distrinando' | 'target', titulos: string[], emisor?: string): string {
   if (prov === 'distrinando') return 'DISTRINANDO';
+  // Target factura con cuatro empresas del grupo (19-nov-2026): se aclara cuál, salvo la propia Target.
+  if (prov === 'target') return emisor && emisor.toUpperCase() !== 'TARGET' ? `TARGET (${emisor.toUpperCase()})` : 'TARGET';
   const converse = titulos.some((t) => /converse/i.test(t)), lecoq = titulos.some((t) => /le\s*coq/i.test(t));
   if (converse && lecoq) return 'ID CONVERSE / LE COQ';
   if (lecoq) return 'ID LE COQ';
@@ -32,7 +34,7 @@ export function observacionesPlanilla(r: ResultadoFactura): string {
 }
 
 export interface DatosAvisoAdmin {
-  prov: 'id' | 'distrinando';
+  prov: 'id' | 'distrinando' | 'target';
   r: ResultadoFactura;
   resultados: ResultadoCarga[];
   sucursal: string;
@@ -63,7 +65,7 @@ const MAX_CUERPO = 1800;
 /** Asunto y texto del mail a administración. */
 export function textoAvisoAdmin(o: DatosAvisoAdmin): { asunto: string; cuerpo: string; filas: [string, string][] } {
   const f = o.r.factura;
-  const proveedor = proveedorPlanilla(o.prov, o.resultados.map((x) => x.detalle?.titulo ?? ''));
+  const proveedor = proveedorPlanilla(o.prov, o.resultados.map((x) => x.detalle?.titulo ?? ''), o.r.factura.emisor);
   const filas: [string, string][] = [
     ['FECHA', fechaCorta(f.fecha)],
     ['PROVEEDOR', proveedor],
@@ -77,7 +79,7 @@ export function textoAvisoAdmin(o: DatosAvisoAdmin): { asunto: string; cuerpo: s
   // Como el mail que mandaba el depósito («Fac. OK ID»), pero escrito: solo informa (gax, 16-nov-2026).
   // La fecha es la de la factura; la de la carga va en la planilla.
   const ok = observacionesPlanilla(o.r) === 'ok';
-  const corto = o.prov === 'distrinando' ? 'Distrinando' : 'ID';
+  const corto = o.prov === 'distrinando' ? 'Distrinando' : o.prov === 'target' ? 'Target' : 'ID';
   const asunto = `Fac. ${ok ? 'OK ' : ''}${corto} - ${f.numero}${ok ? '' : ' (con diferencias)'}`;
   const remito = o.r.remito?.numero || f.remito;
   const datos = [`de ${proveedor}`, `del ${fechaCorta(f.fecha)}`, f.total ? `por ${pesos(f.total)}` : '', remito ? `(remito ${remito})` : ''].filter(Boolean).join(' ');
@@ -114,7 +116,7 @@ export function filaPlanilla(o: DatosAvisoAdmin): FilaPlanilla {
   const remito = o.r.remito?.numero || f.remito || '';
   return {
     fecha: fechaCorta(f.fecha),
-    proveedor: proveedorPlanilla(o.prov, o.resultados.map((x) => x.detalle?.titulo ?? '')),
+    proveedor: proveedorPlanilla(o.prov, o.resultados.map((x) => x.detalle?.titulo ?? ''), o.r.factura.emisor),
     numero: f.numero,
     factura: `${ok ? 'FAC.OK' : 'FAC.'} - ${f.numero}`,
     remito,

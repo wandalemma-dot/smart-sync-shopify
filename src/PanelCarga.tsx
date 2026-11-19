@@ -218,7 +218,7 @@ function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, onTabla, o
       {a?.tipo === 'alta' && <div style={{ marginTop: 4 }}>
         Crear producto nuevo: <input value={eleccion?.titulo ?? a.titulo} onChange={(ev) => onElegir({ titulo: ev.target.value })} style={{ ...inputSt, width: 'min(420px, 100%)' }} />
         <div style={{ opacity: 0.8, marginTop: 2 }}>
-          Tipo {a.productType} · precio {fmt(a.precio)} · costo {fmt(a.costo)} · {a.variantes.map((v) => `${v.talle}:${v.cantidad}`).join(' ')} · SKU {a.variantes[0]?.sku}… · etiquetas {a.etiquetas.join(', ')}
+          {a.vendor ? `Marca ${a.vendor} · ` : ''}Tipo {a.productType} · precio {fmt(a.precio)} · costo {fmt(a.costo)} · {a.variantes.map((v) => `${v.talle === 'Default Title' ? 'sin talle' : v.talle}:${v.cantidad}`).join(' ')} · SKU {a.variantes[0]?.sku}{a.variantes.length > 1 ? '…' : ''} · etiquetas {a.etiquetas.join(', ')}
         </div>
       </div>}
       {a?.tipo === 'reposicion' && <Reposicion a={a} enFilas={onDestino && onCantidad && it.talles?.length ? it.talles.map((t) => t.destino ?? '') : []} />}
@@ -559,24 +559,28 @@ function Ajuste({ a, precio, onPrecio }: { a: AjustePrecio; precio?: number; onP
   const nuevoMargen = precio !== undefined && Number.isFinite(precio) ? margenPct(precio, a.costoNuevo) : null;
   const cambiar = (s: string) => { setTexto(s); onPrecio(leerPrecio(s)); };
   const color = a.precioActual !== null && a.ok ? VERDE : AMARILLO;
+  // Target: el precio es la lista × 2 (gax, 19-nov-2026), no el margen del 50% con IVA.
+  const x2 = a.regla === 'x2';
   return (
     <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 6, background: 'rgba(0,0,0,0.14)' }}>
       <div>
         {a.precioActual === null
           ? <span style={{ color }}>Los talles tienen precios distintos ({a.precios.map(fmt).join(', ') || 'sin precio'}): poné un precio para toda la curva.</span>
-          : <>Margen con el costo nuevo ({fmt(a.costoNuevo)}) y el precio actual ({fmt(a.precioActual)}): <strong style={{ color }}>{pct(a.margen)}</strong>{a.ok ? '' : <span style={{ color }}> — no llega al 50%</span>}.</>}
+          : x2
+            ? <>Precio actual <strong style={{ color }}>{fmt(a.precioActual)}</strong>, lista × 2 = {fmt(a.sugerido)} (costo nuevo {fmt(a.costoNuevo)}){a.ok ? '' : <span style={{ color }}> — no llega a la lista × 2</span>}.</>
+            : <>Margen con el costo nuevo ({fmt(a.costoNuevo)}) y el precio actual ({fmt(a.precioActual)}): <strong style={{ color }}>{pct(a.margen)}</strong>{a.ok ? '' : <span style={{ color }}> — no llega al 50%</span>}.</>}
         {a.basico && !a.ok && a.precioActual !== null && ' Es un básico (precio impuesto): podés dejar el precio como está.'}
       </div>
       {(obliga || a.basico || precio !== undefined) && <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 6 }}>
         <span>{obliga ? 'Precio nuevo para toda la curva (obligatorio):' : 'Precio nuevo para toda la curva (opcional):'}</span>
         <input value={texto} onChange={(ev) => cambiar(ev.target.value)} placeholder={a.precioActual !== null ? String(a.precioActual) : ''} inputMode="numeric"
           style={{ ...inputSt, width: 110, borderColor: falta && texto ? ROJO : undefined }} />
-        <button style={{ ...botonChico, padding: '2px 8px' }} onClick={() => cambiar(String(a.sugerido))}>usar {fmt(a.sugerido)} ({pct(margenPct(a.sugerido, a.costoNuevo))})</button>
-        {nuevoMargen !== null && <span style={{ color: falta ? ROJO : VERDE }}>margen {pct(nuevoMargen)}</span>}
+        <button style={{ ...botonChico, padding: '2px 8px' }} onClick={() => cambiar(String(a.sugerido))}>usar {fmt(a.sugerido)}{x2 ? ' (lista × 2)' : ` (${pct(margenPct(a.sugerido, a.costoNuevo))})`}</button>
+        {nuevoMargen !== null && !x2 && <span style={{ color: falta ? ROJO : VERDE }}>margen {pct(nuevoMargen)}</span>}
       </div>}
       {falta && <div style={{ color: ROJO, marginTop: 2 }}>
         {precio !== undefined && !Number.isNaN(precio) && Number.isInteger(precio) && precio > 0
-          ? 'Con ese precio el margen no llega al 50%: este artículo no se carga hasta que lo corrijas.'
+          ? (x2 ? `Ese precio es menor que la lista × 2 (${fmt(a.sugerido)}): este artículo no se carga hasta que lo corrijas.` : 'Con ese precio el margen no llega al 50%: este artículo no se carga hasta que lo corrijas.')
           : precio !== undefined && precio !== a.precioActual ? 'Escribí el precio en pesos, sin centavos: este artículo no se carga hasta que lo corrijas.'
           : 'Este artículo no se carga hasta que pongas el precio nuevo.'}
       </div>}

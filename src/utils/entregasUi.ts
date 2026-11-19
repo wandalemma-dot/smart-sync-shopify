@@ -78,13 +78,21 @@ const base64 = (buf: ArrayBuffer) => {
  * Prepara la factura (PDF, tal cual) y las fotos del remito (achicadas a 2000 px, JPG) para Trello
  * (14-nov-2026). Nombres: «Factura 0039-00283124.pdf», «Remito 0085-00206200 (1).jpg».
  */
-export async function archivosParaTrello(files: File[], factura: string, remito: string): Promise<ArchivoTrello[]> {
+export async function archivosParaTrello(files: File[], factura: string, remito: string, esFotoFactura: (f: File) => boolean = () => false): Promise<ArchivoTrello[]> {
   const out: ArchivoTrello[] = [];
-  const fotos = files.filter((f) => f.type !== 'application/pdf' && !/\.pdf$/i.test(f.name));
-  const pdfs = files.filter((f) => !fotos.includes(f));
+  const noPdf = files.filter((f) => f.type !== 'application/pdf' && !/\.pdf$/i.test(f.name));
+  const pdfs = files.filter((f) => !noPdf.includes(f));
+  // Target (19-nov-2026): la factura llega en fotos; van como «Factura …», no como remito.
+  const fotosFactura = noPdf.filter(esFotoFactura);
+  const fotos = noPdf.filter((f) => !fotosFactura.includes(f));
   for (const [i, f] of pdfs.entries()) {
     if (f.size > MAX_TRELLO) throw new Error(`${f.name} pesa más de 3 MB: subilo a mano a Trello.`);
     out.push({ nombre: `Factura ${factura}${pdfs.length > 1 ? ` (${i + 1})` : ''}`, tipo: 'application/pdf', datos: base64(await f.arrayBuffer()) });
+  }
+  const deFactura = fotosFactura.length ? await prepararFotos(fotosFactura) : [];
+  for (const [i, f] of deFactura.entries()) {
+    if (f.datos.length * 0.75 > MAX_TRELLO) throw new Error('Una foto pesa más de 3 MB: subila a mano a Trello.');
+    out.push({ nombre: `Factura ${factura}${deFactura.length + pdfs.length > 1 ? ` (${pdfs.length + i + 1})` : ''}`, tipo: 'image/jpeg', datos: f.datos });
   }
   const achicadas = fotos.length ? await prepararFotos(fotos) : [];
   for (const [i, f] of achicadas.entries()) {
@@ -184,7 +192,7 @@ export async function probarPlanilla(): Promise<{ hoja?: string; sinPlanilla?: b
 }
 
 /** Lee fotos con IA (api/leer-remito.js): el remito, o la planilla de entrega de Family. */
-export async function leerFotos<T>(files: File[], tipo: 'remito' | 'entrega' = 'remito'): Promise<T> {
+export async function leerFotos<T>(files: File[], tipo: 'remito' | 'entrega' | 'factura' = 'remito'): Promise<T> {
   const fotos = await prepararFotos(files);
   const r = await fetch('/api/leer-remito', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fotos, tipo }) });
   const d = await r.json().catch(() => ({}));

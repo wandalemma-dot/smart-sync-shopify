@@ -43,6 +43,10 @@ describe('Aviso de carga a administración', () => {
     expect(proveedorPlanilla('distrinando', [])).toBe('DISTRINANDO');
     expect(proveedorPlanilla('id', ['Zapatillas Converse Chuck'])).toBe('ID CONVERSE');
     expect(proveedorPlanilla('id', ['Converse X', 'Le Coq Y'])).toBe('ID CONVERSE / LE COQ');
+    // Target (19-nov-2026): se aclara la empresa del grupo que factura, salvo la propia Target.
+    expect(proveedorPlanilla('target', [], 'BAG COMPANY')).toBe('TARGET (BAG COMPANY)');
+    expect(proveedorPlanilla('target', [], 'TARGET')).toBe('TARGET');
+    expect(proveedorPlanilla('target', [])).toBe('TARGET');
     expect(observacionesPlanilla({ ...r, totalDifPrecio: 1500 } as ResultadoFactura)).toBe('Facturado más caro ($ 1.500 de más)');
     expect(fechaCorta('2026-11-05')).toBe('05/11/26');
   });

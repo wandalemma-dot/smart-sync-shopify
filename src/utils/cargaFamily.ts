@@ -263,6 +263,8 @@ export interface AltaFamily {
   vendor?: string;
   /** Distrinando: tabla de talle elegida, se guarda en custom.size_conversion. */
   tabla?: { nombre: string; json: unknown };
+  /** Target: nombre de la opción ('Title' = producto sin talles, variante «Default Title»). Por defecto 'Talle'. */
+  opcion?: string;
 }
 export interface LineaReposicion { talle: string; inventoryItemId: string; actual: number | null; suma: number }
 /**
@@ -350,6 +352,8 @@ export interface AjustePrecio {
   conservan: { talle: string; stock: number; costo: number | null; motivo?: string }[];
   /** Precio elegido por la usuaria (si hace falta cambiarlo). */
   precio?: number;
+  /** Target (19-nov-2026, gax): el precio llega si es al menos la lista × 2 (`sugerido`), no el 50% con IVA. */
+  regla?: 'x2';
 }
 /** Distrinando: la tabla de talle del modelo (se elige en la vista previa y va a las etiquetas). */
 export interface TablaItem {
@@ -379,7 +383,7 @@ export function precioAEscribir(a: AjustePrecio, elegido?: number): number | nul
     return a.ok || a.basico ? null : NaN;
   }
   if (!Number.isInteger(p) || p <= 0) return NaN;
-  if (!a.basico && !llegaAl50(p, a.costoNuevo)) return NaN;
+  if (a.regla === 'x2' ? p < a.sugerido : !a.basico && !llegaAl50(p, a.costoNuevo)) return NaN;
   return p;
 }
 /** «84.900», «$84900» o «84900» → 84900. Lo que no es un número entero queda NaN. */
@@ -720,9 +724,9 @@ async function crearAlta(codigo: string, a: AltaFamily, plan: PlanCarga, deps: D
     status: 'ACTIVE',
     productType: a.productType,
     tags: a.etiquetas,
-    productOptions: [{ name: 'Talle', values: a.variantes.map((v) => ({ name: v.talle })) }],
+    productOptions: [{ name: a.opcion ?? 'Talle', values: a.variantes.map((v) => ({ name: v.talle })) }],
     variants: a.variantes.map((v) => ({
-      optionValues: [{ optionName: 'Talle', name: v.talle }],
+      optionValues: [{ optionName: a.opcion ?? 'Talle', name: v.talle }],
       price: String(a.precio),
       inventoryItem: { sku: v.sku, cost: String(a.costo), tracked: true, measurement: { weight: { value: a.gramos, unit: 'GRAMS' } } },
       ...(v.barcode ? { barcode: v.barcode } : {}),
@@ -730,7 +734,8 @@ async function crearAlta(codigo: string, a: AltaFamily, plan: PlanCarga, deps: D
     })),
   };
   const unidades = a.variantes.reduce((s, v) => s + v.cantidad, 0);
-  const talles = a.variantes.map((v) => ({ talle: v.talle, cantidad: v.cantidad }));
+  const verT = (t: string) => (t === 'Default Title' ? 'TU' : t);
+  const talles = a.variantes.map((v) => ({ talle: verT(v.talle), cantidad: v.cantidad }));
   let data: { productSet?: { product?: { id?: string } | null; userErrors?: { message?: string }[] } } | null;
   try { data = (await deps.gql(CREAR, { input })) as typeof data; }
   catch (e) {
@@ -759,7 +764,7 @@ async function crearAlta(codigo: string, a: AltaFamily, plan: PlanCarga, deps: D
       if (!Array.isArray(me) || me.length) tabla = ` No pude guardar la tabla ${a.tabla.nombre} en «Size Conversion»: completala a mano (no lo vuelvas a crear).`;
     } catch { tabla = ` No pude guardar la tabla ${a.tabla.nombre} en «Size Conversion»: completala a mano (no lo vuelvas a crear).`; }
   }
-  return { estado: 'cargada', productoId: pid, titulo: a.titulo, unidades, talles, sumados: a.variantes.map((v) => ({ talle: v.talle, antes: null, suma: v.cantidad, nuevo: true })), extra: `${publicado}${tabla}`.trim(), mensaje: `Creado «${a.titulo}» con ${unidades} u. en ${plan.sucursal ?? SUCURSAL_FAMILY} (${a.variantes.map((v) => `${v.talle}:${v.cantidad}`).join(' ')}).${publicado}${tabla}` };
+  return { estado: 'cargada', productoId: pid, titulo: a.titulo, unidades, talles, sumados: a.variantes.map((v) => ({ talle: verT(v.talle), antes: null, suma: v.cantidad, nuevo: true })), extra: `${publicado}${tabla}`.trim(), mensaje: `Creado «${a.titulo}» con ${unidades} u. en ${plan.sucursal ?? SUCURSAL_FAMILY} (${a.variantes.map((v) => `${verT(v.talle)}:${v.cantidad}`).join(' ')}).${publicado}${tabla}` };
 }
 
 async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga, deps: DepsCarga): Promise<Paso> {

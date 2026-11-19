@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { COOKIE, makeSession } from './access.js';
-import { leerRemito, normalizarEntrega, normalizarRemito, validarFotos } from './remito.js';
+import { leerRemito, normalizarEntrega, normalizarFactura, normalizarRemito, validarFotos } from './remito.js';
 import handler from '../api/leer-remito.js';
 
 const foto = { media: 'image/jpeg', datos: 'QUJD' };
@@ -47,6 +47,22 @@ describe('lectura de la foto del remito', () => {
     expect(r.dudas.join(' ')).toMatch(/TOTAL impreso \(11\) no coincide con la suma de talles \(10\)/);
     expect(normalizarEntrega({ renglones: [{ codigo: 'X1', precioMayor: -5, precioPublico: 'abc', cantidad: 3, talles: [] }] }).renglones[0])
       .toMatchObject({ precioMayor: 0, precioPublico: 0, cantidad: 3 });
+  });
+
+  it('con tipo factura lee la factura de Target: empresa, número, renglones y pie (19-nov-2026)', async () => {
+    const { create, cliente: c } = cliente(json({
+      empresa: 'BAG COMPANY S.R.L.', numero: 'A001600004005', fecha: '2026-11-12', pedido: 'P 211310', dudas: [],
+      renglones: [{ codigo: ' 15188 ', descripcion: 'Riñonera Camping Alpine Skate', unidad: 'Unidad', cantidad: 12, precioUnitario: 10000, importe: 120000 },
+        { codigo: '', descripcion: 'sin código', unidad: '', cantidad: 1, precioUnitario: 1, importe: 1 }],
+      subtotal: 120000, bonificacionPct: 30, bonificacion: 36000, neto: 84000, percepciones: 0, iva: 17640, total: 101640,
+    }));
+    const r = await leerRemito({ fotos: [foto], cliente: c, tipo: 'factura' });
+    const pedido = create.mock.calls[0][0];
+    expect(pedido.output_config.format.schema.required).toContain('bonificacionPct');
+    expect(pedido.messages[0].content.at(-1).text).toMatch(/DESPACHO/);
+    expect(r).toMatchObject({ empresa: 'BAG COMPANY S.R.L.', numero: 'A001600004005', pedido: '211310', bonificacionPct: 30, neto: 84000, total: 101640, origen: 'foto' });
+    expect(r.renglones).toEqual([{ codigo: '15188', descripcion: 'Riñonera Camping Alpine Skate', unidad: 'Unidad', cantidad: 12, precioUnitario: 10000, importe: 120000 }]);
+    expect(normalizarFactura({ fecha: '12/11/2026', bonificacionPct: 150, renglones: [] })).toMatchObject({ fecha: '', bonificacionPct: 0 });
   });
 
   it('rechaza fotos inválidas, demasiadas y respuestas sin artículos', async () => {

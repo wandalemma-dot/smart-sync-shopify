@@ -146,6 +146,13 @@ export interface Factura {
   percepcionCaba: number;
   percepcionBsAs: number;
   total: number;
+  /** Target (19-nov-2026): empresa del grupo que emite la factura (Target, Tendence, Bag Company, All Brands). */
+  emisor?: string;
+  /**
+   * Target: el precio se compara por el NETO (lista − bonificación). La nota trae el precio ya con la promoción y la
+   * factura la lista con la bonificación en el pie: más barato que la nota no se marca; más caro, sí.
+   */
+  soloNeto?: boolean;
 }
 
 export interface Asignacion {
@@ -417,7 +424,8 @@ function elegirNotas(f: Factura, mapa: Map<string, LineaCodigo[]>, manual: strin
       const m = saldo.get(g.pedido.id)!;
       m.set(cod, (m.get(cod) ?? 0) + libre);
       const r = precio.get(cod)!;
-      if (Math.abs(c(r.precioUnitario) - c(g.precioLista)) <= TOL_PRECIO && Math.abs((r.bonificacion || 0) - (g.descuento || 0)) <= 0.001) {
+      if (f.soloNeto ? c(neto(r.precioUnitario, r.bonificacion)) <= c(neto(g.precioLista, g.descuento)) + TOL_PRECIO
+        : Math.abs(c(r.precioUnitario) - c(g.precioLista)) <= TOL_PRECIO && Math.abs((r.bonificacion || 0) - (g.descuento || 0)) <= 0.001) {
         mismoPrecio.set(g.pedido.id, (mismoPrecio.get(g.pedido.id) ?? 0) + 1);
       }
     }
@@ -664,7 +672,9 @@ export function analizarFacturas(
           if (principal && g.pedido.id !== principal && !elegido && !otraNota.includes(g.pedido.id)) otraNota.push(g.pedido.id);
         }
         asignaciones.push({ pedidoId: g.pedido.id, cantidad: toma, adelanto });
-        if (Math.abs(c(r.precioUnitario) - c(g.precioLista)) > TOL_PRECIO || Math.abs((r.bonificacion || 0) - (g.descuento || 0)) > 0.001) {
+        // Target (soloNeto): solo cuenta si el neto de la factura es MÁS CARO que el de la nota.
+        if (f.soloNeto ? c(neto(r.precioUnitario, r.bonificacion)) > c(neto(g.precioLista, g.descuento)) + TOL_PRECIO
+          : Math.abs(c(r.precioUnitario) - c(g.precioLista)) > TOL_PRECIO || Math.abs((r.bonificacion || 0) - (g.descuento || 0)) > 0.001) {
           // dif_neta = (precio factura neto − precio pedido neto) × cantidad, redondeada una sola vez.
           const dif = Math.round((neto(r.precioUnitario, r.bonificacion) - neto(g.precioLista, g.descuento)) * toma * 100);
           difPrecio.push({ pedidoId: g.pedido.id, cantidad: toma, precioPedido: g.precioLista, descuentoPedido: g.descuento, precioFactura: r.precioUnitario, bonificacionFactura: r.bonificacion, diferencia: p(dif) });

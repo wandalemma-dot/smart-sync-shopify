@@ -3,7 +3,7 @@
 // ----------------------------------------------------------------------------
 // La usa api/leer-remito.js. Pasa la foto a texto (código, talles y cantidades)
 // para compararla con la factura. Con tipo 'entrega' lee la planilla de Family
-// (también descripción y precios). No decide nada: solo transcribe. Lo que no se
+// (también descripción y precios); con tipo 'factura', la factura en papel de Target (19-nov-2026). No decide nada: solo transcribe. Lo que no se
 // lee bien vuelve en «dudas» y la usuaria lo corrige en pantalla antes de usarlo.
 // La foto no se guarda. SOLO LECTURA: no toca Shopify ni la base.
 // Costo aproximado: US$ 0,01–0,03 por foto con el modelo por defecto.
@@ -66,7 +66,8 @@ Reglas:
 - Si el total impreso de un artículo no coincide con la suma de sus talles, anotalo en «dudas».
 - Ignorá firmas y sellos. Las marcas a mano no cambian la cantidad impresa.
 - Las marcas a mano (tildes, cruces, «NO», números como «-1» con o sin flecha) NO cambian nada: anotalas en «dudas» indicando el código y, si se ve, el talle al que apuntan.
-- Si hay una «cantidad total» o «total de unidades» impresa, compará con la suma de los artículos y anotá en «dudas» si no coincide.`;
+- Si hay una «cantidad total» o «total de unidades» impresa, compará con la suma de los artículos y anotá en «dudas» si no coincide.
+- Remitos de Target y sus empresas (Tendence, Bag Company, All Brands): la columna DESPACHO ADUANA (por ejemplo 25001IC04213695-U) NO es el código. El código es el número al principio de la descripción: «16043 - Mochila Camping Discovery T2» → 16043. La foto puede estar girada.`;
 
 // Planilla «ENTREGA MERCADERIA» de Family (11-nov-2026): además de talles trae precios.
 const ESQUEMA_ENTREGA = {
@@ -116,6 +117,55 @@ Reglas:
 - No corrijas, no completes y no adivines. Si algo no se lee con seguridad, transcribí lo más probable y explicalo en «dudas» (código y qué no se lee).
 - Si el TOTAL impreso no coincide con la suma de los talles, anotalo en «dudas».
 - Ignorá firmas y sellos; las marcas a mano anotalas en «dudas».`;
+
+// Factura de Target y sus empresas (19-nov-2026, gax): llegan en papel. Se transcribe la foto y las cuentas
+// (renglones, bonificación, IVA, total) se controlan en la app (target.ts): lo que no cierra se avisa.
+const ESQUEMA_FACTURA = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['empresa', 'numero', 'fecha', 'pedido', 'renglones', 'subtotal', 'bonificacionPct', 'bonificacion', 'neto', 'percepciones', 'iva', 'total', 'dudas'],
+  properties: {
+    empresa: { type: 'string', description: 'Razón social que emite la factura (por ejemplo TARGET, TENDENCE S.R.L., BAG COMPANY S.R.L., ALL BRANDS S.R.L.).' },
+    numero: { type: 'string', description: 'Número de factura tal como está impreso (por ejemplo A000300172534).' },
+    fecha: { type: 'string', description: 'Fecha de la factura en formato AAAA-MM-DD, o vacío.' },
+    pedido: { type: 'string', description: 'El número que figura con «P» debajo de «I.V.A.» (por ejemplo 211313), o vacío.' },
+    renglones: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['cantidad', 'codigo', 'descripcion', 'unidad', 'precioUnitario', 'importe'],
+        properties: {
+          cantidad: { type: 'number' },
+          codigo: { type: 'string', description: 'El número al principio de la descripción (16043 en «16043 - Mochila Camping Discovery T2»). No el despacho de aduana.' },
+          descripcion: { type: 'string', description: 'La descripción sin el código (Mochila Camping Discovery T2).' },
+          unidad: { type: 'string', description: '«Unidad», «x Par», etc., tal como figura.' },
+          precioUnitario: { type: 'number', description: 'P. UNITARIO, sin $ ni separadores de miles.' },
+          importe: { type: 'number', description: 'IMPORTE del renglón.' },
+        },
+      },
+    },
+    subtotal: { type: 'number', description: 'Primer importe del pie: la suma de los renglones.' },
+    bonificacionPct: { type: 'number', description: 'Porcentaje de bonificación del pie (10,00 → 10). 0 si no hay.' },
+    bonificacion: { type: 'number', description: 'Importe de la bonificación.' },
+    neto: { type: 'number', description: 'Subtotal menos la bonificación (el importe sobre el que se calcula el IVA).' },
+    percepciones: { type: 'number', description: 'Suma de las percepciones de ingresos brutos (IBB CABA, IBB MISIONES…). 0 si son 0.' },
+    iva: { type: 'number', description: 'Importe del IVA (el que está al lado de 21,00).' },
+    total: { type: 'number', description: 'Total de la factura.' },
+    dudas: { type: 'array', items: { type: 'string' } },
+  },
+};
+
+const INSTRUCCIONES_FACTURA = `Transcribí esta factura de un proveedor de accesorios (puede venir en varias fotos: son páginas de la misma factura; la foto puede estar girada).
+Columnas de los renglones: CANTIDAD | DESPACHO ADUANA | DESCRIPCION («16043 - Mochila Camping Discovery T2») | unidad («Unidad», «x Par») | P. UNITARIO | IMPORTE.
+- El código es el número al principio de la descripción (16043), NO el despacho de aduana (25001IC04213695-U).
+- Números sin $ ni separadores de miles: 49.900,00 → 49900; 2.478.400,00 → 2478400.
+Pie de la factura (de arriba hacia abajo, a la derecha): subtotal; a su izquierda el porcentaje de bonificación (10,00) y a la derecha su importe; el neto;
+las percepciones de ingresos brutos (IBB CABA, IBB MISIONES; suelen ser 0,00); otra vez el neto; a la izquierda 21,00 y a la derecha el IVA; el total.
+Reglas:
+- No corrijas, no completes y no adivines. Si algo no se lee con seguridad, transcribí lo más probable y explicalo en «dudas».
+- No hagas cuentas para completar lo que no se lee: la app las controla.
+- Ignorá firmas, sellos y marcas a mano (anotalas en «dudas» si parecen importantes).`;
 
 /** Valida las fotos que manda la pantalla. */
 export function validarFotos(fotos) {
@@ -183,6 +233,35 @@ export function normalizarEntrega(crudo) {
   return { fecha, renglones, dudas, origen: 'foto' };
 }
 
+const importe = (v) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n >= 0 && n <= 1e11 ? Math.round(n * 100) / 100 : 0;
+};
+
+/** Normaliza la factura de Target leída de la foto. Las cuentas se controlan en la app. */
+export function normalizarFactura(crudo) {
+  const dudas = (Array.isArray(crudo?.dudas) ? crudo.dudas : []).slice(0, 50).map((d) => txt(d, 300)).filter(Boolean);
+  const renglones = [];
+  for (const r of (Array.isArray(crudo?.renglones) ? crudo.renglones : []).slice(0, 300)) {
+    const codigo = txt(r?.codigo, 40).toUpperCase().replace(/\s+/g, '');
+    if (!codigo) continue;
+    renglones.push({
+      codigo, descripcion: txt(r?.descripcion, 200), unidad: txt(r?.unidad, 30), cantidad: cant(r?.cantidad),
+      precioUnitario: importe(r?.precioUnitario), importe: importe(r?.importe),
+    });
+  }
+  const pct = Number(crudo?.bonificacionPct);
+  return {
+    empresa: txt(crudo?.empresa, 80), numero: txt(crudo?.numero, 40),
+    fecha: /^\d{4}-\d{2}-\d{2}$/.test(String(crudo?.fecha || '')) ? crudo.fecha : '',
+    pedido: txt(crudo?.pedido, 20).replace(/[^\d]/g, ''),
+    renglones,
+    subtotal: importe(crudo?.subtotal), bonificacionPct: Number.isFinite(pct) && pct >= 0 && pct < 100 ? Math.round(pct * 100) / 100 : 0,
+    bonificacion: importe(crudo?.bonificacion), neto: importe(crudo?.neto), percepciones: importe(crudo?.percepciones),
+    iva: importe(crudo?.iva), total: importe(crudo?.total), dudas, origen: 'foto',
+  };
+}
+
 /**
  * Lee el remito (o, con tipo 'entrega', la planilla de entrega de Family) de las fotos.
  * `cliente` se inyecta en los tests para no llamar a la API real.
@@ -190,25 +269,26 @@ export function normalizarEntrega(crudo) {
 export async function leerRemito({ fotos, cliente, tipo = 'remito' }) {
   const validas = validarFotos(fotos);
   const esEntrega = tipo === 'entrega';
+  const esFactura = tipo === 'factura';
   const client = cliente || new Anthropic({ apiKey: claveEnv('ANTHROPIC_API_KEY') });
   const content = [
     ...validas.map((f) => ({ type: 'image', source: { type: 'base64', media_type: f.media, data: f.datos } })),
-    { type: 'text', text: esEntrega ? INSTRUCCIONES_ENTREGA : INSTRUCCIONES },
+    { type: 'text', text: esFactura ? INSTRUCCIONES_FACTURA : esEntrega ? INSTRUCCIONES_ENTREGA : INSTRUCCIONES },
   ];
   const respuesta = await client.beta.messages.create({
     model: process.env.ANTHROPIC_MODEL || MODELO_POR_DEFECTO,
     max_tokens: 16000,
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
-    output_config: { effort: process.env.ANTHROPIC_EFFORT || 'medium', format: { type: 'json_schema', schema: esEntrega ? ESQUEMA_ENTREGA : ESQUEMA } },
+    output_config: { effort: process.env.ANTHROPIC_EFFORT || 'medium', format: { type: 'json_schema', schema: esFactura ? ESQUEMA_FACTURA : esEntrega ? ESQUEMA_ENTREGA : ESQUEMA } },
     messages: [{ role: 'user', content }],
   });
   if (respuesta.stop_reason === 'refusal') throw falla('No se pudo leer la foto. Escribí el remito a mano.');
-  if (respuesta.stop_reason === 'max_tokens') throw falla('El remito es demasiado largo para leerlo de una vez: subí las fotos de a menos.');
+  if (respuesta.stop_reason === 'max_tokens') throw falla(`${esFactura ? 'La factura' : 'El remito'} es demasiado largo para leerlo de una vez: subí las fotos de a menos.`);
   const texto = (respuesta.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
   let crudo;
   try { crudo = JSON.parse(texto); } catch { throw falla('No se pudo leer la foto. Probá de nuevo o escribí el remito a mano.'); }
-  const leido = esEntrega ? normalizarEntrega(crudo) : normalizarRemito(crudo);
-  if (!leido.renglones.length) throw falla(`No encontré artículos en la foto. ¿Es ${esEntrega ? 'la planilla de entrega' : 'el remito'}? Probá con una foto más clara o escribilo a mano.`);
+  const leido = esFactura ? normalizarFactura(crudo) : esEntrega ? normalizarEntrega(crudo) : normalizarRemito(crudo);
+  if (!leido.renglones.length) throw falla(`No encontré artículos en la foto. ¿Es ${esFactura ? 'la factura' : esEntrega ? 'la planilla de entrega' : 'el remito'}? Probá con una foto más clara${esFactura ? '' : ' o escribilo a mano'}.`);
   return leido;
 }
