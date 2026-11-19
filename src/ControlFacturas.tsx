@@ -1022,10 +1022,25 @@ export default function ControlFacturas() {
     const tarjetas = [...new Set(r.pedidosCubiertos.map((id) => tarjetaDeNota(datos.pedidos.find((x) => x.id === id))).filter(Boolean))];
     if (!tarjetas.length) { if (sigue(p)) setAvisos((a) => [...a, ...hechos]); return; }
     const texto = comentarioTrello(datosAviso);
+    // Factura y fotos del remito a la tarjeta, solas (19-nov-2026, gax: «le cargué yo las fotos del remito y la
+    // factura; no las está subiendo»). Solo los archivos subidos en esta pantalla (no se guardan en la base);
+    // lo que la tarjeta ya tiene con el mismo nombre no se sube otra vez.
+    const files = archivosEntrega.current.get(r.factura.id) ?? [];
+    let archivos: Awaited<ReturnType<typeof archivosParaTrello>> = [];
+    if (files.length) {
+      try { archivos = await archivosParaTrello(files, r.factura.numero, r.remito?.numero || r.factura.remito || ''); }
+      catch (e) { hechos.push(`Trello: no pude preparar la factura y las fotos del remito (${mensaje(e)}). Subilas con «📎 Subir factura y remito a Trello».`); }
+    } else hechos.push('Trello: la factura y las fotos del remito no se subieron porque no están en esta pantalla (se recargó la página). Subilas con «📎 Subir factura y remito a Trello».');
     for (const t of tarjetas) {
       const nombre = datos.pedidos.find((x) => tarjetaDeNota(x) === t)?.nombre ?? 'la tarjeta';
       try { await comentarEnTrello(t, texto); hechos.push(`Trello: dejé en «${nombre}» el comentario con lo cargado.`); }
       catch (e) { hechos.push(`Trello: no pude comentar en «${nombre}» lo cargado (${mensaje(e)}).`); }
+      if (!archivos.length) continue;
+      const subidos: string[] = [];
+      try {
+        for (const a of archivos) { const x = await adjuntarATrello(t, a); if (!x.yaEstaba) subidos.push(x.nombre); }
+        if (subidos.length) hechos.push(`Trello: adjunté en «${nombre}» ${subidos.join(', ')}.`);
+      } catch (e) { hechos.push(`Trello: no pude adjuntar en «${nombre}» la factura y el remito (${mensaje(e)})${subidos.length ? `; ya había subido ${subidos.join(', ')}` : ''}.`); }
     }
     if (sigue(p)) setAvisos((a) => [...a, ...hechos]);
   }
