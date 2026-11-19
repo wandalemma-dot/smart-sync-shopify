@@ -395,7 +395,7 @@ export default function ControlFacturas() {
   const consejos = useMemo(() => {
     const out = new Map<string, ConsejoNota>();
     for (const p of pedidosControl) {
-      try { out.set(p.id, consejoNota(marcasDeNota(res, null, pedidosControl, p.id), { listaActual: listaDe(p), listaParcial, listaFinal, completoPorTipo: prov === 'id' })); } catch { /* sin datos */ }
+      try { out.set(p.id, consejoNota(marcasDeNota(res, null, pedidosControl, p.id), { listaActual: listaDe(p), listaParcial, listaFinal, completoPorTipo: prov === 'id', sinTipos: prov === 'target' })); } catch { /* sin datos */ }
     }
     return out;
   }, [res, pedidosControl, listaDe, listaParcial, listaFinal, prov]);
@@ -427,7 +427,7 @@ export default function ControlFacturas() {
       const pend = listasDePendientes(listas, frescos.listasTrello);
       const consejosDe = (tarjeta: string) => ctrl.filter((x) => tarjetaDeNota(x) === tarjeta).map((x) => {
         try {
-          const c = consejoNota(marcasDeNota(resF, null, ctrl, x.id), { completoPorTipo: p === 'id' });
+          const c = consejoNota(marcasDeNota(resF, null, ctrl, x.id), { completoPorTipo: p === 'id', sinTipos: p === 'target' });
           return c.tipo === 'finalizar' && c.noEntro?.length ? 'cerrar' as const : c.tipo;
         } catch { return 'nada' as const; }
       });
@@ -480,7 +480,9 @@ export default function ControlFacturas() {
     if (prov === 'target') {
       // Target (19-nov-2026): la nota es el PDF «Detalle de solicitud» de su web.
       if (!extra.lineasPdf) return { mensajes: [`${archivo}: la nota de Target es el PDF «Detalle de solicitud».`], descartado: 'no es un PDF' };
-      if (!esPedidoTarget(extra.lineasPdf)) return { mensajes: [`${archivo}: no es una nota de pedido de Target («Detalle de solicitud»).`], descartado: 'no es una nota de pedido de Target' };
+      // Un PDF que no es «Detalle de solicitud» es de otro proveedor (facturas de iD en sus tarjetas, 19-nov-2026):
+      // no se muestra en Target y no se vuelve a bajar.
+      if (!esPedidoTarget(extra.lineasPdf)) return { mensajes: [`${archivo}: no es una nota de pedido de Target («Detalle de solicitud»).`], descartado: 'es un pedido de otro proveedor' };
       r = leerPedidoTarget(extra.lineasPdf, nombre, fecha);
     } else {
       // Lo pintado en verde ya entró: la fecha es la de la copia (en Trello) o la de hoy (subida a mano).
@@ -719,6 +721,11 @@ export default function ControlFacturas() {
                 if (res.leido) await fusionar(res.repetidoId, res.leido.lineas, copia);
                 await anotar(`«${t.nombre}» ${a.nombre}: ${res.descartado}`);
                 fila(t, a, 'ya estaba', `${res.descartado}: estaba cargada desde una tarjeta de otra lista y ahora queda asociada a esta`, { deEstaFactura: leidas });
+              } else if (res.descartado === 'es un pedido de otro proveedor') {
+                // Target: un PDF de otro proveedor (iD) no se lista; solo se cuenta.
+                await anotar(`«${t.nombre}» ${a.nombre}: ${res.descartado}`);
+                otros++;
+                informe.otroProveedor++;
               } else {
                 if (res.repetidoId && res.leido) await fusionar(res.repetidoId, res.leido.lineas, copia);
                 if (marca?.motivo !== 'borrado a mano') await anotar(`«${t.nombre}» ${a.nombre}: ${res.descartado}`);
@@ -771,7 +778,7 @@ export default function ControlFacturas() {
       const borradas = informe.filas.filter((f) => f.estado === 'borrada' && f.pedido && f.deEstaFactura > 0);
       if (borradas.length) out.push(`Trello: ${borradas.map((f) => `«${f.tarjeta}»`).join(', ')} tiene(n) artículos de esta factura pero la(s) borraste de Pedidos: abrí la entrega y tocá «Volver a cargar».`);
       const ilegibles = informe.filas.filter((f) => f.estado === 'ilegible' || f.estado === 'falla').length;
-      if (factura && !cubierta() && !informe.filas.some((f) => f.deEstaFactura > 0)) out.push(`Trello: revisé ${informe.conExcel} tarjeta(s) con Excel y ninguna de las notas que pude leer tiene artículos de la factura ${factura.numero}.${ilegibles ? ` ${ilegibles} archivo(s) no los pude leer.` : ''} El detalle de cada tarjeta está en la entrega.`);
+      if (factura && !cubierta() && !informe.filas.some((f) => f.deEstaFactura > 0)) out.push(`Trello: revisé ${informe.conExcel} tarjeta(s) con ${prov === 'target' ? 'PDF' : 'Excel'} y ninguna de las notas que pude leer tiene artículos de la factura ${factura.numero}.${ilegibles ? ` ${ilegibles} archivo(s) no los pude leer.` : ''} El detalle de cada tarjeta está en la entrega.`);
       return { avisos: out, informe };
     } catch (e) {
       informe.error = mensaje(e);
@@ -1906,7 +1913,7 @@ function InformeTrelloCaja({ informe, ocupado, onRecargar }: { informe: InformeT
   return (
     <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 8, background: 'rgba(96,165,250,0.08)', border: '1px solid rgba(96,165,250,0.3)', fontSize: '0.82rem' }}>
       <div style={{ fontWeight: 'bold', marginBottom: 4 }}>
-        🗂️ Lo que revisé en Trello ({informe.hora}){informe.tablero ? ` · tablero «${informe.tablero}»` : ''}: {informe.tarjetas} tarjeta(s){informe.listas?.length ? ` en ${informe.listas.map((l) => `«${l}»`).join(' y ')}` : ' abiertas'}, {informe.conExcel} con Excel.
+        🗂️ Lo que revisé en Trello ({informe.hora}){informe.tablero ? ` · tablero «${informe.tablero}»` : ''}: {informe.tarjetas} tarjeta(s){informe.listas?.length ? ` en ${informe.listas.map((l) => `«${l}»`).join(' y ')}` : ' abiertas'}, {informe.conExcel} con {informe.prov === 'target' ? 'PDF' : 'Excel'}.
         {informe.fueraDeListas ? <span style={{ fontWeight: 'normal', opacity: 0.75 }}> Las {informe.fueraDeListas} tarjetas de otras listas no se usan.</span> : null}
       </div>
       {informe.error && <div style={{ color: '#f87171' }}>❌ {informe.error}</div>}
@@ -1923,7 +1930,7 @@ function InformeTrelloCaja({ informe, ocupado, onRecargar }: { informe: InformeT
         {noExcel.map(linea)}
       </details>}
       {informe.sinRevisar > 0 && <div style={{ opacity: 0.7, marginTop: 4 }}>{informe.sinRevisar} Excel revisados antes no se volvieron a bajar: «Buscar en Trello» los revisa de nuevo.</div>}
-      {informe.otroProveedor > 0 && <div style={{ opacity: 0.7, marginTop: 4 }}>{informe.otroProveedor} Excel son de otro proveedor (no se volvieron a bajar).</div>}
+      {informe.otroProveedor > 0 && <div style={{ opacity: 0.7, marginTop: 4 }}>{informe.otroProveedor} {informe.prov === 'target' ? 'PDF' : 'Excel'} de otros proveedores (no se muestran ni se vuelven a bajar).</div>}
     </div>
   );
 }
