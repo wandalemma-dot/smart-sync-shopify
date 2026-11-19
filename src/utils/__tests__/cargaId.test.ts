@@ -37,6 +37,8 @@ function resultado(filas: FilaChecklist[], renglones = [renglon()]): ResultadoFa
     checklist: filas, difRemito: [],
   } as unknown as ResultadoFactura;
 }
+/** Solo talle y cantidades (sin el talle de Shopify, que se prueba aparte). */
+const cantidades = (ts: { talle: string; cantidad: number; original: number }[] | undefined) => ts?.map(({ talle, cantidad, original }) => ({ talle, cantidad, original }));
 const estado = (p: ProductoId = remera(), codigo = 'CTO0325003'): EstadoCargaId => ({ locationId: LOC, porCodigo: { [codigo]: [p.id] }, productos: { [p.id]: p } });
 
 describe('iD: talle del proveedor → talle de Shopify (nunca adivina)', () => {
@@ -195,6 +197,29 @@ describe('iD: vista previa de la carga', () => {
     // Un producto con talles de verdad sigue sin aceptar TU.
     expect(planCargaId(resultado([fila([{ talle: 'TU', cantidad: 2 }])]), estado(), {}).items[0].motivo).toMatch(/no existe el talle TU/);
   });
+  it('talle que no existe (19-nov-2026, gax: medias LAN0122018P, la foto leyó «12» y en Shopify son 1 y 2): se elige en qué talle entra', () => {
+    const medias: ProductoId = {
+      id: 'gid://shopify/Product/7', titulo: 'Medias Le Coq Sportif Tripack Poliester X6', vendor: 'Le Coq Sportif', estado: 'ACTIVE', etiquetas: ['LAN0122018P'],
+      variantes: [variante('1', 0), variante('2', 3)],
+    };
+    const r = resultado([fila([{ talle: '12', cantidad: 1 }], { codigo: 'LAN0122018P', descripcion: 'TRIPACK POLIESTER' })], [{ ...renglon(28877, 'LAN0122018P'), descripcion: 'TRIPACK POLIESTER' }]);
+    const e = estado(medias, 'LAN0122018P');
+    const [it] = planCargaId(r, e, {}).items;
+    expect(it.estado).toBe('bloqueado');
+    expect(it.motivo).toMatch(/no existe el talle 12.*en Shopify tiene 1, 2.*Elegí arriba/);
+    expect(it.talles?.[0]).toMatchObject({ talle: '12', destino: '', enShopify: ['1', '2'], problema: 'no existe el talle 12 en Shopify' });
+    // Elegido el 1: se carga ahí (pack de 6 = 6 unidades), con aviso.
+    const [ok] = planCargaId(r, e, {}, new Map(), new Map(), new Map(), new Map(), new Map([['LAN0122018P', { '12': '1' }]])).items;
+    expect(ok.estado).toBe('listo');
+    expect(ok.talles?.[0]).toMatchObject({ destino: '1', destinoManual: true });
+    const a = ok.opciones[0].accion!;
+    if (a.tipo !== 'reposicion') throw new Error('esperaba reposición');
+    expect(a.lineas).toEqual([{ talle: '1', inventoryItemId: 'gid://shopify/InventoryItem/1', actual: 0, suma: 6 }]);
+    expect(ok.opciones[0].avisos.join(' ')).toMatch(/Talle elegido a mano: 12 → 1/);
+    // Un talle que existe muestra igual los talles de Shopify, con el automático elegido.
+    const [s] = planCargaId(resultado([fila([{ talle: 'L', cantidad: 1 }])]), estado(), {}).items;
+    expect(s.talles?.[0]).toMatchObject({ destino: 'L', destinoManual: false, enShopify: ['S', 'M', 'L', 'XL'] });
+  });
   it('una sola vez: lo ya cargado no se vuelve a cargar, ni desde otra entrega con la misma mercadería', () => {
     const r = resultado([fila([{ talle: 'S', cantidad: 2 }])]);
     const marca: CargaFamily = { estado: 'cargada', fecha: '2026-11-12T15:00:00Z', firma: firmaCargaId('2026-11-10', '0013-00125274', r.checklist[0]) };
@@ -224,10 +249,10 @@ describe('iD: vista previa de la carga', () => {
   });
   it('la cantidad de cada talle viene del remito y se puede escribir a mano (gax, 12-nov-2026)', () => {
     const r = resultado([fila([{ talle: 'S', cantidad: 2 }, { talle: 'XL', cantidad: 2, retirado: 1 }], { retirado: 1 })]);
-    expect(planCargaId(r, estado(), {}).items[0].talles).toEqual([{ talle: 'S', cantidad: 2, original: 2 }, { talle: 'XL', cantidad: 2, original: 2 }]);
+    expect(cantidades(planCargaId(r, estado(), {}).items[0].talles)).toEqual([{ talle: 'S', cantidad: 2, original: 2 }, { talle: 'XL', cantidad: 2, original: 2 }]);
     const plan = planCargaId(r, estado(), {}, new Map(), new Map([['CTO0325003', { XL: 3 }]]));
     const [it] = plan.items;
-    expect(it.talles).toEqual([{ talle: 'S', cantidad: 2, original: 2 }, { talle: 'XL', cantidad: 3, original: 2 }]);
+    expect(cantidades(it.talles)).toEqual([{ talle: 'S', cantidad: 2, original: 2 }, { talle: 'XL', cantidad: 3, original: 2 }]);
     expect(it.unidades).toBe(5);
     const a = it.opciones[0].accion!;
     if (a.tipo !== 'reposicion') throw new Error('esperaba reposición');
@@ -661,7 +686,7 @@ describe('iD: packs (13-nov-2026, gax: «la factura dice por 6, es porque son 6 
     const [it] = plan.items;
     expect(it.estado).toBe('listo');
     expect(it.unidades).toBe(6);
-    expect(it.talles).toEqual([{ talle: 'TU', cantidad: 6, original: 6 }]);
+    expect(cantidades(it.talles)).toEqual([{ talle: 'TU', cantidad: 6, original: 6 }]);
     expect(it.pack).toEqual({ unidades: 6, fuente: 'lo dice el nombre en Shopify y la plantilla de iD', lista: 28877, bonificacion: 10, costo: 4331.55 });
     const a = repo(it);
     expect(a.lineas).toEqual([{ talle: 'TU', inventoryItemId: 'gid://shopify/InventoryItem/TU', actual: 0, suma: 6 }]);
@@ -694,10 +719,10 @@ describe('iD: packs (13-nov-2026, gax: «la factura dice por 6, es porque son 6 
     const r = resultado([filaPack([{ talle: 'TU', cantidad: 0, retirado: 1 }], undefined, { retirado: 1 })], [renPack()]);
     const it = planCargaId(r, estado(munequera(), COD), {}).items[0];
     expect(it.estado).toBe('listo');
-    expect(it.talles).toEqual([{ talle: 'TU', cantidad: 5, original: 5 }]);
+    expect(cantidades(it.talles)).toEqual([{ talle: 'TU', cantidad: 5, original: 5 }]);
     expect(it.opciones[0].avisos.join(' ')).toMatch(/Salieron 1 para órdenes .*unidades sueltas del pack.*Si salió el pack entero, corregí la cantidad/);
     const escrito = planCargaId(pack(), estado(munequera(), COD), {}, new Map(), new Map([[COD, { TU: 5 }]])).items[0];
-    expect(escrito.talles).toEqual([{ talle: 'TU', cantidad: 5, original: 6 }]);
+    expect(cantidades(escrito.talles)).toEqual([{ talle: 'TU', cantidad: 5, original: 6 }]);
     expect(escrito.opciones[0].avisos.join(' ')).toMatch(/Cantidad escrita a mano: TU 6→5/);
   });
 
@@ -714,7 +739,7 @@ describe('iD: packs (13-nov-2026, gax: «la factura dice por 6, es porque son 6 
     const it = planCargaId(r, e, {}).items[0];
     expect(it).toMatchObject({ estado: 'bloqueado', motivo: expect.stringMatching(/la factura dice packs de 6, el nombre en Shopify dice 3 y la plantilla de iD dice 6\. Escribí cuántas unidades/) });
     expect(it.pack).toMatchObject({ unidades: 1, error: expect.any(String) });
-    expect(it.talles).toEqual([{ talle: 'TU', cantidad: 1, original: 1 }]);
+    expect(cantidades(it.talles)).toEqual([{ talle: 'TU', cantidad: 1, original: 1 }]);
     const manual = planCargaId(r, e, {}, new Map(), new Map(), new Map([[COD, 6]])).items[0];
     expect(manual).toMatchObject({ estado: 'listo', unidades: 6, pack: { unidades: 6, fuente: 'lo escribiste a mano', manual: true, costo: 4331.55 } });
   });
@@ -780,7 +805,7 @@ describe('iD: packs (13-nov-2026, gax: «la factura dice por 6, es porque son 6 
     const it = planCargaId(r, estado(tripack, T), {}).items[0];
     expect(it.estado).toBe('listo');
     expect(it.unidades).toBe(12);
-    expect(it.talles).toEqual([{ talle: '1', cantidad: 6, original: 6 }, { talle: '2', cantidad: 6, original: 6 }]);
+    expect(cantidades(it.talles)).toEqual([{ talle: '1', cantidad: 6, original: 6 }, { talle: '2', cantidad: 6, original: 6 }]);
     // 41.390,3743 ÷ 6 − 10% = 6.208,56 (en Shopify ya está a $6.209 por unidad); sin la lista daba $37.251,34 por par.
     expect(it.pack).toEqual({ unidades: 6, fuente: 'lo dice la plantilla de iD', lista: 41390.3743, bonificacion: 10, costo: 6208.56 });
     const a = repo(it);

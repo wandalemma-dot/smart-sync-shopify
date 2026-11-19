@@ -102,6 +102,16 @@ function checkedPayload(payload) {
   requirePlan(!payload.userErrors.length, payload.userErrors.map(e=>e.message).join(' · '));
   return payload;
 }
+// Shopify (18-nov-2026) a veces responde sin errores y sin inventoryAdjustmentGroup aunque el ajuste quedó hecho.
+// Eso solo no es éxito: se relee y TODAS las filas tienen que estar exactamente en la cantidad pedida. No se reintenta.
+async function confirmWritten(rows,plan,query) {
+  let nodes;
+  try { ({nodes}=await query(STOCK,{ids:rows.map(r=>r.inventoryItemId),loc:plan.locationId})); }
+  catch { throw new PlanError('Shopify no confirmó el ajuste. Volvé a simular antes de reintentar.'); }
+  const ok=Array.isArray(nodes) && nodes.length===rows.length && rows.every((r,i)=>nodes[i]?.id===r.inventoryItemId &&
+    nodes[i].inventoryLevel?.quantities?.find(q=>q.name==='available')?.quantity===r.desired);
+  requirePlan(ok,'Shopify no confirmó el ajuste. Volvé a simular antes de reintentar.');
+}
 export async function apply({plan,receipt,action,indices,confirmed},actor,query) {
   canonical(plan);
   requirePlan(confirmed===true && receipt && receipt.expires>Date.now() && receipt.expires<=Date.now()+MAX_AGE &&
@@ -118,7 +128,7 @@ export async function apply({plan,receipt,action,indices,confirmed},actor,query)
     const input={name:'available',reason:'correction',referenceDocumentUri:'gid://indy/StockPlan/'+receipt.id,
       quantities:rows.map(r=>({inventoryItemId:r.inventoryItemId,locationId:plan.locationId,quantity:r.desired,changeFromQuantity:r.current}))};
     const data=await query(SET,{input,key});
-    requirePlan(checkedPayload(data.inventorySetQuantities).inventoryAdjustmentGroup,'Shopify no confirmó el ajuste.');
+    if(!checkedPayload(data.inventorySetQuantities).inventoryAdjustmentGroup) await confirmWritten(rows,plan,query);
     return {written:rows.length,warning:''};
   }
   const original=await checkSizes(rows,plan,query);

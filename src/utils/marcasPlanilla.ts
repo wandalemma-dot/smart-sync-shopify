@@ -36,11 +36,18 @@ export type TipoArticulo = 'calzado' | 'indumentaria';
 export interface ArticuloNota { codigo: string; descripcion: string; tipo: TipoArticulo; pedido: number; llegaron: number }
 
 /**
- * Calzado o indumentaria (12-nov-2026): iD entrega la ropa y las zapatillas por separado. Talle numérico
- * de un artículo que no es ropa ni accesorio (por su nombre) = calzado; letras, TU o sin talle = indumentaria.
+ * Calzado o indumentaria (12-nov-2026): iD entrega la ropa y las zapatillas por separado. Talle de calzado
+ * (tres cifras o desde 17) de un artículo que no es ropa ni accesorio (por su nombre) = calzado; letras, TU o sin talle = indumentaria.
  */
 export function tipoArticulo(descripcion: string, talles: string[]): TipoArticulo {
-  const numerico = talles.some((t) => /^\d+([.,]\d+)?$/.test(String(t ?? '').trim()));
+  // 19-nov-2026: talle de calzado = formato del proveedor con tres cifras (035, 045, 100) o un número desde 17
+  // (AR). Los números chicos (medias 1 y 2, camiseta de niño 12) son ropa: antes contaban como calzado y la
+  // nota avisaba que «no entró» el calzado de una entrega que solo traía ropa.
+  const numerico = talles.some((t) => {
+    const x = String(t ?? '').trim();
+    if (!/^\d+([.,]\d+)?$/.test(x)) return false;
+    return /^\d{3}/.test(x) || parseFloat(x.replace(',', '.')) >= 17;
+  });
   if (!numerico) return 'indumentaria';
   const cat = lecoqCategoryWord(String(descripcion ?? ''));
   return cat === '' || cat === 'Zapatillas' || cat === 'Ojotas' ? 'calzado' : 'indumentaria';
@@ -269,6 +276,9 @@ function noEntroDe(m: MarcasNota, tipos: Set<TipoArticulo>): NoEntro[] {
   return out;
 }
 
+/** Versión del lector de notas desde la que se leen los talles de un dígito. */
+export const LECTOR_TALLE_CORTO = 6;
+
 /**
  * Agrega a una nota ya cargada lo que trae otra copia de su planilla: las celdas (si la nota se
  * cargó antes de guardarlas) y lo pintado en verde. Lo que ya estaba en verde no se borra aunque la
@@ -292,6 +302,17 @@ export function fusionarPlanilla<T extends Pedido>(nota: T, leidas: LineaPedido[
     }
     return n;
   });
+  // 19-nov-2026: una nota leída antes de que el lector tomara los talles de un dígito (medias talle 1 y 2)
+  // quedó sin esos renglones. Al releerla una vez se suman los artículos/talles que no tenía.
+  if (lector && lector >= LECTOR_TALLE_CORTO && (nota.lector ?? 0) < LECTOR_TALLE_CORTO) {
+    const tiene = new Set(nota.lineas.map((l) => claveCodigo(l.sku)));
+    for (const x of leidas) {
+      if (tiene.has(claveCodigo(x.sku))) continue;
+      tiene.add(claveCodigo(x.sku));
+      lineas.push(x);
+      cambio = true;
+    }
+  }
   const copias = [...(nota.copias ?? [])];
   if (copia && !copias.some((c) => c.adjunto === copia.adjunto)) {
     copias.push(copia);

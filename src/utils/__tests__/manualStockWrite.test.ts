@@ -43,7 +43,24 @@ describe('escritura manual para todas las marcas, con Shopify simulado', () => {
   it.each([{}, { inventorySetQuantities: { userErrors: [] } }])('no informa éxito ni repite una respuesta incompleta: %j', async reply => {
     api.mockResolvedValue(reply);
     expect(await executeStockWrite(plan())).toMatchObject({ written: 0, failed: 5 });
-    expect(api).toHaveBeenCalledOnce();
+    expect(api.mock.calls.filter(([q]) => q.includes('mutation')).length).toBe(1);
+  });
+  it('sin inventoryAdjustmentGroup relee Shopify y cuenta solo lo que quedó en la cantidad pedida (18-nov-2026)', async () => {
+    const p = plan();
+    api.mockImplementation(async (q: string, v: any) => {
+      if (q.includes('mutation')) return { inventorySetQuantities: { userErrors: [], inventoryAdjustmentGroup: null } };
+      // Lo leído: los 4 primeros quedaron bien; el último no (por ejemplo, se vendió justo).
+      return { nodes: v.ids.map((id: string) => {
+        const c = p.changes.find((x) => x.inventoryItemId === id)!;
+        return { id, inventoryLevel: { quantities: [{ name: 'available', quantity: id.endsWith('/5') ? c.desired - 1 : c.desired }] } };
+      }) };
+    });
+    const r = await executeStockWrite(p);
+    expect(r).toMatchObject({ written: 4, failed: 1 });
+    expect(r.errors[0]).toContain('1 sin confirmar');
+    expect(api.mock.calls.filter(([q]) => q.includes('mutation')).length).toBe(1);
+    const lectura = api.mock.calls.find(([q]) => q.startsWith('query ConfirmarStock'))!;
+    expect(lectura[1].loc).toBe(p.locationId);
   });
   it('no repite escrituras automáticamente si se pierde la respuesta', async () => {
     api.mockRejectedValue(new Error('Respuesta perdida'));

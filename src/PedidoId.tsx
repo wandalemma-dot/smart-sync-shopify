@@ -5,6 +5,7 @@ import ExclusionPedidoId from './ExclusionPedidoId';
 import { entranteDe, textoEntrante } from './utils/entrantesId';
 import { leerEntrantes, type Entrantes } from './utils/leerEntrantes';
 import { fechaAr } from './utils/entregasUi';
+import { etiquetarOrdenes, etiquetasPedidoId, hoyArgentina, ordenesAEtiquetar, type ResultadoEtiquetas } from './utils/etiquetaPedidoId';
 
 export default function PedidoId() {
   const [csv, setCsv] = useState<File | null>(null);
@@ -18,11 +19,15 @@ export default function PedidoId() {
   const [revisado, setRevisado] = useState(false);
   const [entrantes, setEntrantes] = useState<Entrantes | null>(null);
   const [errorEntrantes, setErrorEntrantes] = useState('');
-  const reset = () => { setEntrantes(null); setErrorEntrantes(''); setPendientes(null); setPlantilla(null); setOmitidas([]); setRevisado(false); setError(''); setEstado(''); };
+  const [etiquetas, setEtiquetas] = useState<ResultadoEtiquetas & { fecha: string } | null>(null);
+  const [etiquetando, setEtiquetando] = useState(false);
+  const reset = () => { setEtiquetas(null); setEntrantes(null); setErrorEntrantes(''); setPendientes(null); setPlantilla(null); setOmitidas([]); setRevisado(false); setError(''); setEstado(''); };
   const resultado = useMemo(() => pendientes && plantilla
     ? cruzarPedido(pendientes.lineas, plantilla, pendientes.avisos, pendientes.ordenes, omitidas) : null, [pendientes, plantilla, omitidas]);
   const mixtos = useMemo(() => detectarPedidosMixtos(pendientes?.lineas || [], pendientes?.etiquetadas || []), [pendientes]);
   const ordenesMixtas = new Set(mixtos.map(o => o.orden));
+  // Órdenes que quedan etiquetadas «pedido id» al descargar (18-nov-2026, gax): solo las que se piden completas.
+  const aEtiquetar = useMemo(() => pendientes && plantilla ? ordenesAEtiquetar(pendientes.lineas, plantilla, omitidas) : null, [pendientes, plantilla, omitidas]);
   function seleccionar(id: string, incluir: boolean) {
     setOmitidas(actual => incluir ? actual.filter(x => x !== id) : [...new Set([...actual, id])]);
     setRevisado(false);
@@ -43,14 +48,22 @@ export default function PedidoId() {
     } catch (e: any) { setError(e.message || 'No se pudo armar el pedido.'); setEstado(''); }
     finally { setOcupado(false); }
   }
-  function descargar() {
-    if (!plantilla || !resultado || !revisado) return;
+  async function descargar() {
+    if (!plantilla || !resultado || !revisado || etiquetando) return;
+    const fecha = hoyArgentina();
+    const lista = aEtiquetar?.etiquetar || [];
+    if (lista.length && !confirm(`Se descarga la plantilla y, en Shopify, se agregan las etiquetas «${etiquetasPedidoId(fecha).join('» y «')}» a ${lista.length} orden(es): ${lista.map(o => o.orden).join(', ')}. Esas órdenes no vuelven a aparecer en el próximo armado. ¿Confirmás?`)) return;
     try {
       const bytes = generarExcelPedido(plantilla, resultado);
       const url = URL.createObjectURL(new Blob([new Uint8Array(bytes)], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
       const a = document.createElement('a'); a.href = url; a.download = `Pedido_iD_${new Date().toISOString().slice(0, 10)}.xlsx`; a.click();
       setTimeout(() => URL.revokeObjectURL(url), 1000);
-    } catch (e: any) { setError(e.message); }
+    } catch (e: any) { setError(e.message); return; }
+    if (!lista.length) return;
+    setEtiquetando(true); setEtiquetas(null);
+    try { setEtiquetas({ ...await etiquetarOrdenes(lista, fecha), fecha }); }
+    catch (e: any) { setEtiquetas({ ok: [], fallidas: lista.map(o => ({ orden: o.orden, error: e?.message?.slice(0, 160) || 'error' })), fecha }); }
+    finally { setEtiquetando(false); }
   }
   const filas = resultado?.filas || [];
   const faltantes = filas.filter(f => f.faltante > 0 || f.motivo);
@@ -64,7 +77,7 @@ export default function PedidoId() {
   return <section className="glass-panel" style={{ padding: '1.5rem', border: '1px solid #6366f1' }}>
     <h2 style={{ color: '#a5b4fc', marginTop: 0 }}>📋 Armado de pedido iD</h2>
     <p>Órdenes pendientes → revisión por artículo y talle → Excel de iD completo.</p>
-    <p style={{ opacity: .8 }}>Incluye únicamente cantidades pendientes asignadas a iD en órdenes abiertas y pagadas. Excluye etiquetas «pedido id» y «solucionar». Conserva Martínez. No envía pedidos ni cambia Shopify.</p>
+    <p style={{ opacity: .8 }}>Incluye únicamente cantidades pendientes asignadas a iD en órdenes abiertas y pagadas. Excluye etiquetas «pedido id» y «solucionar». Conserva Martínez. No envía pedidos. Al descargar, etiqueta «pedido id» las órdenes que se piden completas.</p>
     <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
       <label className="dropzone" style={{ flex: 1, minWidth: 240 }}>1. Export de órdenes (.csv)
         <input aria-label="Export de órdenes" type="file" accept=".csv" disabled={ocupado} onChange={e => { reset(); setCsv(e.target.files?.[0] || null); }} />
@@ -121,8 +134,23 @@ export default function PedidoId() {
       {!filas.length && <p>No hay artículos incluidos en esta compra. Revisá los motivos y el análisis separado de las órdenes excluidas.</p>}
       {otrosAvisos.length > 0 && <details open><summary>Avisos de órdenes ({otrosAvisos.length})</summary><ul>{otrosAvisos.map((a, i) => <li key={i}>{a}</li>)}</ul></details>}
       <label style={{ display: 'block', margin: '20px 0' }}><input type="checkbox" checked={revisado} onChange={e => setRevisado(e.target.checked)} /> Revisé cantidades, packs, talles, faltantes y pedidos mixtos. Descargar solo lo que figura en «Pedir».</label>
-      <button className="btn-primary" style={{ background: '#6366f1' }} disabled={!revisado || !cantidad} onClick={descargar}>Descargar plantilla de pedido iD</button>
-      <p style={{ opacity: .7 }}>Revisá el Excel antes de subirlo al proveedor. Descargarlo no etiqueta las órdenes como «pedido id»; repetir el proceso podría repetir el mismo pedido.</p>
+      {aEtiquetar && <div style={{ background: 'rgba(99,102,241,.12)', border: '1px solid #818cf8', borderRadius: 8, padding: '10px 14px', marginBottom: 14 }}>
+        <strong>🏷️ Etiqueta en Shopify:</strong> al descargar, {aEtiquetar.etiquetar.length
+          ? <>se agrega «{etiquetasPedidoId(hoyArgentina()).join('» y «')}» a {aEtiquetar.etiquetar.length} orden(es): {aEtiquetar.etiquetar.map(o => o.orden).join(', ')}.</>
+          : 'ninguna orden se pide completa, así que no se etiqueta ninguna.'}
+        {aEtiquetar.noEtiquetar.length > 0 && <details style={{ marginTop: 6 }}><summary style={{ color: '#fcd34d' }}>No se etiquetan {aEtiquetar.noEtiquetar.length} orden(es): les queda algo sin pedir en este Excel</summary>
+          <ul style={{ margin: '6px 0 0' }}>{aEtiquetar.noEtiquetar.map(o => <li key={o.orden}><strong>{o.orden}</strong>: {o.motivos.join(' · ')}</li>)}</ul>
+          <p style={{ margin: '6px 0 0', opacity: .85 }}>Siguen apareciendo en el próximo armado. Si ya las resolviste, etiquetalas a mano.</p>
+        </details>}
+      </div>}
+      <button className="btn-primary" style={{ background: '#6366f1' }} disabled={!revisado || !cantidad || etiquetando} onClick={() => void descargar()}>{etiquetando ? 'Etiquetando órdenes en Shopify…' : aEtiquetar?.etiquetar.length ? `Descargar plantilla y etiquetar ${aEtiquetar.etiquetar.length} orden(es)` : 'Descargar plantilla de pedido iD'}</button>
+      {etiquetas && <div role="status" style={{ marginTop: 12 }}>
+        {etiquetas.ok.length > 0 && <p style={{ color: '#86efac', margin: '4px 0' }}>✅ Etiquetadas «pedido id {etiquetas.fecha}»: {etiquetas.ok.join(', ')}.</p>}
+        {etiquetas.sinPermiso
+          ? <p role="alert" style={{ color: '#fda4af', margin: '4px 0' }}>No se etiquetó ninguna orden: falta el permiso <strong>write_orders</strong> en la app de Shopify (Configuración → Apps → Desarrollar apps → la app → Admin API). La plantilla se descargó igual; etiquetalas a mano.</p>
+          : etiquetas.fallidas.length > 0 && <p role="alert" style={{ color: '#fda4af', margin: '4px 0' }}>No se pudo etiquetar: {etiquetas.fallidas.map(f => `${f.orden} (${f.error})`).join(', ')}. Etiquetalas a mano.</p>}
+      </div>}
+      <p style={{ opacity: .7 }}>Revisá el Excel antes de subirlo al proveedor. Si descargás de nuevo, las órdenes ya etiquetadas no cambian; si volvés a armar el pedido, no aparecen.</p>
     </>}
   </section>;
 }

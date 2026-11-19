@@ -106,7 +106,8 @@ export function leerPedidoExcel(filas: unknown[][], id: string, nombre: string, 
 // talle (035…120 = calzado en US×10, XS…XXL, TU), «Total», «Precio unit.»,
 // «Bonif. %». Columnas por NOMBRE, nunca por posición.
 // ---------------------------------------------------------------------------
-const RE_TALLE_COL = /^(\d{2,3}([.,]\d)?|XXS|XS|S|M|L|XL|XXL|XXXL|[2-5]XL|TU|U)$/i;
+// 19-nov-2026: también talles de un dígito (medias LAN0122018P talle 1 y 2): antes la columna «1» se salteaba.
+const RE_TALLE_COL = /^(\d{1,3}([.,]\d)?|XXS|XS|S|M|L|XL|XXL|XXXL|[2-5]XL|TU|U)$/i;
 
 /** Fecha dd/mm/aaaa (o número de serie de Excel) a AAAA-MM-DD; '' si no hay. */
 function fechaDeCelda(v: unknown): string {

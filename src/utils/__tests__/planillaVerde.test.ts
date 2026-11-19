@@ -251,6 +251,10 @@ describe('¿se cerró el pedido? qué hacer con la tarjeta', () => {
     expect(tipoArticulo('PUMAS HOME SOCKS X 6', ['1', '2'])).toBe('indumentaria');
     expect(tipoArticulo('ESSENTIALS PANT', ['38'])).toBe('indumentaria');
     expect(tipoArticulo('GORRA', ['TU'])).toBe('indumentaria');
+    // 19-nov-2026, factura 0016-00006421: camiseta de niño talle 12 y medias talle 1 no son calzado.
+    expect(tipoArticulo('PUMAS CAMISETA PRE MATCH FAN 2', ['12'])).toBe('indumentaria');
+    expect(tipoArticulo('TRIPACK POLIESTER X 6', ['1'])).toBe('indumentaria');
+    expect(tipoArticulo('NANO CLASSIC', ['44', '45.5'])).toBe('calzado');
   });
 
   it('solo entró la ropa (en verde): pasar la tarjeta a pendientes de indumentaria/calzado', () => {
@@ -341,6 +345,14 @@ describe('fusionar otra copia de la planilla', () => {
     expect(x.copias).toEqual([copia]);
     expect(x.lector).toBe(5);
     expect(fusionarPlanilla(x, x.lineas, copia, 5)).toBeNull();
+  });
+  it('nota leída antes de los talles de un dígito: se suman una vez los renglones que faltaban (medias talle 1)', () => {
+    const vieja = { ...nota, lector: 5 };
+    const x = fusionarPlanilla(vieja, [linea('A', '40', 2), linea('A', '41', 1), linea('LAN0122018P', '1', 1)], undefined, 6)!;
+    expect(x.lineas.map((l) => l.sku)).toEqual(['A-40', 'A-41', 'LAN0122018P-1']);
+    expect(x.lector).toBe(6);
+    // Ya leída con el lector nuevo: no vuelve a sumar nada.
+    expect(fusionarPlanilla(x, [linea('B', '2', 1)], undefined, 6)).toBeNull();
   });
   it('una línea con otra cantidad no se toca (no es la misma nota)', () => {
     expect(fusionarPlanilla(nota, [linea('A', '40', 3, { entregado: 3, entregadoDesde: '2026-11-01' })])).toBeNull();

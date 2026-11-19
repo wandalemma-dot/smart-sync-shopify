@@ -17,10 +17,10 @@ import { esTalleUS, talleUS } from './utils/talleDistrinando';
 
 // Lo listo va en el color normal: solo resalta lo que necesita atención (12-nov-2026, gax: «hay mucho color»).
 const COLOR_ITEM = { listo: 'inherit', elegir: '#fbbf24', bloqueado: '#f87171', cargado: '#94a3b8' } as const;
-const VERDE = '#34d399', AMARILLO = '#fbbf24', ROJO = '#f87171', VIOLETA = '#a78bfa';
+const VERDE = '#34d399', AMARILLO = '#fbbf24', ROJO = '#f87171', VIOLETA = '#a78bfa', NARANJA = '#fb923c';
 type Eleccion = EleccionesCarga[string];
 
-export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, explicacion, onModoVenta, onCantidad, onTabla, onDestino, sinTildar, onSku, onQuitarTalle, onQuitar, onMailSolo, onPack }: {
+export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, explicacion, onModoVenta, onCantidad, onTabla, onDestino, onTalleId, sinTildar, onSku, onQuitarTalle, onQuitar, onMailSolo, onPack }: {
   plan: PlanCarga; ocupado: boolean; onConfirmar: (e: EleccionesCarga) => void; onCancelar: () => void;
   sucursal: string; explicacion: string;
   /** iD: lo vendido en iD se separa; «cargarlo igual» lo suma (si ya se separó antes); «pasar» lo suma y mueve la venta a Martínez. */
@@ -33,6 +33,8 @@ export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, e
   onTabla?: (codigo: string, tabla: string) => void;
   /** Distrinando (13-nov-2026, gax): en qué talle de Shopify entra cada talle que llegó, editable ('' = automático). */
   onDestino?: (codigo: string, talle: string, destino: string) => void;
+  /** iD (19-nov-2026): el talle de Shopify donde entra lo que llegó, elegido de los que tiene el producto ('' = automático). */
+  onTalleId?: (codigo: string, talle: string, destino: string) => void;
   /** Distrinando (13-nov-2026, gax: «que yo pueda escanear uno nuevo»): SKU escrito o escaneado a mano ('' = el que tiene). */
   onSku?: (codigo: string, talle: string, sku: string) => void;
   /** Distrinando: quitar un talle agregado a mano. */
@@ -76,6 +78,7 @@ export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, e
         : <FilaCarga key={it.codigo} it={it} eleccion={efectivas[it.codigo]} onElegir={(c) => elegir(it.codigo, c)} sinTildar={sinTildar}
           onModoVenta={onModoVenta && ((m) => onModoVenta(it.codigo, m))} onCantidad={onCantidad && ((t, n) => onCantidad(it.codigo, t, n))}
           onTabla={onTabla && ((t) => onTabla(it.codigo, t))} onDestino={onDestino && ((t, d) => onDestino(it.codigo, t, d))}
+          onTalleId={onTalleId && ((t, d) => onTalleId(it.codigo, t, d))}
           onSku={onSku && ((t, k) => onSku(it.codigo, t, k))} onQuitarTalle={onQuitarTalle && ((t) => onQuitarTalle(it.codigo, t))}
           onQuitar={onQuitar && it.estado !== 'cargado' ? () => onQuitar(it.codigo, true) : undefined} ocupado={ocupado}
           onPack={onPack && ((n) => onPack(it.codigo, n))} />)}
@@ -134,7 +137,7 @@ export function NoEntraron({ items, factura }: { items: NoEntroCarga[]; factura:
   const unidades = items.reduce((s, x) => s + x.unidades, 0);
   const ventas = new Set(items.flatMap((x) => x.ordenes.map((o) => o.nombre))).size;
   return (
-    <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 6, borderLeft: `4px solid ${ROJO}`, background: 'rgba(248,113,113,0.08)', fontSize: '0.84rem', lineHeight: 1.5 }}>
+    <div style={{ marginTop: 10, padding: '8px 10px', borderRadius: 6, borderLeft: `4px solid ${NARANJA}`, background: 'rgba(251,146,60,0.08)', fontSize: '0.84rem', lineHeight: 1.5 }}>
       <strong>⛔ Productos pedidos que no entraron ({unidades} u.): a revisión</strong>
       <div style={{ opacity: 0.85 }}>
         iD prepara cada nota completa: lo que falta no va a venir. {ventas ? `Avisá a atención al cliente para solucionar ${ventas === 1 ? 'esta venta' : `estas ${ventas} ventas`}.` : 'No hay ventas de iD esperándolos.'}
@@ -161,9 +164,10 @@ export function NoEntraron({ items, factura }: { items: NoEntroCarga[]; factura:
 /** Con una sola cosa para hacer, una casilla deja dejarlo para otro día (lo que no llegó todavía). */
 const esCasilla = (it: ItemCarga) => it.estado === 'listo' && it.opciones.length === 1;
 
-function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, onTabla, onDestino, onSku, onQuitarTalle, onQuitar, ocupado, sinTildar, onPack }: {
+function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, onTabla, onDestino, onTalleId, onSku, onQuitarTalle, onQuitar, ocupado, sinTildar, onPack }: {
   it: ItemCarga; eleccion?: Eleccion; onElegir: (c: Partial<Eleccion>) => void; onModoVenta?: (m: ModoVenta) => void;
   onCantidad?: (talle: string, n: number) => void; onTabla?: (tabla: string) => void; onDestino?: (talle: string, destino: string) => void;
+  onTalleId?: (talle: string, destino: string) => void;
   onSku?: (talle: string, sku: string) => void; onQuitarTalle?: (talle: string) => void; onQuitar?: () => void;
   ocupado: boolean; sinTildar?: boolean; onPack?: (n: number | undefined) => void;
 }) {
@@ -200,6 +204,8 @@ function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, onTabla, o
           <span style={{ opacity: 0.8 }}>Llegó para cargar{it.pack && it.pack.unidades > 1 ? ' (en unidades)' : ''}:</span>
           {it.talles.map((t) => <span key={t.talle} style={{ display: 'inline-flex', gap: 4, alignItems: 'center' }}>
             <CantidadTalle talle={t.talle} cantidad={t.cantidad} original={t.original} disabled={ocupado} onCambio={(n) => onCantidad(t.talle, n)} />
+            {onTalleId && t.enShopify?.length && t.cantidad > 0 ? <TalleShopify talle={t.talle} destino={t.destino ?? ''} manual={!!t.destinoManual} problema={t.problema}
+              opciones={t.enShopify} disabled={ocupado} onCambio={(d) => onTalleId(t.talle, d)} /> : null}
           </span>)}
           {onPack && !it.pack && !packAbierto && <button style={{ ...enlace, fontSize: '0.8rem', opacity: 0.85 }} disabled={ocupado}
             title="Si la factura cobra un pack con varias unidades, escribí cuántas trae" onClick={() => setPackAbierto(true)}>¿Viene en pack?</button>}
@@ -460,6 +466,35 @@ function PackFila({ pack, disabled, onCambio }: { pack?: PackCarga; disabled: bo
       </div>}
       {pack?.manual && n === 1 && <div style={{ opacity: 0.8, fontSize: '0.8rem' }}>No viene en pack: se carga lo que dice el remito y el costo de la factura entero.</div>}
     </div>
+  );
+}
+
+/**
+ * iD (19-nov-2026, gax: «editar el talle… que muestre qué talles tienen en Shopify hoy… que la app no trabe la carga»):
+ * en qué talle de Shopify entra lo que llegó, elegido de los que tiene hoy el producto. Viene el automático (la
+ * conversión de siempre); si no existe en Shopify, queda vacío y hay que elegirlo. Volver al automático: «automático».
+ */
+function TalleShopify({ talle, destino, manual, problema, opciones, disabled, onCambio }: {
+  talle: string; destino: string; manual: boolean; problema?: string; opciones: string[]; disabled: boolean; onCambio: (d: string) => void;
+}) {
+  // Un talle que se ve igual en Shopify no hace falta repetirlo: solo se muestra si cambia, falta o se eligió a mano.
+  const igual = !manual && destino && destino.replace(',', '.').toUpperCase() === talle.replace(',', '.').toUpperCase();
+  const [abierto, setAbierto] = useState(false);
+  if (igual && !abierto) {
+    return <button style={{ ...enlace, fontSize: '0.75rem', opacity: 0.7 }} disabled={disabled} title={`Entra en el talle ${destino} de Shopify. Tocá para elegir otro.`} onClick={() => setAbierto(true)}>cambiar talle</button>;
+  }
+  return (
+    <label style={{ display: 'inline-flex', gap: 3, alignItems: 'center' }} title={problema ? `El ${talle}: ${problema}. Elegí en qué talle de Shopify entra.` : `Talle de Shopify donde entra el ${talle}`}>
+      <span style={{ opacity: 0.75 }}>→ en Shopify</span>
+      <select value={destino} disabled={disabled} aria-label={`Talle de Shopify para ${talle}`} onChange={(ev) => onCambio(ev.target.value)}
+        style={{ ...inputSt, padding: '2px 4px', borderColor: manual ? AMARILLO : !destino ? NARANJA : undefined }}>
+        {!destino && <option value="">¿qué talle?</option>}
+        {manual && <option value="">automático</option>}
+        {opciones.map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+      {manual && <span style={{ fontSize: '0.72rem', color: AMARILLO }}>(a mano)</span>}
+      {!destino && problema && <span style={{ fontSize: '0.72rem', color: NARANJA }}>{problema}</span>}
+    </label>
   );
 }
 
