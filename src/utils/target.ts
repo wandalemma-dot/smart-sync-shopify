@@ -18,6 +18,7 @@
 // ============================================================================
 import type { Factura, LineaPedido, Pedido, RenglonFactura } from './controlFacturas';
 import { redondear2 } from './syncLogic';
+import { margenPct } from './margen';
 
 export const ETIQUETA_TARGET = 'Target';
 export const esDeTarget = (etiquetas: string[]) => etiquetas.some((t) => String(t).trim().toUpperCase() === ETIQUETA_TARGET.toUpperCase());
@@ -216,7 +217,29 @@ export function tituloTarget(descripcion: string): string {
     .replace(/\bRinonera\b/gi, 'Riñonera');
 }
 
-/** Precio de venta (gax, 19-nov-2026): el de lista × 2, sin la bonificación. */
-export const precioTarget = (lista: number) => Math.round(lista * 2);
+/** Lista × 2, sin la bonificación (gax, 19-nov-2026: «siempre por 2 el markup»). */
+export const listaX2 = (lista: number) => Math.round(lista * 2);
 /** Costo: la lista menos la bonificación de esa factura, con centavos. */
 export const costoTarget = (lista: number, bonificacion: number) => redondear2(lista * (1 - (bonificacion || 0) / 100));
+/**
+ * Precio más bajo que deja 50% de margen con ese costo (sin el IVA de la venta, como iD: precio ≥ costo × 2,42),
+ * redondeado PARA ARRIBA a los $100. Cuenta en centavos para no perder el 50% por un decimal.
+ */
+export function precioMinimo50(costo: number): number {
+  const c = Math.round(costo * 100);
+  if (!(c > 0)) return 0;
+  return Math.ceil((c * 242) / 1_000_000) * 100;
+}
+/**
+ * Precio de venta de Target: la lista × 2, y si con el descuento de la factura eso no llega al 50% de margen,
+ * se sube hasta llegar (gax, 19-nov-2026: «todos los que no lleguen al margen 50% vamos a hacerlos llegar»).
+ * Facturas con 30% o 50% de descuento quedan en lista × 2; con 10% o sin descuento, se suben.
+ */
+export function precioTarget(lista: number, bonificacion = 0): number {
+  return Math.max(listaX2(lista), precioMinimo50(costoTarget(lista, bonificacion)));
+}
+/**
+ * Margen que deja la lista × 2 con el descuento de la factura (sin el IVA de la venta, mismo cálculo que iD).
+ * 50% → 69,7% · 30% → 57,6% · 10% → 45,5% (ahí el precio se sube al 50%, ver `precioTarget`).
+ */
+export const margenTarget = (bonificacion: number): number | null => margenPct(200, 100 - (bonificacion || 0));

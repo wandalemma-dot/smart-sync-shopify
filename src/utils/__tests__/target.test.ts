@@ -4,12 +4,13 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   costoTarget, empresaTarget, esDeTarget, esPedidoTarget, facturaTargetDeFoto, leerPedidoTarget, marcaTarget, numeroFacturaTarget,
-  precioTarget, tipoTarget, tituloTarget, type FacturaFoto,
+  listaX2, margenTarget, precioMinimo50, precioTarget, tipoTarget, tituloTarget, type FacturaFoto,
 } from '../target';
 import { analizarFacturas, type Factura, type Pedido, type Remito } from '../controlFacturas';
 import { planCargaTarget } from '../cargaTarget';
 import { ejecutarCargaFamily, precioAEscribir, type AltaFamily, type ReposicionFamily } from '../cargaFamily';
 import type { EstadoCargaId, ProductoId } from '../cargaId';
+import { margenPct } from '../margen';
 
 // Como sale de pdftotext -layout (y de pdf.js agrupando por altura).
 const NOTA_PDF = `
@@ -119,11 +120,37 @@ describe('alta de productos de Target', () => {
     expect(tipoTarget('Baston Trecking Discovery')?.tipo).toBe('Bastón de Trekking');
     expect(tipoTarget('Cosa rara')).toBeNull();
     expect(tituloTarget('Baston  Trecking Discovery')).toBe('Bastón Trekking Discovery');
-    expect(precioTarget(49900)).toBe(99800);
+    expect(precioTarget(49900)).toBe(120800); // sin descuento: costo 49.900 × 2,42 = 120.758 → 120.800
+    expect(precioTarget(49900, 30)).toBe(99800); // con 30% la lista × 2 ya deja más del 50%
+    expect(precioTarget(49900, 10)).toBe(108700); // costo 44.910 × 2,42 = 108.682,20 → 108.700
+    expect(listaX2(49900)).toBe(99800);
     expect(costoTarget(49900, 10)).toBe(44910);
     expect(costoTarget(15900, 30)).toBe(11130);
     expect(esDeTarget(['target', '10001'])).toBe(true);
     expect(esDeTarget(['10001'])).toBe(false);
+  });
+
+  it('el margen de lista × 2 lo decide el descuento de la factura (sin IVA de la venta)', () => {
+    const r1 = (m: number | null) => Math.round((m ?? NaN) * 10) / 10;
+    expect(r1(margenTarget(50))).toBe(69.8);
+    expect(r1(margenTarget(30))).toBe(57.7);
+    expect(r1(margenTarget(10))).toBe(45.6);
+    expect(r1(margenTarget(0))).toBe(39.5);
+  });
+
+  it('si la lista × 2 no llega al 50% de margen, el precio se sube hasta llegar (a los $100, para arriba)', () => {
+    // 50% justo: costo × 2,42 exacto no se redondea de más.
+    expect(precioMinimo50(5000)).toBe(12100);
+    expect(precioMinimo50(7020)).toBe(17000); // 16.988,40 → 17.000
+    expect(precioMinimo50(0)).toBe(0);
+    for (const [lista, bonif] of [[7900, 10], [26900, 10], [2700, 10], [15900, 30], [7500, 50], [10000, 0]]) {
+      const precio = precioTarget(lista, bonif);
+      expect(precio).toBeGreaterThanOrEqual(listaX2(lista));
+      expect(margenPct(precio, costoTarget(lista, bonif))!).toBeGreaterThanOrEqual(50);
+      expect(precio % 100 === 0 || precio === listaX2(lista)).toBe(true);
+    }
+    // Factura del 10%: lista 7.900 → costo 7.110 → mínimo 17.300 (la lista × 2 daba 15.800 y 45,5%).
+    expect(precioTarget(7900, 10)).toBe(17300);
   });
 });
 
@@ -149,8 +176,29 @@ describe('carga de una entrega de Target', () => {
     expect(a).toMatchObject({
       tipo: 'alta', titulo: 'Riñonera Camping Alpine Skate', vendor: 'Alpine Skate', productType: 'Riñonera', etiquetas: ['Target', '10001'],
       precio: 20000, costo: 7000, opcion: 'Title', variantes: [{ talle: 'Default Title', sku: '10001', cantidad: 12 }],
+      lista: 10000, bonificacion: 30,
     });
+    expect(plan.avisos.join(' ')).toMatch(/30% de descuento: con el precio a lista × 2, el margen queda en 57,6%/);
     expect((plan.items[1].opciones[0].accion as AltaFamily).vendor).toBe('Reebok');
+  });
+
+  it('factura con 10% de descuento: el alta y el mínimo de la reposición suben al 50%', () => {
+    const f = facturaCarga();
+    const f10 = { ...f, renglones: f.renglones.map((x) => ({ ...x, bonificacion: 10 })) };
+    const r = analizarFacturas([], [f10], {}, { 'F-bag-company-0016-00004005': REMITO }).facturas[0];
+    const plan = planCargaTarget(r, vacio(), {});
+    const a = plan.items[0].opciones[0].accion as AltaFamily;
+    // lista 10.000 − 10% = 9.000; × 2,42 = 21.780 → 21.800 (la lista × 2 daba 20.000 y 45,5%).
+    expect(a).toMatchObject({ precio: 21800, costo: 9000, lista: 10000, bonificacion: 10 });
+    expect(plan.avisos.join(' ')).toMatch(/10% de descuento: con el precio a lista × 2 el margen quedaría en 45,5%, así que el precio se sube hasta llegar al 50%/);
+    const e = vacio();
+    const p = producto('10001', ['Target', '10001'], 20000, 0, 9000);
+    e.porCodigo = { '10001': [p.id] };
+    e.productos = { [p.id]: p };
+    const aj = (planCargaTarget(r, e, {}).items[0].opciones[0].accion as ReposicionFamily).ajuste!;
+    expect(aj).toMatchObject({ regla: 'x2', sugerido: 21800, listaX2: 20000, ok: false });
+    expect(precioAEscribir(aj, 21000)).toBeNaN();
+    expect(precioAEscribir(aj, 21800)).toBe(21800);
   });
 
   it('la cantidad se puede escribir a mano (se avisa que no es la del remito)', () => {
