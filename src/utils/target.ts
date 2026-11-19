@@ -196,8 +196,8 @@ const TIPOS: { re: RegExp; tipo: string; gramos: number }[] = [
   { re: /^MORRAL/, tipo: 'Morral', gramos: 400 },
   { re: /^MATERA/, tipo: 'Matera', gramos: 500 },
   { re: /^BILLETERA/, tipo: 'Billetera', gramos: 150 },
-  { re: /^(GORRO|CAP)\b/, tipo: 'Gorra', gramos: 150 },
-  { re: /^(PILUSO|SOMBRERO)/, tipo: 'Piluso', gramos: 150 },
+  { re: /^(GORRA|CAP)\b/, tipo: 'Gorra', gramos: 150 },
+  { re: /^(GORRO|PILUSO|SOMBRERO)\b/, tipo: 'Piluso', gramos: 150 },
   { re: /^TERMO/, tipo: 'Termo', gramos: 600 },
   { re: /^BOTELLA/, tipo: 'Botella Térmica', gramos: 400 },
   { re: /^CARPA/, tipo: 'Carpa', gramos: 3000 },
@@ -214,7 +214,10 @@ export function tipoTarget(descripcion: string): { tipo: string; gramos: number 
 export function tituloTarget(descripcion: string): string {
   return String(descripcion ?? '').replace(/\s+/g, ' ').trim()
     .replace(/\bBaston\b/gi, 'Bastón').replace(/\bTrecking\b/gi, 'Trekking').replace(/\bTermica\b/gi, 'Térmica')
-    .replace(/\bRinonera\b/gi, 'Riñonera');
+    .replace(/\bRinonera\b/gi, 'Riñonera')
+    // gax (19-nov): «Cap» va como «Gorra» y «Gorro» como «Piluso». Primero el gorro, así la gorra nueva no cambia.
+    .replace(/\bGorros\b/gi, 'Pilusos').replace(/\bGorro\b/gi, 'Piluso')
+    .replace(/\bCaps\b/gi, 'Gorras').replace(/\bCap\b/gi, 'Gorra');
 }
 
 /** Lista × 2, sin la bonificación (gax, 19-nov-2026: «siempre por 2 el markup»). */

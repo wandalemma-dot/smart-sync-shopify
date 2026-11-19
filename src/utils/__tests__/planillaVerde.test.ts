@@ -268,6 +268,13 @@ describe('¿se cerró el pedido? qué hacer con la tarjeta', () => {
     expect(consejoNota(marcasDeNota(analizarFacturas([nota], []), null, [nota], 'N1522'), { ...listas, listaActual: listas.listaParcial }).tarjeta).toMatch(/ya está en «PENDIENDE/);
   });
 
+  it('Target (sin calzado ni ropa): dice cuánto entró y cuánto falta, sin hablar de indumentaria', () => {
+    const c = consejoNota(marcasDeNota(analizarFacturas([nota], []), null, [nota], 'N1522'), { ...listas, sinTipos: true });
+    expect(c.tipo).toBe('parcial');
+    expect(c.texto).toMatch(/^Entró una parte \(\d+ u\.\); faltan 8 u\.$/);
+    expect(c.corto).toBe('🟡 entró una parte');
+  });
+
   it('solo entró el calzado (factura sin talles en el remito, ropa sin verde)', () => {
     const sinVerde = { ...nota, lineas: nota.lineas.map((l) => ({ ...l, entregado: undefined, entregadoDesde: undefined })) };
     const res = analizarFacturas([sinVerde], [factura('F1', '2026-11-06', [['LFN9924069', 4], ['LFO0125210', 4]])]);

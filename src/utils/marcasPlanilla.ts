@@ -206,6 +206,8 @@ export function consejoNota(m: MarcasNota, opts: {
   listaActual?: string; listaParcial?: string; listaFinal?: string;
   /** iD (17-nov-2026): lo que falta de un tipo del que llegó una parte no va a entrar (ver noEntro). */
   completoPorTipo?: boolean;
+  /** Target (19-nov-2026): bolsos, termos y accesorios, sin calzado ni indumentaria: no se habla de tipos. */
+  sinTipos?: boolean;
 } = {}): ConsejoNota {
   const pedido = m.codigos.reduce((s, c) => s + c.pedido, 0);
   const llegaron = m.codigos.reduce((s, c) => s + c.llegaron, 0);
@@ -243,7 +245,10 @@ export function consejoNota(m: MarcasNota, opts: {
   let corto: string;
   const todo = tipos.find((x) => x.estado === 'todo');
   const nada = tipos.find((x) => x.estado === 'nada');
-  if (tipos.length === 2 && todo && nada) {
+  if (opts.sinTipos) {
+    texto = `Entró una parte (${llegaron} u.); ${pedido - llegaron === 1 ? 'falta' : 'faltan'} ${pedido - llegaron} u.`;
+    corto = '🟡 entró una parte';
+  } else if (tipos.length === 2 && todo && nada) {
     texto = `Solo entró ${nombreTipo[todo.t]}; falta ${todoTipo[nada.t]} (${nada.p} u.).`;
     corto = `🟡 solo entró ${nombreTipo[todo.t]}`;
   } else {
