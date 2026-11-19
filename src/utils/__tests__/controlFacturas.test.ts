@@ -247,6 +247,10 @@ describe('método de gax: otra nota, faltantes, precio y tolerancias', () => {
     expect(r.pedido.fecha).toBe('2026-10-27');
     expect(leerPedidoId([['Pedido N° 0001'], ['Código', '075', 'Total', 'Precio unit.'], ['A1', 1, 1, 100]], 'p', 'x', '2026-11-11').pedido.fecha).toBe('2026-11-11');
   });
+  it('pedido iD: lee las columnas de talle de un dígito (medias talle 1 y 2)', () => {
+    const r = leerPedidoId([['Pedido N° 00002616'], ['Código', 'Descripción', '1', '2', 'S', 'Total', 'Precio unit.'], ['LAN0122018P', 'TRIPACK X 6', 1, '', '', 1, 100], ['LTN1', 'TEE', '', '', 2, 2, 50]], 'p', 'x', '2026-11-11');
+    expect(r.pedido.lineas.map((l) => [l.sku, l.cantidad])).toEqual([['LAN0122018P-1', 1], ['LTN1-S', 2]]);
+  });
 
   it('renglón de una nota anterior = OTRA NOTA; menos que lo pedido = FALTANTE (observaciones, no reclamo)', () => {
     const p471: Pedido = { id: '471', nroProveedor: '471', nombre: 'n', fecha: '2026-10-09', lineas: [linea('LFO0225061', '040', 2)] };

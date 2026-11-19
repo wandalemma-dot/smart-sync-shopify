@@ -373,6 +373,39 @@ function igualTalle(a: string, b: string): boolean {
   return esNumero(A) && esNumero(B) && Number(A) === Number(B);
 }
 
+/** Cómo se ve un talle de Shopify: «Default Title» (producto sin talles) es TU. */
+const verTalle = (t: string) => (String(t ?? '') === 'Default Title' ? 'TU' : String(t ?? ''));
+/** Los talles que tiene hoy el producto en Shopify (sin repetir, en su orden). */
+function tallesShopify(p: ProductoId): string[] {
+  const out: string[] = [];
+  for (const v of p.variantes) if (!out.some((x) => igualTalle(x, v.talle))) out.push(v.talle);
+  return out.map(verTalle);
+}
+
+/**
+ * iD (19-nov-2026, gax, medias LAN0122018P: la foto del remito leyó «12/1» y en Shopify solo existen el 1 y el 2): para
+ * cada talle que llegó, en qué talle de Shopify entra y cuáles tiene hoy el producto, para elegirlo a mano. Lo elegido
+ * manda; si no, el automático (la conversión de siempre) cuando existe. Solo con un producto en Shopify.
+ */
+export function destinosId(fila: FilaChecklist, descripcion: string, p: ProductoId | undefined, tabla: string, elegidos: Readonly<Record<string, string>> = {}):
+  Record<string, { destino: string; manual: boolean; enShopify: string[]; problema?: string }> | null {
+  const marca = p ? marcaDe(p.vendor) : null;
+  if (!p || !marca || !fila.talles) return null;
+  const enShopify = tallesShopify(p);
+  if (!enShopify.length) return null;
+  const out: Record<string, { destino: string; manual: boolean; enShopify: string[]; problema?: string }> = {};
+  for (const t of fila.talles) {
+    const aMano = elegidos[t.talle];
+    const v = aMano ? p.variantes.find((x) => igualTalle(x.talle, aMano)) : undefined;
+    if (v) { out[t.talle] = { destino: verTalle(v.talle), manual: true, enShopify }; continue; }
+    const conv = talleEnShopify(marca, t.talle, fila.codigo, p.etiquetas, descripcion, tabla);
+    if ('error' in conv) { out[t.talle] = { destino: '', manual: false, enShopify, ...(sinTabla(conv.error) ? {} : { problema: conv.error }) }; continue; }
+    const w = p.variantes.find((x) => igualTalle(x.talle, conv.talle));
+    out[t.talle] = w ? { destino: verTalle(w.talle), manual: false, enShopify } : { destino: '', manual: false, enShopify, problema: `no existe el talle ${conv.talle} en Shopify` };
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // PACKS (13-nov-2026, gax)
 // ---------------------------------------------------------------------------
@@ -464,7 +497,7 @@ export function costoPromedio(stock: number, costo: number, suma: number, costoN
 }
 
 function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefined, ren: RenglonFactura | undefined,
-  pendientes: Record<string, OrdenPendienteId[]> | undefined, modo: ModoVenta, pack = 1, tabla = ''): OpcionCarga {
+  pendientes: Record<string, OrdenPendienteId[]> | undefined, modo: ModoVenta, pack = 1, tabla = '', elegidos: Readonly<Record<string, string>> = {}): OpcionCarga {
   if (!p) return { clave: 'falta', etiqueta: 'Producto que no pude leer', accion: null, bloqueo: 'No pude leer ese producto en Shopify.', avisos: [] };
   const avisos: string[] = [];
   const base = { clave: `repo:${p.id}`, etiqueta: `Sumar el stock en «${p.titulo}»`, avisos };
@@ -472,21 +505,32 @@ function opcion(fila: FilaChecklist, descripcion: string, p: ProductoId | undefi
   if (!marca) return { ...base, accion: null, bloqueo: `«${p.titulo}» es de ${p.vendor || 'otra marca'}, no de Converse ni Le Coq: cargalo a mano.` };
   const llegan: { v: VarianteId; cantidad: number; retirado: number }[] = [];
   const problemas: string[] = [];
+  let elegir = false;
+  const manuales: string[] = [];
   for (const t of fila.talles ?? []) {
     if (!(t.cantidad > 0)) continue;
-    const conv = talleEnShopify(marca, t.talle, fila.codigo, p.etiquetas, descripcion, tabla);
+    // El talle de Shopify elegido a mano (19-nov-2026) manda sobre la conversión.
+    const aMano = elegidos[t.talle];
+    const conv = aMano ? { talle: aMano } : talleEnShopify(marca, t.talle, fila.codigo, p.etiquetas, descripcion, tabla);
     if ('error' in conv && sinTabla(conv.error)) return { ...base, accion: null, bloqueo: `«${p.titulo}» no tiene la etiqueta TABLA DE TALLE: elegí la tabla de talle abajo (mirá la caja) y se la agrego al cargar.` };
-    if ('error' in conv) { problemas.push(`talle ${t.talle}: ${conv.error}`); continue; }
+    if ('error' in conv) { problemas.push(`talle ${t.talle}: ${conv.error}`); elegir = true; continue; }
     const vs = p.variantes.filter((v) => igualTalle(v.talle, conv.talle));
     const como = conv.talle === t.talle ? t.talle : `${t.talle} (en Shopify ${conv.talle})`;
-    if (!vs.length) { problemas.push(`no existe el talle ${como}`); continue; }
+    if (aMano && !igualTalle(aMano, t.talle)) manuales.push(`${t.talle} → ${verTalle(vs[0]?.talle ?? aMano)}`);
+    if (!vs.length) { problemas.push(`no existe el talle ${como}`); elegir = true; continue; }
     if (vs.length > 1) { problemas.push(`hay dos variantes del talle ${como}`); continue; }
     if (!vs[0].seguimiento || !vs[0].inventoryItemId) { problemas.push(`el talle ${como} no lleva control de stock`); continue; }
     const ya = llegan.find((l) => l.v.id === vs[0].id);
     if (ya) { ya.cantidad += t.cantidad; ya.retirado += t.retirado ?? 0; continue; }
     llegan.push({ v: vs[0], cantidad: t.cantidad, retirado: t.retirado ?? 0 });
   }
-  if (problemas.length) return { ...base, accion: null, bloqueo: `En «${p.titulo}»: ${problemas.join('; ')}. Corregilo en Shopify (o el remito) y armá la carga de nuevo.` };
+  if (problemas.length) {
+    const hay = tallesShopify(p);
+    return { ...base, accion: null, bloqueo: `En «${p.titulo}»: ${problemas.join('; ')}${elegir && hay.length
+      ? ` (en Shopify tiene ${hay.join(', ')}). Elegí arriba, al lado de la cantidad, en qué talle de Shopify entra; si no llegó, «Sacar de la carga (no llegó)».`
+      : '. Corregilo en Shopify (o el remito) y armá la carga de nuevo.'}` };
+  }
+  if (manuales.length) avisos.push(`Talle elegido a mano: ${manuales.join(' · ')} (el remito dice otro talle).`);
   // Vendido en iD: se separa para esas órdenes y no se suma (salvo «cargarlo igual»).
   const separar: SepararId[] = [];
   const otras: string[] = [];
@@ -562,7 +606,8 @@ const NO_CARGAR: OpcionCarga = { clave: 'no', etiqueta: 'No cargar este artícul
 export type CantidadesCarga = ReadonlyMap<string, Readonly<Record<string, number>>>;
 
 export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: Record<string, CargaFamily>, modos: ReadonlyMap<string, ModoVenta> = new Map(),
-  cantidades: CantidadesCarga = new Map(), packs: ReadonlyMap<string, number> = new Map(), tablas: ReadonlyMap<string, string> = new Map()): PlanCarga {
+  cantidades: CantidadesCarga = new Map(), packs: ReadonlyMap<string, number> = new Map(), tablas: ReadonlyMap<string, string> = new Map(),
+  destinos: ReadonlyMap<string, Readonly<Record<string, string>>> = new Map()): PlanCarga {
   const f = r.factura;
   const avisos: string[] = [];
   const remito = r.remito?.numero || f.remito || '';
@@ -611,7 +656,11 @@ export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: 
     // Converse sin etiqueta TABLA DE TALLE: se elige la tabla (17-nov-2026, gax).
     const tabla = tablaCargaId(c, ids.map((id) => estado.productos[id]), tablas.get(c.codigo));
     const conTabla = (x: ItemCarga): ItemCarga => (tabla ? { ...x, tabla } : x);
-    const opciones = ids.map((id) => opcion(c, descripcion, estado.productos[id], ren, estado.pendientesId, modos.get(c.codigo) ?? 'separar', n, tabla?.elegida ?? ''));
+    // Talle de Shopify elegido a mano (19-nov-2026): con un solo producto, se muestran sus talles para elegir.
+    const elegidos = destinos.get(c.codigo) ?? {};
+    const dest = ids.length === 1 ? destinosId(c, descripcion, estado.productos[ids[0]], tabla?.elegida ?? '', elegidos) : null;
+    if (dest && base.talles) base.talles = base.talles.map((t) => (dest[t.talle] ? { ...t, destino: dest[t.talle].destino, destinoManual: dest[t.talle].manual, enShopify: dest[t.talle].enShopify, ...(dest[t.talle].problema ? { problema: dest[t.talle].problema } : {}) } : t));
+    const opciones = ids.map((id) => opcion(c, descripcion, estado.productos[id], ren, estado.pendientesId, modos.get(c.codigo) ?? 'separar', n, tabla?.elegida ?? '', ids.length === 1 ? elegidos : {}));
     if (c.retirado && !cambiadas.length) {
       for (const o of opciones) o.avisos.push(n > 1
         ? `Salieron ${c.retirado} para órdenes (marca a mano en el remito): las cuento como unidades sueltas del pack y no se suman. Si salió el pack entero, corregí la cantidad.`

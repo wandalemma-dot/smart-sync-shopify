@@ -423,6 +423,13 @@ export interface ItemCarga {
     skuManual?: boolean;
     /** Distrinando: el talle que tiene hoy en Shopify esa variante, que se renombra a `destino`. */
     renombra?: string;
+    /**
+     * iD (19-nov-2026, gax: «editar el talle… que muestre qué talles tienen en Shopify hoy»): los talles que tiene hoy
+     * el producto en Shopify, para elegir en cuál entra. `destino` es el elegido (o el automático si existe).
+     */
+    enShopify?: string[];
+    /** iD: por qué el talle automático no sirve (no existe en Shopify, no está en la tabla…). */
+    problema?: string;
   }[];
   /** Distrinando: tabla de talle del modelo. */
   tabla?: TablaItem;

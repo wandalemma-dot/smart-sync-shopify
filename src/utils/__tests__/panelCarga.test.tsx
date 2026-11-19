@@ -84,6 +84,30 @@ describe('vista previa de la carga: cantidades a mano (gax, 12-nov-2026)', () =>
   });
 });
 
+describe('vista previa de la carga: talle de Shopify en iD (gax, 19-nov-2026)', () => {
+  const conTalles = { ...plan, items: [{ ...plan.items[0], talles: [
+    { talle: '12', cantidad: 6, original: 6, destino: '', enShopify: ['1', '2'], problema: 'no existe el talle 12 en Shopify' },
+    { talle: 'L', cantidad: 3, original: 3, destino: 'L', destinoManual: false, enShopify: ['S', 'M', 'L'] },
+    { talle: 'M', cantidad: 1, original: 1, destino: 'S', destinoManual: true, enShopify: ['S', 'M', 'L'] },
+  ] }] } as unknown as PlanCarga;
+  const html = (onTalleId?: () => void) => renderToStaticMarkup(
+    <PanelCarga plan={conTalles} ocupado={false} onConfirmar={() => undefined} onCancelar={() => undefined} sucursal="DEPOSITO MARTINEZ" explicacion="" sinTildar
+      onCantidad={() => undefined} onTalleId={onTalleId} />);
+  it('el talle que no existe se elige de los que tiene el producto; el que coincide queda plegado', () => {
+    const h = html(() => undefined);
+    expect(h).toMatch(/aria-label="Talle de Shopify para 12"/);
+    expect(h).toMatch(/¿qué talle\?<\/option><option value="1">1<\/option><option value="2">2<\/option>/);
+    expect(h).toMatch(/no existe el talle 12 en Shopify/);
+    expect(h).not.toMatch(/aria-label="Talle de Shopify para L"/);
+    expect(h).toMatch(/cambiar talle/);
+    expect(h).toMatch(/aria-label="Talle de Shopify para M"/);
+    expect(h).toMatch(/\(a mano\)/);
+  });
+  it('sin la función (Distrinando o Family) no aparece', () => {
+    expect(html()).not.toMatch(/Talle de Shopify para/);
+  });
+});
+
 describe('vista previa de la carga: packs de iD (gax, 13-nov-2026)', () => {
   const conPack = (pack?: object) => ({
     ...plan, items: [{ ...plan.items[0], codigo: 'LAN0122026P', descripcion: 'LCS SHORT SPORTY WRISTBAND BLA', unidades: 6,

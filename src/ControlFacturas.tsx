@@ -66,9 +66,9 @@ interface Datos {
   archivo?: Record<string, { estado: 'cerrada' | 'abierta'; fecha?: string }>;
 }
 /** Versión del lector de Excel de Trello. Subirla cuando cambie: los descartados se revisan de nuevo. */
-const LECTOR_TRELLO = 5; // 4: 12-nov-2026, una copia en una tarjeta de pendientes de una nota cargada desde otra lista; 5: lee el verde
+const LECTOR_TRELLO = 6; // 4: 12-nov-2026, una copia en una tarjeta de pendientes de una nota cargada desde otra lista; 5: lee el verde; 6: talles de un dígito
 /** Versión con que se leyó una nota: desde la 5 guarda las celdas y lo pintado en verde. */
-const LECTOR_PLANILLA = 5;
+const LECTOR_PLANILLA = 6; // 6: 19-nov-2026, lee los talles de un dígito (se suman los renglones que faltaban)
 const VACIO: Datos = { pedidos: [], facturas: [], asignaciones: {}, recepciones: {}, remitos: {}, config: {}, trelloVistos: {}, tarjetasTrello: {}, listasTrello: [] };
 const PROVS: { id: Prov; nombre: string }[] = [
   { id: 'id', nombre: 'iD (Converse, Le Coq)' },
@@ -147,6 +147,15 @@ const SEMAFORO = {
   reclamar: { icono: '❌', texto: 'No coincide: reclamar al proveedor', color: '#f87171' },
   incompleta: { icono: '⏳', texto: 'Incompleta: falta el remito o la nota', color: '#94a3b8' },
 } as const;
+/**
+ * iD en naranja (19-nov-2026, gax: «es medio chocante que tenga rojo la app… pongámosle un naranjita… por lo menos en
+ * iD»): lo que no coincide con la nota se ve en naranja en lugar de rojo. Los demás proveedores, sin cambios por ahora.
+ */
+const NARANJA = '#fb923c';
+function semaforoDe(r: ResultadoFactura, naranja?: boolean) {
+  const s = SEMAFORO[r.semaforo];
+  return naranja && r.semaforo === 'reclamar' ? { ...s, icono: '🟠', color: NARANJA } : s;
+}
 
 interface PdfJs {
   GlobalWorkerOptions: { workerSrc: string };
@@ -812,7 +821,7 @@ export default function ControlFacturas() {
     if (!b) return;
     setPlanCarga(b.prov === 'distrinando'
       ? { ...planCargaDistrinando(b.r, b.estado, b.cargas, b.pedidos, new Map(b.tablas), new Map(b.cantidades), new Map(b.destinos), new Map(b.skus)), quitados: [...b.quitados] }
-      : { ...planCargaId(b.r, b.estado, b.cargas, new Map(b.modos), new Map(b.cantidades), new Map(b.packs), new Map(b.tablas)), quitados: [...b.quitados],
+      : { ...planCargaId(b.r, b.estado, b.cargas, new Map(b.modos), new Map(b.cantidades), new Map(b.packs), new Map(b.tablas), new Map(b.destinos)), quitados: [...b.quitados],
         ...(b.noEntraron ? { noEntraron: b.noEntraron } : {}) });
   }
 
@@ -852,7 +861,7 @@ export default function ControlFacturas() {
     rearmar();
   }
 
-  /** Distrinando: el talle de Shopify donde entra un talle que llegó, escrito a mano ('' = automático). */
+  /** El talle de Shopify donde entra un talle que llegó, elegido a mano ('' = automático). Distrinando y, desde el 19-nov-2026, iD. */
   function destinoCarga(codigo: string, talle: string, destino: string) {
     const b = baseCarga.current;
     if (!b) return;
@@ -1091,14 +1100,14 @@ export default function ControlFacturas() {
         <td style={td}><input type="date" value={p.fecha} style={inputSt}
           onChange={(e) => e.target.value && guardar({ accion: 'guardarPedido', pedido: { ...p, fecha: e.target.value } })} /></td>
         <td style={td}>{r.pedido}</td><td style={td}>{r.facturado}</td><td style={td}>{r.pendiente}</td>
-        <td style={{ ...td, color: consejos.get(p.id)?.noEntro?.length ? '#fca5a5' : consejos.get(p.id)?.tipo === 'finalizar' ? '#34d399' : consejos.get(p.id)?.tipo === 'parcial' ? '#fbbf24' : undefined }}
+        <td style={{ ...td, color: consejos.get(p.id)?.noEntro?.length ? '#fdba74' : consejos.get(p.id)?.tipo === 'finalizar' ? '#34d399' : consejos.get(p.id)?.tipo === 'parcial' ? '#fbbf24' : undefined }}
           title={consejos.get(p.id) ? `${consejos.get(p.id)!.texto} ${consejos.get(p.id)!.tarjeta}` : undefined}>{consejos.get(p.id)?.corto ?? r.estado}</td>
         <td style={td}><button onClick={() => confirm(`¿Borrar la nota ${p.nombre}?${enlaceTrello(p) ? ' No se vuelve a traer de Trello.' : ''}`) && guardar({ accion: 'borrarPedido', id: p.id, nro: p.nroProveedor, huella: huellaPedido(p.lineas) })}
           style={{ background: 'none', border: 'none', color: '#f87171', cursor: 'pointer' }}>✕</button></td>
       </tr>
       {abierta === p.id && <tr><td colSpan={7} style={{ ...td, background: 'rgba(255,255,255,0.03)' }}>
         {consejos.get(p.id) && <div style={{ marginBottom: 6 }}>{consejos.get(p.id)!.texto} <strong>{consejos.get(p.id)!.tarjeta}</strong></div>}
-        {consejos.get(p.id)?.noEntro?.length ? <div style={{ marginBottom: 6, color: '#fca5a5' }}>⛔ No entraron: {textoNoEntro(consejos.get(p.id)!.noEntro!)}.</div> : null}
+        {consejos.get(p.id)?.noEntro?.length ? <div style={{ marginBottom: 6, color: '#fdba74' }}>⛔ No entraron: {textoNoEntro(consejos.get(p.id)!.noEntro!)}.</div> : null}
         <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem' }}>
           <thead><tr><th style={th}>Código</th><th style={th}>Descripción</th><th style={th}>Talle</th><th style={th}>Pedido</th><th style={th}>Facturado</th><th style={th}>Pendiente</th></tr></thead>
           <tbody>{det.map((d, i) => <tr key={i}><td style={td}>{d.codigo}</td><td style={td}>{d.descripcion}</td><td style={td}>{d.talle}</td><td style={td}>{d.pedido}</td>
@@ -1115,7 +1124,7 @@ export default function ControlFacturas() {
     && entregaArchivada(r, estadoCargaFactura(r, datos.cargas ?? {}, datos.noLlego), datos.archivo?.[r.factura.id]?.estado);
   const cerradasEnt = facturasRes.filter(esCerrada);
   const abiertas = facturasRes.filter((r) => !esCerrada(r));
-  const tarjeta = (r: ResultadoFactura) => <TarjetaEntrega key={r.factura.id} r={r} abierta={abierta === r.factura.id}
+  const tarjeta = (r: ResultadoFactura) => <TarjetaEntrega key={r.factura.id} r={r} naranja={prov === 'id'} abierta={abierta === r.factura.id}
       onAbrir={() => setAbierta(abierta === r.factura.id ? null : r.factura.id)} pedidos={pedidosOrd} cerradas={cerradas} nombrePedido={nombrePedido}
       manual={datos.asignaciones[r.factura.id] || []} condiciones={condiciones} ocupado={!!ocupado}
       mailsAdmin={datos.mailsAdmin ?? { para: [], copia: [] }} proveedor={prov === 'distrinando' ? 'Distrinando' : 'ID'}
@@ -1135,7 +1144,7 @@ export default function ControlFacturas() {
         onQuitar: (codigo, quitar) => quitarArticulo(r.factura.id, codigo, quitar),
         onArmar: () => armarCarga(r), onConfirmar: (e) => planCarga && confirmarCarga(r, planCarga, e),
         onCancelar: () => setPlanCarga(null), onLiberar: (codigo, c) => liberarCarga(r.factura.id, codigo, c), onCantidad: cantidadCarga,
-        ...(prov === 'id' ? { onModoVenta: modoVenta, onPack: packCarga, onTabla: tablaCarga, explicacion: EXPLICA_ID } : {
+        ...(prov === 'id' ? { onModoVenta: modoVenta, onPack: packCarga, onTabla: tablaCarga, onTalleId: destinoCarga, explicacion: EXPLICA_ID } : {
           onTabla: tablaCarga, onDestino: destinoCarga, onSku: skuCarga, onQuitarTalle: quitarTalle,
           onMailSolo: () => planCarga && armarMailTalles(r, planCarga, [], prov), explicacion: EXPLICA_DISTRINANDO,
         }),
@@ -1226,7 +1235,7 @@ export default function ControlFacturas() {
                 <button style={{ ...enlace, margin: '4px 0' }} onClick={() => setVerCerrada(null)}>▴ Achicar</button>
                 {tarjeta(r)}
               </div>
-              : <FilaCerrada key={r.factura.id} r={r} enShopify={estadoCargaFactura(r, datos.cargas ?? {}, datos.noLlego)} manual={datos.archivo?.[r.factura.id]?.estado === 'cerrada'}
+              : <FilaCerrada key={r.factura.id} r={r} naranja={prov === 'id'} enShopify={estadoCargaFactura(r, datos.cargas ?? {}, datos.noLlego)} manual={datos.archivo?.[r.factura.id]?.estado === 'cerrada'}
                 ocupado={!!ocupado} onVer={() => setVerCerrada(r.factura.id)} onAbrir={() => archivar(r, 'abierta')} />)}
           </details>}
 
@@ -1303,13 +1312,13 @@ export default function ControlFacturas() {
 }
 
 /** Estado de un renglón para la tabla: lo más grave primero. */
-function estadoRenglon(x: ControlRenglon, nombrePedido: (id: string) => string): [string, string] {
-  const rojo = '#f87171', amarillo = '#fbbf24';
-  if (x.posibleDobleCobro) return ['❌ doble cobro', rojo];
-  if (x.sinPedir > 0) return [`❌ ${x.sinPedir} sin pedir`, rojo];
-  if (x.remito !== null && x.remito < x.cantidad) return [`❌ el remito trae ${x.remito}`, rojo];
+function estadoRenglon(x: ControlRenglon, nombrePedido: (id: string) => string, naranja?: boolean): [string, string] {
+  const rojo = naranja ? NARANJA : '#f87171', amarillo = '#fbbf24', x0 = naranja ? '🟠' : '❌';
+  if (x.posibleDobleCobro) return [`${x0} doble cobro`, rojo];
+  if (x.sinPedir > 0) return [`${x0} ${x.sinPedir} sin pedir`, rojo];
+  if (x.remito !== null && x.remito < x.cantidad) return [`${x0} el remito trae ${x.remito}`, rojo];
   const dif = x.difPrecio.reduce((t, d) => t + d.diferencia, 0);
-  if (dif > 0) return [`❌ +${fmt(dif)} neto`, rojo];
+  if (dif > 0) return [`${x0} +${fmt(dif)} neto`, rojo];
   if (x.difPrecio.length) return [`⚠️ precio distinto (${fmt(dif)})`, amarillo];
   if (!x.totalOk) return ['⚠️ renglón mal calculado', amarillo];
   if (x.remito !== null && x.remito > x.cantidad) return [`⚠️ el remito trae ${x.remito}`, amarillo];
@@ -1323,9 +1332,11 @@ function estadoRenglon(x: ControlRenglon, nombrePedido: (id: string) => string):
 const EXPLICA_ID = 'Lo que llegó (el remito, menos lo que salió para órdenes y lo que ya está vendido en iD, que se separa) se SUMA al stock de Martínez; el stock de iD lo lleva la sincronización. Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (si un talle que llega ya tenía stock, lleva el promedio ponderado), y si el margen no llega al 50% hay que poner un precio nuevo para toda la curva. Lo que viene en packs (X6 en la factura, en el nombre de Shopify o en la lista de packs de la plantilla de iD) se carga por unidad, con el costo dividido. Una zapatilla Converse sin la etiqueta TABLA DE TALLE no se carga hasta que elijas su tabla (mirá la caja): la elegida se agrega a las etiquetas. Los productos que no están en Shopify se crean desde Sincronización.';
 const EXPLICA_DISTRINANDO = 'Lo que llegó (el remito) se SUMA al stock de Martínez. Cada talle US entra en el talle de Shopify que da el SKU del proveedor, el AR que informa la nota o la tabla de talle que elijas; al lado de cada talle podés escribir otro si entró en otro. La tabla elegida se agrega a las etiquetas. Los talles que no existen se crean (SKU del proveedor, precio de la curva, costo de la factura) y los modelos nuevos se crean con precio Reebok (Mayorista × 1,8755, terminado en 999). Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (con stock: promedio ponderado). Por ahora solo Reebok calzado.';
 
-function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, recordados, onSubirTrello, informe, onRecargarBorrada, res, todas, consejos, carga, mailsAdmin, proveedor }: {
+function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, recordados, onSubirTrello, informe, onRecargarBorrada, res, todas, consejos, carga, mailsAdmin, proveedor, naranja }: {
   /** Para el mail a administración (se abre en Gmail con un toque). */
   mailsAdmin: MailsAviso; proveedor: string;
+  /** iD: lo que no coincide va en naranja, no en rojo (19-nov-2026). */
+  naranja?: boolean;
   r: ResultadoFactura; abierta: boolean; onAbrir: () => void; pedidos: PedidoGuardado[]; cerradas: Set<string>; nombrePedido: (id: string) => string;
   res: ResultadoGeneral; todas: PedidoGuardado[]; consejos: Map<string, ConsejoNota>;
   manual: string[]; condiciones: string; ocupado: boolean; onAsignar: (ids: string[]) => void; onBorrar: () => void; onDeposito: () => void;
@@ -1345,6 +1356,7 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
     onPack?: (codigo: string, n: number | undefined) => void;
     /** Distrinando: tabla de talle y talle de destino. */
     onTabla?: (codigo: string, tabla: string) => void; onDestino?: (codigo: string, talle: string, destino: string) => void;
+    onTalleId?: (codigo: string, talle: string, destino: string) => void;
     /** Distrinando: SKU a mano, quitar un talle agregado y armar el mail sin cargar. */
     onSku?: (codigo: string, talle: string, sku: string) => void; onQuitarTalle?: (codigo: string, talle: string) => void;
     onMailSolo?: () => void;
@@ -1356,7 +1368,7 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
   const enShopify = carga ? estadoCargaFactura(r, carga.cargas, carga.noLlego) : null;
   // Marcas que no terminaron bien (o quedaron «en curso» si se cerró la página): se revisan en Shopify y se liberan a mano.
   const aRevisar = carga ? Object.entries(carga.cargas).filter(([k, c]) => k.startsWith(`${f.id}|`) && c.estado !== 'cargada').map(([k, c]) => [k.slice(f.id.length + 1), c] as const) : [];
-  const s = SEMAFORO[r.semaforo];
+  const s = semaforoDe(r, naranja);
   const reclamo = reporteReclamo(r, nombrePedido);
   const [editando, setEditando] = useState(false);
   const [texto, setTexto] = useState('');
@@ -1435,7 +1447,7 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
           </div>
         </div>
       )}
-      <Controles r={r} unidadesRemito={unidadesRemito} pendiente={pendiente} />
+      <Controles r={r} unidadesRemito={unidadesRemito} pendiente={pendiente} naranja={naranja} />
       {r.retirados.length > 0 && <div style={{ marginTop: 4, fontSize: '0.86rem', color: '#a5b4fc' }}>
         ✋ Salieron para órdenes (marcado a mano en el remito, no se cargan): {r.retirados.map((x) => `${x.codigo}${x.talle ? ` T ${x.talle}` : ''} −${x.cantidad}`).join(' · ')}.
         {' '}Hay que cargar {unidadesRemito - r.retirados.reduce((t, x) => t + x.cantidad, 0)} u. de las {unidadesRemito} del remito.
@@ -1447,7 +1459,7 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
         </div>)}
       </div>}
       {carga?.plan && <PanelCarga plan={carga.plan} ocupado={ocupado} onConfirmar={carga.onConfirmar} onCancelar={carga.onCancelar} sucursal={SUCURSAL_CARGA_ID}
-        onModoVenta={carga.onModoVenta} onCantidad={carga.onCantidad} onTabla={carga.onTabla} onDestino={carga.onDestino} sinTildar
+        onModoVenta={carga.onModoVenta} onCantidad={carga.onCantidad} onTabla={carga.onTabla} onDestino={carga.onDestino} onTalleId={carga.onTalleId} sinTildar
         onSku={carga.onSku} onQuitarTalle={carga.onQuitarTalle} onQuitar={carga.onQuitar} onMailSolo={carga.onMailSolo} onPack={carga.onPack}
         explicacion={carga.explicacion} />}
       <TarjetasTrello ids={r.pedidosCubiertos} pedidos={pedidos}>
@@ -1459,7 +1471,7 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
       {r.semaforo !== 'incompleta' && r.pedidosCubiertos.length > 0 && <NotasEntrega r={r} res={res} pedidos={todas} nombrePedido={nombrePedido} consejos={consejos} />}
       {informe && <InformeTrelloCaja informe={informe} ocupado={ocupado} onRecargar={onRecargarBorrada} />}
 
-      {r.motivos.length > 0 && <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: '0.84rem' }}>{r.motivos.map((m, i) => <li key={i}>{m}</li>)}</ul>}
+      {r.motivos.length > 0 && <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: '0.84rem', ...(naranja && r.semaforo === 'reclamar' ? { color: NARANJA } : {}) }}>{r.motivos.map((m, i) => <li key={i}>{m}</li>)}</ul>}
       {!abierta && <button style={{ ...enlace, marginTop: 6 }} onClick={onAbrir}>Ver el detalle artículo por artículo</button>}
 
       {abierta && (
@@ -1473,7 +1485,7 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
               <thead><tr><th style={th}>Código</th><th style={th}>Descripción</th><th style={th}>Pedido</th><th style={th}>Facturado</th><th style={th}>Remito</th><th style={th}>Precio pedido</th><th style={th}>Precio factura</th><th style={th}>Estado</th></tr></thead>
               <tbody>{r.renglones.map((x, i) => {
                 const fr = f.renglones[i];
-                const [estado, color] = estadoRenglon(x, nombrePedido);
+                const [estado, color] = estadoRenglon(x, nombrePedido, naranja);
                 return <tr key={i}>
                   <td style={td}>{x.codigo}</td><td style={td}>{x.descripcion}</td>
                   <td style={td}>{x.pedidoCantidad ?? '—'}{x.yaFacturadoAntes ? <span style={{ opacity: 0.7 }}> (ya fact. {x.yaFacturadoAntes})</span> : null}</td>
@@ -1530,12 +1542,12 @@ function textoShopify(e: { cargados: number; noLlego: string[]; total: number })
 }
 
 /** Una entrega cerrada, en una línea (14-nov-2026, gax: «menos explicación… en un apartado en verde»). */
-function FilaCerrada({ r, enShopify, manual, ocupado, onVer, onAbrir }: {
-  r: ResultadoFactura; enShopify: { cargados: number; noLlego: string[]; total: number; completa: boolean }; manual: boolean; ocupado: boolean;
+function FilaCerrada({ r, enShopify, manual, ocupado, onVer, onAbrir, naranja }: {
+  r: ResultadoFactura; enShopify: { cargados: number; noLlego: string[]; total: number; completa: boolean }; manual: boolean; ocupado: boolean; naranja?: boolean;
   onVer: () => void; onAbrir: () => void;
 }) {
   const f = r.factura;
-  const s = SEMAFORO[r.semaforo];
+  const s = semaforoDe(r, naranja);
   return (
     <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', padding: '6px 0', borderTop: '1px solid rgba(52,211,153,0.2)', fontSize: '0.86rem' }}>
       <strong style={{ color: '#34d399' }}>✅ Factura {f.numero}</strong>
@@ -1554,9 +1566,9 @@ function FilaCerrada({ r, enShopify, manual, ocupado, onVer, onAbrir }: {
  * Los dos controles, en orden (gax, 12-nov-2026: «todo esto ya está pagado; es control y carga»):
  * 1. el remito trae lo mismo que la factura; 2. la nota de pedido coincide con lo facturado y lo que llegó.
  */
-function Controles({ r, unidadesRemito, pendiente }: { r: ResultadoFactura; unidadesRemito: number; pendiente: number }) {
+function Controles({ r, unidadesRemito, pendiente, naranja }: { r: ResultadoFactura; unidadesRemito: number; pendiente: number; naranja?: boolean }) {
   const linea = (ok: boolean | null, texto: string) => (
-    <div style={{ color: ok === null ? '#94a3b8' : ok ? '#34d399' : '#f87171' }}>{ok === null ? '⏳' : ok ? '✔' : '✖'} {texto}</div>
+    <div style={{ color: ok === null ? '#94a3b8' : ok ? '#34d399' : naranja ? NARANJA : '#f87171' }}>{ok === null ? '⏳' : ok ? '✔' : '✖'} {texto}</div>
   );
   const distintos = r.difRemito.length;
   const remito = r.faltaRemito || !r.remito
@@ -1605,7 +1617,7 @@ function NotasEntrega({ r, res, pedidos, nombrePedido, consejos }: {
       {notas.map(({ id, p, m }) => {
         if (!p || !m) return null;
         const c = consejos.get(id);
-        const color = c?.noEntro?.length ? '#fca5a5' : c?.tipo === 'finalizar' ? '#34d399' : c?.tipo === 'parcial' ? '#fbbf24' : undefined;
+        const color = c?.noEntro?.length ? '#fdba74' : c?.tipo === 'finalizar' ? '#34d399' : c?.tipo === 'parcial' ? '#fbbf24' : undefined;
         return (
           <div key={id} style={{ marginTop: 6 }}>
             <div>
@@ -1616,7 +1628,7 @@ function NotasEntrega({ r, res, pedidos, nombrePedido, consejos }: {
             {c && c.tipo !== 'nada' && <div style={{ opacity: 0.75 }}>{c.tarjeta}
               {c.tipo === 'parcial' && c.falta.length > 0 && <> Falta: {c.falta.slice(0, 3).map((x) => `${x.codigo} ${x.descripcion} (${x.unidades})`).join(' · ')}{c.falta.length > 3 ? ` y ${c.falta.length - 3} más` : ''}.</>}
             </div>}
-            {c?.noEntro && c.noEntro.length > 0 && <div style={{ color: '#fca5a5' }}>
+            {c?.noEntro && c.noEntro.length > 0 && <div style={{ color: '#fdba74' }}>
               ⛔ No entraron (iD no los mandó): {textoNoEntro(c.noEntro)}. Las ventas que los esperan aparecen al armar la carga.
             </div>}
             {m.sinTalle.length > 0 && <div style={{ color: '#fbbf24' }}>Sin talle identificado: {m.sinTalle.map((x) => `${x.codigo} (${x.unidades})`).join(', ')}.</div>}
