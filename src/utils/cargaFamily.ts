@@ -355,8 +355,10 @@ export interface AjustePrecio {
   conservan: { talle: string; stock: number; costo: number | null; motivo?: string }[];
   /** Precio elegido por la usuaria (si hace falta cambiarlo). */
   precio?: number;
-  /** Target (19-nov-2026, gax): el precio llega si es al menos la lista × 2 (`sugerido`), no el 50% con IVA. */
+  /** Target (19-nov-2026, gax): el precio llega si es al menos `sugerido` = lista × 2, subida al 50% de margen si no llega. */
   regla?: 'x2';
+  /** Target: la lista × 2 sola, para mostrar si el mínimo se subió al 50%. */
+  listaX2?: number;
 }
 /** Distrinando: la tabla de talle del modelo (se elige en la vista previa y va a las etiquetas). */
 export interface TablaItem {
