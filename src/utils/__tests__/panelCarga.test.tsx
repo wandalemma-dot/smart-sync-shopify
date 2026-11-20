@@ -242,3 +242,35 @@ describe('iD: productos pedidos que no entraron (17-nov-2026, gax)', () => {
     expect(renderToStaticMarkup(<NoEntraron items={[]} factura="" />)).toBe('');
   });
 });
+
+describe('vista previa de la carga: colores de Target (20-nov-2026)', () => {
+  const alta = (color: string, n: number) => ({ tipo: 'alta', titulo: `Gorra Reebok T3 ${color}`, productType: 'Gorra', etiquetas: ['Target', '60028', color], gramos: 200,
+    precio: 30300, costo: 12510, opcion: 'Title', variantes: [{ talle: 'Default Title', sku: `60028-${color.toUpperCase()}`, cantidad: n }] });
+  const base = { codigo: '60028', descripcion: 'Cap Reebok T3', unidades: 16, firma: 'f', talles: [{ talle: 'u.', cantidad: 16, original: 16 }] };
+  const conPlan = (items: unknown[]) => renderToStaticMarkup(
+    <PanelCarga plan={{ ...plan, items } as unknown as PlanCarga} ocupado={false} onConfirmar={() => undefined} onCancelar={() => undefined}
+      sucursal="DEPOSITO MARTINEZ" explicacion="" sinTildar onColores={() => undefined} />);
+
+  it('sin colores: botón para decir que viene en varios colores', () => {
+    const html = conPlan([{ ...base, estado: 'listo', motivo: '', coloresPosibles: [], opciones: [{ clave: 'alta', etiqueta: 'Crear', avisos: [], accion: alta('', 16) }] }]);
+    expect(html).toMatch(/Viene en varios colores/);
+  });
+
+  it('con colores: una fila por color, a qué producto va y si la suma da lo que llegó', () => {
+    const partes = [{ color: 'Negro', accion: alta('Negro', 10) }, { color: 'Blanco', accion: alta('Blanco', 6) }];
+    const html = conPlan([{ ...base, estado: 'listo', motivo: '', coloresPosibles: [],
+      colores: [{ color: 'Negro', cantidad: 10, sku: '60028-NEGRO', nuevo: true }, { color: 'Blanco', cantidad: 6, sku: '60028-BLANCO', nuevo: true }],
+      opciones: [{ clave: 'colores', etiqueta: 'Un producto por color', avisos: [], accion: partes[0].accion, partes, tituloBase: 'Gorra Reebok T3' }] }]);
+    expect(html).toMatch(/Colores/);
+    expect(html.replace(/<!-- -->/g, "")).toMatch(/nuevo «Gorra Reebok T3 Negro» · SKU 60028-NEGRO/);
+    expect(html.replace(/<!-- -->/g, "")).toMatch(/Suman 16 de 16 u\. ✓/);
+    expect(html).toMatch(/Agregar color/);
+    expect(html).not.toMatch(/Crear producto nuevo:/);
+  });
+
+  it('si no da lo que llegó, dice cuántas faltan', () => {
+    const html = conPlan([{ ...base, estado: 'bloqueado', motivo: 'Los colores suman 12 u. y llegaron 16 u.: faltan 4.', coloresPosibles: [], opciones: [],
+      colores: [{ color: 'Negro', cantidad: 12, sku: '60028-NEGRO', nuevo: true }] }]);
+    expect(html.replace(/<!-- -->/g, "")).toMatch(/Suman 12 de 16 u\. · faltan 4/);
+  });
+});

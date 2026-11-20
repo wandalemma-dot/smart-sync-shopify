@@ -19,7 +19,7 @@ import {
 } from './utils/controlFacturas';
 import { filasPdf, leerFacturaDistrinando, leerFacturaId, leerPedidoAuto, leerTextoRemito, textoRemito, type HojaMarcada, type ItemPdf } from './utils/lectoresFacturas';
 import { esPedidoTarget, facturaTargetDeFoto, leerPedidoTarget, type FacturaFoto } from './utils/target';
-import { planCargaTarget } from './utils/cargaTarget';
+import { planCargaTarget, type ColorTarget } from './utils/cargaTarget';
 import { celdasVerdes, hojaVisible } from './utils/planillaVerde';
 import { consejoNota, fusionarPlanilla, marcasDeNota, type ConsejoNota, type MarcasNota, type NoEntro } from './utils/marcasPlanilla';
 import { conEstadoTrello, estadosTarjetas, listaDeParciales, listaFinalizado, listasDePendientes, movimientosTarjetas, tarjetaDeNota, type EstadoTarjeta, type ListaTrello } from './utils/listasTrello';
@@ -317,6 +317,8 @@ export default function ControlFacturas() {
     skus: Map<string, Record<string, string>>; quitados: Set<string>;
     /** iD: unidades por pack escritas a mano. */
     packs: Map<string, number>;
+    /** Target (20-nov-2026): colores escritos a mano por código (cada color es un producto aparte). */
+    colores: Map<string, ColorTarget[]>;
     /** iD: lo pedido en las notas de esta entrega que no entró, con las ventas que lo esperan. */
     noEntraron?: NoEntroCarga[];
   } | null>(null);
@@ -872,7 +874,7 @@ export default function ControlFacturas() {
       setDatos({ ...VACIO, ...d });
       // Lo que ya se sacó antes porque no llegó sigue sacado (queda guardado).
       const quitados = new Set(Object.keys(d.noLlego ?? {}).filter((k) => k.startsWith(`${r.factura.id}|`)).map((k) => k.slice(r.factura.id.length + 1)));
-      baseCarga.current = { prov: p, r, estado, cargas: d.cargas ?? {}, modos: new Map(), cantidades: new Map(), pedidos: d.pedidos ?? [], tablas: new Map(), destinos: new Map(), skus: new Map(), quitados, packs: new Map(),
+      baseCarga.current = { prov: p, r, estado, cargas: d.cargas ?? {}, modos: new Map(), cantidades: new Map(), pedidos: d.pedidos ?? [], tablas: new Map(), destinos: new Map(), skus: new Map(), quitados, packs: new Map(), colores: new Map(),
         ...(faltan.length ? { noEntraron: noEntraronId(faltan, estado) } : {}) };
       rearmar();
     } catch (e) { if (sigue(p)) setAvisos([`No pude armar la carga: ${mensaje(e)} No se cargó nada.`]); }
@@ -887,7 +889,7 @@ export default function ControlFacturas() {
       // Target: sin talles; la cantidad escrita a mano va en «u.».
       const cant = new Map<string, number>();
       for (const [c, x] of b.cantidades) if (x['u.'] !== undefined) cant.set(c, x['u.']);
-      setPlanCarga({ ...planCargaTarget(b.r, b.estado, b.cargas, cant), quitados: [...b.quitados] });
+      setPlanCarga({ ...planCargaTarget(b.r, b.estado, b.cargas, cant, new Map(b.colores)), quitados: [...b.quitados] });
       return;
     }
     setPlanCarga(b.prov === 'distrinando'
@@ -921,6 +923,14 @@ export default function ControlFacturas() {
     if (!b) return;
     if (n === undefined) b.packs.delete(codigo); else b.packs.set(codigo, n);
     b.cantidades.delete(codigo);
+    rearmar();
+  }
+
+  /** Target (20-nov-2026, gax): los colores de un artículo y sus unidades (null = un solo producto, sin colores). */
+  function coloresCarga(codigo: string, colores: ColorTarget[] | null) {
+    const b = baseCarga.current;
+    if (!b) return;
+    if (colores) b.colores.set(codigo, colores); else b.colores.delete(codigo);
     rearmar();
   }
 
@@ -1244,7 +1254,7 @@ export default function ControlFacturas() {
         onQuitar: (codigo, quitar) => quitarArticulo(r.factura.id, codigo, quitar),
         onArmar: () => armarCarga(r), onConfirmar: (e) => planCarga && confirmarCarga(r, planCarga, e),
         onCancelar: () => setPlanCarga(null), onLiberar: (codigo, c) => liberarCarga(r.factura.id, codigo, c), onCantidad: cantidadCarga,
-        ...(prov === 'id' ? { onModoVenta: modoVenta, onPack: packCarga, onTabla: tablaCarga, onTalleId: destinoCarga, explicacion: EXPLICA_ID } : prov === 'target' ? { explicacion: EXPLICA_TARGET } : {
+        ...(prov === 'id' ? { onModoVenta: modoVenta, onPack: packCarga, onTabla: tablaCarga, onTalleId: destinoCarga, explicacion: EXPLICA_ID } : prov === 'target' ? { onColores: coloresCarga, explicacion: EXPLICA_TARGET } : {
           onTabla: tablaCarga, onDestino: destinoCarga, onSku: skuCarga, onQuitarTalle: quitarTalle,
           onMailSolo: () => planCarga && armarMailTalles(r, planCarga, [], prov), explicacion: EXPLICA_DISTRINANDO,
         }),
@@ -1434,7 +1444,7 @@ function estadoRenglon(x: ControlRenglon, nombrePedido: (id: string) => string, 
 
 
 const EXPLICA_ID = 'Lo que llegó (el remito, menos lo que salió para órdenes y lo que ya está vendido en iD, que se separa) se SUMA al stock de Martínez; el stock de iD lo lleva la sincronización. Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (si un talle que llega ya tenía stock, lleva el promedio ponderado), y si el margen no llega al 50% hay que poner un precio nuevo para toda la curva. Lo que viene en packs (X6 en la factura, en el nombre de Shopify o en la lista de packs de la plantilla de iD) se carga por unidad, con el costo dividido. Una zapatilla Converse sin la etiqueta TABLA DE TALLE no se carga hasta que elijas su tabla (mirá la caja): la elegida se agrega a las etiquetas. Los productos que no están en Shopify se crean desde Sincronización.';
-const EXPLICA_TARGET = 'Lo que llegó (el remito) se SUMA al stock de Martínez. Target no trae talles: un producto por código. Los que no están en Shopify se crean (activos y en Point of Sale) con el nombre de la factura (lo podés cambiar), la marca del producto, las etiquetas «Target» y el código, SKU = código, precio = lista × 2 y costo = lista menos la bonificación de esa factura. Los que ya están (con la etiqueta «Target») suman stock y costo nuevo (promedio ponderado si ya había stock); si el precio no llega a la lista × 2 hay que poner uno nuevo.';
+const EXPLICA_TARGET = 'Lo que llegó (el remito) se SUMA al stock de Martínez. Target no trae talles: un producto por código. Los que no están en Shopify se crean (activos y en Point of Sale) con el nombre de la factura (lo podés cambiar), la marca del producto, las etiquetas «Target» y el código, SKU = código, precio = lista × 2 y costo = lista menos la bonificación de esa factura. Si un artículo viene en varios colores, tocá «🎨 Viene en varios colores»: cada color se crea como un producto aparte (nombre + color, SKU código-COLOR) y la suma de los colores tiene que dar lo que llegó. Los que ya están (con la etiqueta «Target») suman stock y costo nuevo (promedio ponderado si ya había stock); si el precio no llega a la lista × 2 hay que poner uno nuevo.';
 const EXPLICA_DISTRINANDO = 'Lo que llegó (el remito) se SUMA al stock de Martínez. Cada talle US entra en el talle de Shopify que da el SKU del proveedor, el AR que informa la nota o la tabla de talle que elijas; al lado de cada talle podés escribir otro si entró en otro. La tabla elegida se agrega a las etiquetas. Los talles que no existen se crean (SKU del proveedor, precio de la curva, costo de la factura) y los modelos nuevos se crean con precio Reebok (Mayorista × 1,8755, terminado en 999). Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (con stock: promedio ponderado). Por ahora solo Reebok calzado.';
 
 function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, recordados, onSubirTrello, informe, onRecargarBorrada, res, todas, consejos, carga, mailsAdmin, proveedor, naranja }: {
@@ -1459,6 +1469,8 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
     /** iD: lo vendido en iD y las unidades por pack escritas a mano. */
     onModoVenta?: (codigo: string, modo: ModoVenta) => void;
     onPack?: (codigo: string, n: number | undefined) => void;
+    /** Target: colores de un artículo (cada uno un producto aparte). */
+    onColores?: (codigo: string, colores: ColorTarget[] | null) => void;
     /** Distrinando: tabla de talle y talle de destino. */
     onTabla?: (codigo: string, tabla: string) => void; onDestino?: (codigo: string, talle: string, destino: string) => void;
     onTalleId?: (codigo: string, talle: string, destino: string) => void;
@@ -1565,7 +1577,7 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
       </div>}
       {carga?.plan && <PanelCarga plan={carga.plan} ocupado={ocupado} onConfirmar={carga.onConfirmar} onCancelar={carga.onCancelar} sucursal={SUCURSAL_CARGA_ID}
         onModoVenta={carga.onModoVenta} onCantidad={carga.onCantidad} onTabla={carga.onTabla} onDestino={carga.onDestino} onTalleId={carga.onTalleId} sinTildar
-        onSku={carga.onSku} onQuitarTalle={carga.onQuitarTalle} onQuitar={carga.onQuitar} onMailSolo={carga.onMailSolo} onPack={carga.onPack}
+        onSku={carga.onSku} onQuitarTalle={carga.onQuitarTalle} onQuitar={carga.onQuitar} onMailSolo={carga.onMailSolo} onPack={carga.onPack} onColores={carga.onColores}
         explicacion={carga.explicacion} />}
       <TarjetasTrello ids={r.pedidosCubiertos} pedidos={pedidos}>
         {recordados > 0 && <button style={{ ...botonChico, padding: '1px 8px' }} disabled={ocupado} title="Adjunta la factura y las fotos del remito que subiste recién a la tarjeta de Trello"

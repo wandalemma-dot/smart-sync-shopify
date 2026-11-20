@@ -14,13 +14,14 @@ import { ordenesQueSalen, textoNoEntraron, type OrdenQueSale } from './utils/car
 import { Copiar } from './EntregasPartes';
 import { botonChico, botonPrincipal, enlace, inputSt } from './utils/entregasUi';
 import { esTalleUS, talleUS } from './utils/talleDistrinando';
+import type { ColorTarget } from './utils/cargaTarget';
 
 // Lo listo va en el color normal: solo resalta lo que necesita atención (12-nov-2026, gax: «hay mucho color»).
 const COLOR_ITEM = { listo: 'inherit', elegir: '#fbbf24', bloqueado: '#f87171', cargado: '#94a3b8' } as const;
 const VERDE = '#34d399', AMARILLO = '#fbbf24', ROJO = '#f87171', VIOLETA = '#a78bfa', NARANJA = '#fb923c';
 type Eleccion = EleccionesCarga[string];
 
-export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, explicacion, onModoVenta, onCantidad, onTabla, onDestino, onTalleId, sinTildar, onSku, onQuitarTalle, onQuitar, onMailSolo, onPack }: {
+export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, explicacion, onModoVenta, onCantidad, onTabla, onDestino, onTalleId, sinTildar, onSku, onQuitarTalle, onQuitar, onMailSolo, onPack, onColores }: {
   plan: PlanCarga; ocupado: boolean; onConfirmar: (e: EleccionesCarga) => void; onCancelar: () => void;
   sucursal: string; explicacion: string;
   /** iD: lo vendido en iD se separa; «cargarlo igual» lo suma (si ya se separó antes); «pasar» lo suma y mueve la venta a Martínez. */
@@ -45,6 +46,8 @@ export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, e
   onMailSolo?: () => void;
   /** iD (13-nov-2026, gax): unidades por pack escritas a mano (undefined = lo que detecta la app). */
   onPack?: (codigo: string, n: number | undefined) => void;
+  /** Target (20-nov-2026, gax): los colores de un artículo, cada uno un producto aparte (null = sin colores). */
+  onColores?: (codigo: string, colores: ColorTarget[] | null) => void;
 }) {
   const quitados = new Set(plan.quitados ?? []);
   const [elecciones, setElecciones] = useState<EleccionesCarga>(() =>
@@ -81,7 +84,7 @@ export function PanelCarga({ plan, ocupado, onConfirmar, onCancelar, sucursal, e
           onTalleId={onTalleId && ((t, d) => onTalleId(it.codigo, t, d))}
           onSku={onSku && ((t, k) => onSku(it.codigo, t, k))} onQuitarTalle={onQuitarTalle && ((t) => onQuitarTalle(it.codigo, t))}
           onQuitar={onQuitar && it.estado !== 'cargado' ? () => onQuitar(it.codigo, true) : undefined} ocupado={ocupado}
-          onPack={onPack && ((n) => onPack(it.codigo, n))} />)}
+          onPack={onPack && ((n) => onPack(it.codigo, n))} onColores={onColores && ((c) => onColores(it.codigo, c))} />)}
       <OrdenesQueSalen ordenes={ordenesQueSalen(plan, efectivas)} />
       {plan.noEntraron && plan.noEntraron.length > 0 && <NoEntraron items={plan.noEntraron} factura="" />}
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
@@ -164,12 +167,13 @@ export function NoEntraron({ items, factura }: { items: NoEntroCarga[]; factura:
 /** Con una sola cosa para hacer, una casilla deja dejarlo para otro día (lo que no llegó todavía). */
 const esCasilla = (it: ItemCarga) => it.estado === 'listo' && it.opciones.length === 1;
 
-function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, onTabla, onDestino, onTalleId, onSku, onQuitarTalle, onQuitar, ocupado, sinTildar, onPack }: {
+function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, onTabla, onDestino, onTalleId, onSku, onQuitarTalle, onQuitar, ocupado, sinTildar, onPack, onColores }: {
   it: ItemCarga; eleccion?: Eleccion; onElegir: (c: Partial<Eleccion>) => void; onModoVenta?: (m: ModoVenta) => void;
   onCantidad?: (talle: string, n: number) => void; onTabla?: (tabla: string) => void; onDestino?: (talle: string, destino: string) => void;
   onTalleId?: (talle: string, destino: string) => void;
   onSku?: (talle: string, sku: string) => void; onQuitarTalle?: (talle: string) => void; onQuitar?: () => void;
   ocupado: boolean; sinTildar?: boolean; onPack?: (n: number | undefined) => void;
+  onColores?: (c: ColorTarget[] | null) => void;
 }) {
   const [packAbierto, setPackAbierto] = useState(false);
   const op = it.opciones.find((o) => o.clave === (eleccion?.clave ?? it.opciones[0]?.clave));
@@ -215,16 +219,90 @@ function FilaCarga({ it, eleccion, onElegir, onModoVenta, onCantidad, onTabla, o
       {sep?.separar?.length ? <Separar op={sep} onModoVenta={onModoVenta} ocupado={ocupado} /> : null}
       {it.motivo && <div style={{ color: COLOR_ITEM[it.estado], marginTop: 2 }}>{it.estado === 'bloqueado' ? '⛔ ' : ''}{it.motivo}</div>}
       {it.opciones.filter((o) => o.bloqueo && it.opciones.length > 1).map((o) => <div key={o.clave} style={{ opacity: 0.75 }}>· {o.etiqueta}: {o.bloqueo}</div>)}
-      {a?.tipo === 'alta' && <div style={{ marginTop: 4 }}>
+      {onColores && it.coloresPosibles && it.estado !== 'cargado' ? <Colores it={it} op={it.opciones.find((o) => o.partes)} titulo={eleccion?.titulo} disabled={ocupado} onColores={onColores} onTitulo={(titulo) => onElegir({ titulo })} /> : null}
+      {a?.tipo === 'alta' && !op?.partes && <div style={{ marginTop: 4 }}>
         Crear producto nuevo: <input value={eleccion?.titulo ?? a.titulo} onChange={(ev) => onElegir({ titulo: ev.target.value })} style={{ ...inputSt, width: 'min(420px, 100%)' }} />
         {a.precioEditable && <PrecioAlta a={a} precio={eleccion?.precio} disabled={ocupado} onPrecio={(precio) => onElegir({ precio })} />}
         <div style={{ opacity: 0.8, marginTop: 2 }}>
           {a.vendor ? `Marca ${a.vendor} · ` : ''}Tipo {a.productType}{a.precioEditable ? '' : ` · precio ${fmt(a.precio)}`}{a.lista ? (a.precio > Math.round(a.lista * 2) ? ` (lista ${fmt(a.lista)} × 2 = ${fmt(Math.round(a.lista * 2))} no llega al 50%: subido)` : ` (lista ${fmt(a.lista)} × 2)`) : ''} · costo {fmt(a.costo)}{a.lista && a.bonificacion ? ` (lista − ${a.bonificacion}%)` : ''}{a.lista ? ` · margen ${pct(margenPct(a.precio, a.costo))}` : ''} · {a.variantes.map((v) => `${v.talle === 'Default Title' ? 'sin talle' : v.talle}:${v.cantidad}`).join(' ')} · SKU {a.variantes[0]?.sku}{a.variantes.length > 1 ? '…' : ''} · etiquetas {a.etiquetas.join(', ')}
         </div>
       </div>}
-      {a?.tipo === 'reposicion' && <Reposicion a={a} enFilas={onDestino && onCantidad && it.talles?.length ? it.talles.map((t) => t.destino ?? '') : []} />}
-      {a?.tipo === 'reposicion' && a.ajuste && <Ajuste a={a.ajuste} precio={eleccion?.precio} onPrecio={(precio) => onElegir({ precio })} />}
+      {a?.tipo === 'reposicion' && !op?.partes && <Reposicion a={a} enFilas={onDestino && onCantidad && it.talles?.length ? it.talles.map((t) => t.destino ?? '') : []} />}
+      {a?.tipo === 'reposicion' && !op?.partes && a.ajuste && <Ajuste a={a.ajuste} precio={eleccion?.precio} onPrecio={(precio) => onElegir({ precio })} />}
       {op?.avisos.map((x, i) => <div key={i} style={{ color: AMARILLO, marginTop: 6, fontSize: '0.8rem' }}>⚠️ {x}</div>)}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Target (20-nov-2026, gax: «esta gorra va a estar en blanco, en negro, en verde… que dé lo mismo que el total de las
+ * unidades que entraron»): cada color es un producto aparte. Ni la factura ni el remito dicen los colores: se escriben
+ * acá con sus unidades, y la suma tiene que dar lo que llegó (si no, el artículo no se carga).
+ */
+function Colores({ it, op, titulo, disabled, onColores, onTitulo }: {
+  it: ItemCarga; op?: OpcionCarga; titulo?: string; disabled: boolean; onColores: (c: ColorTarget[] | null) => void; onTitulo: (t: string) => void;
+}) {
+  if (!it.colores) {
+    const posibles = it.coloresPosibles ?? [];
+    return (
+      <div style={{ marginTop: 4 }}>
+        <button style={{ ...botonChico, padding: '2px 10px' }} disabled={disabled}
+          title="Cada color se crea (o se suma) como un producto aparte; la suma de los colores tiene que dar lo que llegó"
+          onClick={() => onColores(posibles.length ? posibles.map((color) => ({ color, cantidad: 0 })) : [{ color: '', cantidad: it.unidades }])}>
+          🎨 Viene en varios colores
+        </button>
+        {posibles.length ? <span style={{ opacity: 0.7, marginLeft: 8, fontSize: '0.8rem' }}>Ya hay en Shopify: {posibles.join(', ')}</span> : null}
+      </div>
+    );
+  }
+  return <ColoresEditor key={it.codigo} it={it} op={op} titulo={titulo} disabled={disabled} onColores={onColores} onTitulo={onTitulo} />;
+}
+
+function ColoresEditor({ it, op, titulo, disabled, onColores, onTitulo }: {
+  it: ItemCarga; op?: OpcionCarga; titulo?: string; disabled: boolean; onColores: (c: ColorTarget[] | null) => void; onTitulo: (t: string) => void;
+}) {
+  const [filas, setFilas] = useState(() => (it.colores ?? []).map((c) => ({ color: c.color, cant: String(c.cantidad) })));
+  const leer = (x: string) => (/^\s*\d+\s*$/.test(x) ? Number(x) : NaN);
+  const cambiar = (nuevas: typeof filas) => { setFilas(nuevas); onColores(nuevas.map((f) => ({ color: f.color, cantidad: leer(f.cant) }))); };
+  const suma = filas.reduce((s, f) => s + (Number.isFinite(leer(f.cant)) ? leer(f.cant) : 0), 0);
+  const dif = suma - it.unidades;
+  const info = it.colores ?? [];
+  const base = titulo ?? op?.tituloBase ?? it.tituloBase;
+  return (
+    <div style={{ marginTop: 6, padding: '6px 8px', borderRadius: 6, background: 'rgba(255,255,255,0.04)' }}>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}>
+        <strong>🎨 Colores</strong>
+        <span style={{ opacity: 0.75, fontSize: '0.8rem' }}>cada color es un producto aparte</span>
+        <button style={{ ...enlace, fontSize: '0.8rem', marginLeft: 'auto' }} disabled={disabled} onClick={() => onColores(null)}>Sin colores (un solo producto)</button>
+      </div>
+      {base !== undefined && <div style={{ marginTop: 4 }}>
+        Nombre (se le agrega el color): <input value={base} disabled={disabled} onChange={(ev) => onTitulo(ev.target.value)} style={{ ...inputSt, width: 'min(360px, 100%)' }} />
+      </div>}
+      {filas.map((f, i) => {
+        const x = info[i];
+        const n = leer(f.cant);
+        return (
+          <div key={i} style={{ display: 'flex', gap: 6, flexWrap: 'wrap', alignItems: 'center', marginTop: 4 }}>
+            <input value={f.color} disabled={disabled} placeholder="Color (ej. Negro)" aria-label={`Color ${i + 1}`}
+              onChange={(ev) => cambiar(filas.map((g, j) => (j === i ? { ...g, color: ev.target.value } : g)))}
+              style={{ ...inputSt, width: 150, borderColor: f.color.trim() ? undefined : NARANJA }} />
+            <input value={f.cant} disabled={disabled} inputMode="numeric" aria-label={`Unidades de ${f.color || `color ${i + 1}`}`}
+              onChange={(ev) => cambiar(filas.map((g, j) => (j === i ? { ...g, cant: ev.target.value } : g)))} onFocus={(ev) => ev.target.select()}
+              style={{ ...inputSt, width: 56, borderColor: Number.isFinite(n) ? undefined : ROJO }} />
+            <span>u.</span>
+            {x && f.color.trim() && n > 0 ? <span style={{ opacity: 0.8, fontSize: '0.8rem' }}>
+              {x.nuevo ? <>→ nuevo «{`${base ?? ''} ${f.color.trim()}`.trim()}» · SKU {x.sku}</> : <>→ suma en «{x.producto}»</>}
+            </span> : null}
+            {filas.length > 1 && <button style={{ ...botonChico, padding: '1px 8px' }} disabled={disabled} onClick={() => cambiar(filas.filter((_, j) => j !== i))}>Quitar</button>}
+          </div>
+        );
+      })}
+      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginTop: 6 }}>
+        <button style={{ ...botonChico, padding: '1px 10px' }} disabled={disabled} onClick={() => cambiar([...filas, { color: '', cant: '0' }])}>＋ Agregar color</button>
+        <span style={{ color: dif === 0 ? VERDE : NARANJA, fontWeight: 600 }}>
+          Suman {suma} de {it.unidades} u.{dif === 0 ? ' ✓' : dif < 0 ? ` · faltan ${-dif}` : ` · sobran ${dif}`}
+        </span>
       </div>
     </div>
   );
