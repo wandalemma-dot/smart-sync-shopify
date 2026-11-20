@@ -545,9 +545,10 @@ function CantidadTalle({ talle, cantidad, original, disabled, onCambio, sinTalle
 }
 
 /**
- * Cartel «vendido en iD» (12-nov-2026, gax): por defecto se separa y no se suma a Martínez. «Cargarlo igual»
- * suma todo (ya se separó antes). «Cargar y pasar la venta a Martínez» suma todo y, después, la orden pasa a
- * prepararse desde Martínez (cuando espera otro artículo que todavía no llegó).
+ * Cartel «vendido en iD» (12-nov-2026, gax): por defecto se separa y no se suma a Martínez. «Cargar y pasar la
+ * venta a Martínez» suma todo y, después, la orden pasa a prepararse desde Martínez. El botón «Ya lo separé antes:
+ * cargarlo igual» se sacó el 20-nov-2026 (gax): se confundía con «cargar» y dejaba la orden esperando en iD con el
+ * par sumado en Martínez. Lo ya separado se marca «-1» en el remito.
  */
 function Separar({ op, onModoVenta, ocupado }: { op: OpcionCarga; onModoVenta?: (m: ModoVenta) => void; ocupado: boolean }) {
   const xs = op.separar ?? [];
@@ -564,7 +565,6 @@ function Separar({ op, onModoVenta, ocupado }: { op: OpcionCarga; onModoVenta?: 
       {modo === 'pasar' && <><strong>🔀 Vendido en iD ({u} u.)</strong> — {textoSeparar(xs)}. Elegiste cargarlo y pasar la venta a Martínez: se suma a Martínez y, después de cargar, esa orden se prepara desde Martínez.</>}
       {onModoVenta && <div style={{ marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
         {modo !== 'separar' && boton('separar', 'Volver a separarlo', 'No se suma a Martínez: queda para esas órdenes de iD')}
-        {modo !== 'igual' && boton('igual', 'Ya lo separé antes: cargarlo igual', 'Se suma todo a Martínez; la orden sigue asignada a iD')}
         {modo !== 'pasar' && boton('pasar', 'Cargar y pasar la venta a Martínez',
           sinMover ? 'En Shopify esa preparación figura en curso en iD: no se puede mover desde la app' : 'Para órdenes que esperan otro artículo: se suma a Martínez y la venta pasa a prepararse desde Martínez', !sinMover)}
       </div>}
