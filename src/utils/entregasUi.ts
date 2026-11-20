@@ -114,7 +114,7 @@ export async function adjuntarATrello(tarjeta: string, archivo: ArchivoTrello): 
  * Family (16-nov-2026): la planilla de entrega (Excel tal cual, o fotos/PDF) y las fotos del remito, para
  * la tarjeta que crea la app. Nombres «Planilla de entrega 11-11-26.xlsx», «Remito 0001-00002716 (1).jpg».
  */
-export async function archivosFamily(planilla: File[], remito: File[], numeroRemito: string, fecha: string): Promise<ArchivoTrello[]> {
+export async function archivosFamily(planilla: File[], remito: File[], numeroRemito: string, fecha: string, papel = ''): Promise<ArchivoTrello[]> {
   const out: ArchivoTrello[] = [];
   const dia = fechaAr(fecha).replace(/\//g, '-');
   const esXlsx = (f: File) => /\.xlsx$/i.test(f.name), esXls = (f: File) => /\.xls$/i.test(f.name);
@@ -136,7 +136,8 @@ export async function archivosFamily(planilla: File[], remito: File[], numeroRem
   const directos = (f: File) => esPdf(f) || esXlsx(f) || esXls(f);
   await tal(planilla.filter(directos), `Planilla de entrega ${dia}`);
   await fotos(planilla.filter((f) => !directos(f)), `Planilla de entrega ${dia}`);
-  const nombreRemito = `Remito ${numeroRemito || dia}`;
+  // Ullua: el papel puede ser una factura («Factura 0001-…»).
+  const nombreRemito = papel || `Remito ${numeroRemito || dia}`;
   await tal(remito.filter(esPdf), nombreRemito);
   await fotos(remito.filter((f) => !esPdf(f)), nombreRemito);
   return out;
@@ -192,7 +193,7 @@ export async function probarPlanilla(): Promise<{ hoja?: string; sinPlanilla?: b
 }
 
 /** Lee fotos con IA (api/leer-remito.js): el remito, o la planilla de entrega de Family. */
-export async function leerFotos<T>(files: File[], tipo: 'remito' | 'entrega' | 'factura' = 'remito'): Promise<T> {
+export async function leerFotos<T>(files: File[], tipo: 'remito' | 'entrega' | 'factura' | 'ullua' = 'remito'): Promise<T> {
   const fotos = await prepararFotos(files);
   const r = await fetch('/api/leer-remito', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fotos, tipo }) });
   const d = await r.json().catch(() => ({}));

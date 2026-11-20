@@ -41,10 +41,10 @@ describe('vista previa de la carga: vendido en iD', () => {
   }) as unknown as PlanCarga;
   const html = (p: PlanCarga) => renderToStaticMarkup(
     <PanelCarga plan={p} ocupado={false} onConfirmar={() => undefined} onCancelar={() => undefined} sucursal="DEPOSITO MARTINEZ" explicacion="" sinTildar onModoVenta={() => undefined} />);
-  it('ofrece separar, cargarlo igual o pasar la venta a Martínez (aun sin tildar)', () => {
+  it('ofrece solo separar o pasar la venta a Martínez (aun sin tildar), sin «cargarlo igual»', () => {
     const h = html(conVenta(1));
     expect(h).toMatch(/Vendido en iD: separá 1 u\. antes de cargar/);
-    expect(h).toMatch(/Ya lo separé antes: cargarlo igual/);
+    expect(h).not.toMatch(/cargarlo igual/);
     expect(h).toMatch(/Cargar y pasar la venta a Martínez/);
     expect(/<button[^>]*>Cargar y pasar la venta a Martínez/.exec(h)![0]).not.toMatch(/disabled/);
   });

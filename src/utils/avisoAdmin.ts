@@ -132,9 +132,14 @@ export function filaPlanilla(o: DatosAvisoAdmin): FilaPlanilla {
  * como las que se anotaban a mano: FECHA de la planilla de entrega, «Familyarg», sin N° de factura ni monto,
  * el N° de remito y CARGA STOCK hoy. Solo se carga si la planilla coincide con el remito: «APP - ok».
  */
-export function filaPlanillaFamily(o: { fecha: string; remito: string; hoy: string }): FilaPlanilla {
+export function filaPlanillaFamily(o: { fecha: string; remito: string; hoy: string; proveedor?: string; factura?: string; monto?: number | null }): FilaPlanilla {
   const remito = o.remito.trim();
-  return { fecha: fechaCorta(o.fecha), proveedor: 'Familyarg', numero: remito, factura: '', remito, monto: null, observaciones: 'APP - ok', ok: true, carga: fechaCorta(o.hoy) };
+  // Ullua (19-nov-2026): a veces trae factura en lugar del remito; va con su número y su total.
+  const factura = (o.factura ?? '').trim();
+  return {
+    fecha: fechaCorta(o.fecha), proveedor: o.proveedor ?? 'Familyarg', numero: factura || remito, factura: factura ? `FAC.OK - ${factura}` : '', remito,
+    monto: o.monto && o.monto > 0 ? o.monto : null, observaciones: 'APP - ok', ok: true, carga: fechaCorta(o.hoy),
+  };
 }
 
 /** Comentario para la tarjeta de Trello (sin saludo; Trello admite textos largos). */

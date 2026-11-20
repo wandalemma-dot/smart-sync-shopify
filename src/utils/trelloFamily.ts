@@ -7,16 +7,23 @@ import type { ResultadoFamily } from './controlFamily';
 const MAX_DESCRIPCION = 3800;
 
 /** «Family - Remito 0001-00002716 - 11/11/26» (sin número de remito: «Family - Entrega 11/11/26»). */
-export function nombreTarjetaFamily(r: ResultadoFamily): string {
+export function nombreTarjetaFamily(r: ResultadoFamily, nombre = 'Family'): string {
+  return `${nombre} - ${papel(r) || 'Entrega'} - ${fechaCorta(r.entrega.fecha)}`;
+}
+/** «Remito 0001-…» (Family, o Ullua con remito) o «Factura …» (Ullua con factura); '' sin número. */
+export function papel(r: ResultadoFamily): string {
+  const d = r.entrega.documento;
+  if (d?.numero?.trim()) return `${d.tipo === 'factura' ? 'Factura' : 'Remito'} ${d.numero.trim()}`;
   const remito = r.remito?.numero?.trim();
-  return `Family - ${remito ? `Remito ${remito}` : 'Entrega'} - ${fechaCorta(r.entrega.fecha)}`;
+  return remito ? `Remito ${remito}` : '';
 }
 
 /** Qué llegó (de la planilla de entrega) y cuándo se cargó. Se corta con aviso si es muy larga. */
-export function descripcionTarjetaFamily(r: ResultadoFamily, sucursal: string, hoy: string): string {
+export function descripcionTarjetaFamily(r: ResultadoFamily, sucursal: string, hoy: string, nombre = 'Family'): string {
   const u = r.entrega.renglones.reduce((s, x) => s + x.cantidad, 0);
+  const p = papel(r);
   const cabeza = [
-    `Entrega de Family del ${fechaCorta(r.entrega.fecha)}${r.remito?.numero ? `, remito ${r.remito.numero}` : ''}: ${r.entrega.renglones.length} artículos, ${u} u.`,
+    `Entrega de ${nombre} del ${fechaCorta(r.entrega.fecha)}${p ? `, ${p.charAt(0).toLowerCase()}${p.slice(1)}` : ''}: ${r.entrega.renglones.length} artículos, ${u} u.`,
     `Cargada en Shopify (${sucursal}) el ${fechaCorta(hoy)}. Tarjeta creada por la app.`,
     '',
   ];

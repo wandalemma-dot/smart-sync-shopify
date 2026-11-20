@@ -6,7 +6,7 @@
 // remito y la factura de la entrega, para ver después qué se cargó y cuándo.
 // Los archivos se leen en el navegador; acá solo se valida y se guarda el JSON.
 // No toca Shopify: la carga la hace el navegador por /api/shopify, con confirmación.
-export const PROVEEDORES = ['distrinando', 'id', 'family', 'target'];
+export const PROVEEDORES = ['distrinando', 'id', 'family', 'target', 'ullua'];
 // «entregas»: planillas de Family (marketplace, sin factura). El resto, factura + remito + nota.
 const TIPOS = ['pedidos', 'facturas', 'asignaciones', 'recepciones', 'remitos', 'entregas'];
 const RE_ID = /^[A-Za-z0-9_.-]{1,80}$/;
@@ -132,6 +132,11 @@ function limpiarConsulta(c) {
   return { fecha: txt(c.fecha, 30), ...(c.error ? { error: txt(c.error, 200) } : {}), codigos };
 }
 
+/** Ullua (19-nov-2026): el remito (con IVA) o la factura (sin IVA) de la entrega. */
+const limpiarDocumento = (d) => ({
+  tipo: d.tipo === 'factura' ? 'factura' : 'remito', numero: txt(d.numero, 40), remito: txt(d.remito, 40), total: num(d.total || 0),
+});
+
 /** Planilla «ENTREGA MERCADERIA» de Family: artículos, precios y talles. */
 export function limpiarEntrega(e) {
   return {
@@ -146,6 +151,7 @@ export function limpiarEntrega(e) {
     })),
     dudas: lista(e?.dudas || [], 50).map((d) => txt(d, 300)),
     shopify: limpiarConsulta(e?.shopify),
+    ...(e?.documento && typeof e.documento === 'object' ? { documento: limpiarDocumento(e.documento) } : {}),
     actualizado: new Date().toISOString(),
   };
 }
@@ -158,7 +164,7 @@ export function limpiarEntrega(e) {
 // ---------------------------------------------------------------------------
 // Family desde el 11-nov; iD (Converse/Le Coq, a Martínez) desde el 12-nov-2026.
 // Distrinando (Reebok, a Martínez) desde el 13-nov-2026.
-const CARGAN = ['family', 'id', 'distrinando', 'target'];
+const CARGAN = ['family', 'id', 'distrinando', 'target', 'ullua'];
 const RE_COD_CARGA = /^[A-Z0-9][A-Z0-9._/-]{1,79}$/;
 const ESTADOS_CARGA = ['cargada', 'parcial', 'dudosa'];
 const campoCarga = (body) => {
@@ -208,9 +214,10 @@ function eventoRegistro({ tipo, prov, campo, marca, entrega, remito, hora, estad
   return {
     tipo, hora, proveedor: prov, entregaId, codigo,
     entrega: { fecha: f.fecha || txt(ent?.fecha, 10), nombre: txt(ent?.nombre, 160) },
-    remito: txt(rem?.numero, 40),
+    // Ullua (19-nov-2026): el remito o la factura vienen con la entrega (`documento`), no aparte.
+    remito: txt(rem?.numero || ent?.documento?.remito, 40),
     // Family no factura; iD manda el número de la factura al reservar la carga.
-    factura: txt(marca?.factura, 40),
+    factura: txt(marca?.factura || (ent?.documento?.tipo === 'factura' ? ent.documento.numero : ''), 40),
     estado,
     ...(d.accion ? { accion: d.accion } : {}),
     ...(d.titulo ? { titulo: d.titulo } : {}),

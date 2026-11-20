@@ -38,6 +38,13 @@ export interface EntregaFamily {
   dudas?: string[];
   shopify?: ConsultaShopify | null;
   actualizado?: string;
+  /** Ullua (19-nov-2026): el papel de la entrega (remito con IVA o factura sin IVA), número y total. */
+  documento?: { tipo: 'remito' | 'factura'; numero: string; remito: string; total: number };
+}
+/** Cómo reconoce un marketplace sus productos en Shopify (Family por defecto; Ullua en ullua.ts). */
+export interface BuscadorShopify {
+  busqueda: (codigos: string[]) => string;
+  esDelCodigo: (sku: string, etiquetas: string[] | undefined, codigo: string) => boolean;
 }
 
 const norm = (s: unknown) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toUpperCase().replace(/\s+/g, ' ').trim();
@@ -219,12 +226,12 @@ export function etiquetaEsDelCodigo(etiquetas: string[] | undefined, codigo: str
 }
 
 /** Agrupa las variantes de Shopify por código de Family y por producto (por SKU o por etiqueta). */
-export function agruparShopify(codigos: string[], variantes: VarianteShopify[]): Record<string, ProductoFamily[]> {
+export function agruparShopify(codigos: string[], variantes: VarianteShopify[], b: BuscadorShopify = BUSCADOR_FAMILY): Record<string, ProductoFamily[]> {
   const out: Record<string, ProductoFamily[]> = {};
   for (const codigo of codigos) {
     const porProducto = new Map<string, ProductoFamily>();
     for (const v of variantes) {
-      if (!skuEsDelCodigo(v.sku, codigo) && !etiquetaEsDelCodigo(v.etiquetas, codigo)) continue;
+      if (!b.esDelCodigo(v.sku, v.etiquetas, codigo)) continue;
       const k = `${v.producto}|${v.vendor}`;
       const p = porProducto.get(k) ?? { titulo: v.producto, vendor: v.vendor, precios: [], costos: [], talles: [] };
       if (!p.precios.some((x) => centavos(x) === centavos(v.precio))) p.precios.push(v.precio);
@@ -254,15 +261,19 @@ interface PaginaVariantes {
 /** Consulta de variantes por código: prefijo de SKU o etiqueta igual al código. */
 export const busquedaCodigos = (codigos: string[]) => codigos.map((c) => `sku:${c}* OR tag:${c}`).join(' OR ');
 export const codigoBuscable = (c: string) => /^[A-Z0-9._-]+$/.test(c);
+export const BUSCADOR_FAMILY: BuscadorShopify = {
+  busqueda: busquedaCodigos,
+  esDelCodigo: (sku, etiquetas, codigo) => skuEsDelCodigo(sku, codigo) || etiquetaEsDelCodigo(etiquetas, codigo),
+};
 
 /** Busca en Shopify los códigos de la entrega (por prefijo de SKU o etiqueta). Solo lectura. */
-export async function consultarShopifyFamily(codigos: string[], gql: Gql): Promise<ConsultaShopify> {
+export async function consultarShopifyFamily(codigos: string[], gql: Gql, b: BuscadorShopify = BUSCADOR_FAMILY): Promise<ConsultaShopify> {
   const fecha = new Date().toISOString();
   const validos = [...new Set(codigos.map((c) => c.toUpperCase()))].filter(codigoBuscable);
   const variantes: VarianteShopify[] = [];
   try {
     for (let i = 0; i < validos.length; i += 20) {
-      const q = busquedaCodigos(validos.slice(i, i + 20));
+      const q = b.busqueda(validos.slice(i, i + 20));
       let cursor: string | null = null;
       for (let pagina = 0; pagina < 30; pagina++) {
         const d = (await gql(QUERY_VARIANTES, { q, cursor })) as PaginaVariantes;
@@ -277,7 +288,7 @@ export async function consultarShopifyFamily(codigos: string[], gql: Gql): Promi
   } catch (e) {
     return { fecha, error: e instanceof Error ? e.message.slice(0, 200) : 'No se pudo consultar Shopify.', codigos: {} };
   }
-  return { fecha, codigos: agruparShopify(validos, variantes) };
+  return { fecha, codigos: agruparShopify(validos, variantes, b) };
 }
 
 // ---------------------------------------------------------------------------
@@ -319,7 +330,19 @@ const antesQue = (a: EntregaFamily, b: EntregaFamily) => a.fecha < b.fecha || (a
  * (según lo que había en Shopify al controlarla) y cambios de precio.
  * `todas` son todas las entregas guardadas (para comparar con la anterior).
  */
-export function controlarEntregaFamily(e: EntregaFamily, remito: Remito | null | undefined, todas: EntregaFamily[]): ResultadoFamily {
+export interface OpcionesControl {
+  /** Nombre del proveedor en los mensajes (Family por defecto). */
+  nombre?: string;
+  /** Cómo se llama el precio de donde sale el costo («por mayor» en Family, «c/u sin IVA» en Ullua). */
+  mayor?: string;
+  /** Ullua: el papel de la entrega ya es el remito (o la factura): no se espera otro. */
+  sinRemito?: boolean;
+  /** Ullua: el costo que tiene que tener en Shopify (se avisa si es otro). */
+  costoEsperado?: (r: RenglonFamily) => number | null;
+}
+
+export function controlarEntregaFamily(e: EntregaFamily, remito: Remito | null | undefined, todas: EntregaFamily[], o: OpcionesControl = {}): ResultadoFamily {
+  const nombre = o.nombre ?? 'Family', mayor = o.mayor ?? 'por mayor';
   const rem = remito ?? null;
   const enRemito = new Map<string, number>();
   for (const r of rem?.renglones ?? []) {
@@ -335,7 +358,14 @@ export function controlarEntregaFamily(e: EntregaFamily, remito: Remito | null |
     if (tipo === 'reposicion' && r.precioPublico > 0) {
       const precios = productos!.flatMap((p) => p.precios);
       if (precios.some((p) => centavos(p) !== centavos(r.precioPublico))) {
-        cambiosPrecio.push(`Precio público: Family dice ${fmt(r.precioPublico)} y en Shopify está a ${[...new Set(precios.map(fmt))].join(' / ')}.`);
+        cambiosPrecio.push(`Precio público: ${nombre} dice ${fmt(r.precioPublico)} y en Shopify está a ${[...new Set(precios.map(fmt))].join(' / ')}.`);
+      }
+    }
+    const esperado = tipo === 'reposicion' && o.costoEsperado ? o.costoEsperado(r) : null;
+    if (esperado !== null && esperado > 0) {
+      const costos = productos!.flatMap((p) => p.costos);
+      if (costos.some((c) => centavos(c) !== centavos(esperado))) {
+        cambiosPrecio.push(`Costo: con este precio da ${fmt(esperado)} y en Shopify está a ${[...new Set(costos.map(fmt))].join(' / ')} (la carga no lo cambia).`);
       }
     }
     const prev = previas.find((x) => x.renglones.some((y) => y.codigo === r.codigo));
@@ -343,9 +373,9 @@ export function controlarEntregaFamily(e: EntregaFamily, remito: Remito | null |
     const anterior = prev && pr ? { fecha: prev.fecha, precioMayor: pr.precioMayor, precioPublico: pr.precioPublico } : null;
     if (anterior) {
       const partes: string[] = [];
-      if (anterior.precioMayor > 0 && r.precioMayor > 0 && centavos(anterior.precioMayor) !== centavos(r.precioMayor)) partes.push(`por mayor ${fmt(anterior.precioMayor)} → ${fmt(r.precioMayor)}`);
+      if (anterior.precioMayor > 0 && r.precioMayor > 0 && centavos(anterior.precioMayor) !== centavos(r.precioMayor)) partes.push(`${mayor} ${fmt(anterior.precioMayor)} → ${fmt(r.precioMayor)}`);
       if (anterior.precioPublico > 0 && r.precioPublico > 0 && centavos(anterior.precioPublico) !== centavos(r.precioPublico)) partes.push(`público ${fmt(anterior.precioPublico)} → ${fmt(r.precioPublico)}`);
-      if (partes.length) cambiosPrecio.push(`Family cambió el precio desde la entrega del ${fechaAr(anterior.fecha)}: ${partes.join(', ')}.`);
+      if (partes.length) cambiosPrecio.push(`${nombre} cambió el precio desde la entrega del ${fechaAr(anterior.fecha)}: ${partes.join(', ')}.`);
     }
     const existentes = new Set((productos ?? []).flatMap((p) => p.talles.map(talleFamily)));
     const tallesNuevos = tipo === 'reposicion' ? r.talles.filter((t) => !existentes.has(talleFamily(t.talle))).map((t) => t.talle) : [];
@@ -360,7 +390,7 @@ export function controlarEntregaFamily(e: EntregaFamily, remito: Remito | null |
   const extrasRemito = [...enRemito].filter(([c]) => !codigos.has(c)).map(([codigo, cantidad]) => ({ codigo, cantidad }));
 
   const rojos: string[] = [], amarillos: string[] = [], info: string[] = [];
-  if (!rem) rojos.push('⏳ Falta el remito: subí la foto o escribilo.');
+  if (!rem && !o.sinRemito) rojos.push('⏳ Falta el remito: subí la foto o escribilo.');
   for (const f of filas) {
     if (f.remito !== null && f.remito !== f.entrega) rojos.push(`❌ ${f.codigo}: la planilla dice ${f.entrega} y el remito ${f.remito}.`);
   }
@@ -375,7 +405,7 @@ export function controlarEntregaFamily(e: EntregaFamily, remito: Remito | null |
   if (nuevos.length) info.push(`🆕 ${nuevos.length} artículo(s) nuevo(s), hay que darlos de alta: ${nuevos.map((f) => f.codigo).join(', ')}.`);
   if (repos.length) info.push(`🔁 ${repos.length} de reposición: ${repos.map((f) => f.codigo).join(', ')}.`);
 
-  const semaforo: SemaforoFamily = !rem ? 'incompleta' : rojos.length ? 'revisar' : amarillos.length ? 'observaciones' : 'ok';
+  const semaforo: SemaforoFamily = !rem && !o.sinRemito ? 'incompleta' : rojos.length ? 'revisar' : amarillos.length ? 'observaciones' : 'ok';
   return {
     entrega: e, remito: rem, filas, extrasRemito, semaforo, motivos: [...rojos, ...amarillos, ...info],
     unidades: filas.reduce((s, f) => s + f.entrega, 0), nuevos: nuevos.length, reposiciones: repos.length,
@@ -383,15 +413,16 @@ export function controlarEntregaFamily(e: EntregaFamily, remito: Remito | null |
 }
 
 /** Resumen para copiar (a quien carga en Shopify, o a Family si algo no coincide). */
-export function resumenFamily(r: ResultadoFamily): string {
+export function resumenFamily(r: ResultadoFamily, nombre = 'Family', mayor = 'por mayor'): string {
   const e = r.entrega;
-  const lineas = [`Family — entrega del ${fechaAr(e.fecha)}${r.remito?.numero ? ` — remito ${r.remito.numero}` : ''} — ${r.unidades} u.`];
+  const papel = e.documento ? ` — ${e.documento.tipo} ${e.documento.numero}` : r.remito?.numero ? ` — remito ${r.remito.numero}` : '';
+  const lineas = [`${nombre} — entrega del ${fechaAr(e.fecha)}${papel} — ${r.unidades} u.`];
   const grupo = (titulo: string, filas: FilaFamily[]) => {
     if (!filas.length) return;
     lineas.push('', titulo);
     for (const f of filas) {
       const talles = e.renglones.find((x) => x.codigo === f.codigo)?.talles.map((t) => `${t.talle}:${t.cantidad}`).join(' ') || '';
-      lineas.push(`• ${f.codigo} ${f.descripcion} — ${f.entrega} u.${talles ? ` (${talles})` : ''}${f.precioMayor ? ` — por mayor ${fmt(f.precioMayor)}` : ''}${f.precioPublico ? ` — público ${fmt(f.precioPublico)}` : ''}`);
+      lineas.push(`• ${f.codigo} ${f.descripcion} — ${f.entrega} u.${talles ? ` (${talles})` : ''}${f.precioMayor ? ` — ${mayor} ${fmt(f.precioMayor)}` : ''}${f.precioPublico ? ` — público ${fmt(f.precioPublico)}` : ''}`);
     }
   };
   grupo('NUEVOS (dar de alta):', r.filas.filter((f) => f.tipo === 'nuevo'));

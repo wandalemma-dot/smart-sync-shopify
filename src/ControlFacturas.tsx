@@ -41,7 +41,9 @@ import {
   anotarEnPlanilla, comentarEnTrello, moverEnTrello, probarPlanilla,
 } from './utils/entregasUi';
 
-type Prov = 'distrinando' | 'id' | 'family' | 'target';
+type Prov = 'distrinando' | 'id' | 'family' | 'target' | 'ullua';
+/** Marketplaces con su propia pantalla (ControlFamily): sin nota de pedido ni Trello de pendientes. */
+const esMarket = (p: Prov) => p === 'family' || p === 'ullua';
 type PedidoGuardado = Pedido & { nroProveedor?: string; origen?: string; enlace?: string };
 type RecepcionGuardada = Recepcion & { nota?: string; actualizado?: string };
 interface Datos {
@@ -77,6 +79,7 @@ const PROVS: { id: Prov; nombre: string }[] = [
   { id: 'distrinando', nombre: 'Distrinando (Reebok, Kappa, Crocs)' },
   { id: 'target', nombre: 'Target (Discovery, Reebok, NBA…)' },
   { id: 'family', nombre: 'Family (sin factura)' },
+  { id: 'ullua', nombre: 'Ullua (Thrasher, Spitfire, DTS)' },
 ];
 type Vista = 'entregas' | 'pedidos' | 'deposito' | 'reportes';
 interface AdjuntoTrello { id: string; nombre: string; fecha?: string }
@@ -323,7 +326,7 @@ export default function ControlFacturas() {
   const sigue = (p: Prov) => provRef.current === p;
 
   const recargar = useCallback(async () => {
-    if (prov === 'family') return; // Family tiene su propia pantalla (ControlFamily)
+    if (esMarket(prov)) return; // Family y Ullua tienen su propia pantalla (ControlFamily)
     setCargando(true); setError('');
     try {
       const d = await api(undefined, prov);
@@ -345,7 +348,7 @@ export default function ControlFacturas() {
    * proveedor (o al cambiar las listas). Devuelve un aviso si algo falló ('' si salió bien).
    */
   const revisarListas = useCallback(async (p: Prov, forzar = false): Promise<string> => {
-    if (p === 'family' || (!forzar && listasRevisadas.current.has(p))) return '';
+    if (esMarket(p) || (!forzar && listasRevisadas.current.has(p))) return '';
     listasRevisadas.current.add(p);
     try {
       const r = await fetch('/api/trello?accion=tarjetas', { cache: 'no-store' });
@@ -409,7 +412,7 @@ export default function ControlFacturas() {
    * Usa datos frescos de la base y de Trello. Devuelve qué movió (o por qué no pudo), para mostrarlo.
    */
   async function avanzarTarjetas(p: Prov, facturaId: string): Promise<string[]> {
-    if (p === 'family') return [];
+    if (esMarket(p)) return [];
     try {
       const r = await fetch('/api/trello?accion=tarjetas', { cache: 'no-store' });
       const d = await r.json().catch(() => ({}));
@@ -1073,7 +1076,7 @@ export default function ControlFacturas() {
    * con los datos de la planilla de ingreso (lo envía la persona).
    */
   async function avisarCarga(p: Prov, r: ResultadoFactura, resultados: ResultadoCarga[]) {
-    if (p === 'family') return;
+    if (esMarket(p)) return;
     const algo = resultados.some((x) => (x.detalle?.sumados.length ?? 0) > 0 || (x.detalle?.pasadas.length ?? 0) > 0);
     if (!algo) return;
     const datosAviso = { prov: p, r, resultados, sucursal: SUCURSAL_CARGA_ID, hoy: hoyAr() };
@@ -1269,10 +1272,11 @@ export default function ControlFacturas() {
   </>);
   // Family no factura: entrega + remito, con su propia pantalla.
   const registro = verRegistro && <RegistroCargas onVolver={() => setVerRegistro(false)} />;
-  if (prov === 'family') return (
+  if (esMarket(prov)) return (
     <div className="glass-panel" style={{ padding: '1.5rem', marginTop: '0.5rem' }}>
       {cabecera}{registro}
-      <div style={{ display: verRegistro ? 'none' : undefined }}><ControlFamily /></div>
+      {/* Ullua (19-nov-2026): marketplace como Family; el remito o la factura en PDF se pasan a fotos. */}
+      <div style={{ display: verRegistro ? 'none' : undefined }}><ControlFamily key={prov} prov={prov} aFotos={comoFotos} /></div>
     </div>
   );
 
