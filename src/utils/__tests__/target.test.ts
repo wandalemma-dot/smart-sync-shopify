@@ -7,8 +7,8 @@ import {
   listaX2, margenTarget, precioMinimo50, precioTarget, tipoTarget, tituloTarget, type FacturaFoto,
 } from '../target';
 import { analizarFacturas, type Factura, type Pedido, type Remito } from '../controlFacturas';
-import { planCargaTarget } from '../cargaTarget';
-import { ejecutarCargaFamily, precioAEscribir, type AltaFamily, type ReposicionFamily } from '../cargaFamily';
+import { colorDeSku, nombreColor, planCargaTarget, skuColorTarget, slugColor } from '../cargaTarget';
+import { accionesElegidas, ejecutarCargaFamily, precioAEscribir, type AltaFamily, type ReposicionFamily } from '../cargaFamily';
 import type { EstadoCargaId, ProductoId } from '../cargaId';
 import { margenPct } from '../margen';
 
@@ -293,5 +293,123 @@ describe('carga de una entrega de Target', () => {
       inventoryQuantities: [{ locationId: 'gid://shopify/Location/martinez', name: 'available', quantity: 12 }],
     });
     expect(llamadas.some((l) => l.q.includes('publishablePublish'))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Colores (20-nov-2026, gax: «esta gorra va a estar en blanco, en negro, en verde… cada color se publique como un
+// producto nuevo… que dé lo mismo que el total de las unidades que entraron»)
+// ---------------------------------------------------------------------------
+describe('carga de Target por colores', () => {
+  const col = (xs: [string, number][]) => new Map([['10001', xs.map(([color, cantidad]) => ({ color, cantidad }))]]);
+
+  it('nombre y SKU del color', () => {
+    expect(nombreColor('azul MARINO')).toBe('Azul Marino');
+    expect(slugColor('Azul marino')).toBe('AZUL-MARINO');
+    expect(slugColor('Négro')).toBe('NEGRO');
+    expect(skuColorTarget('60028', 'verde agua')).toBe('60028-VERDE-AGUA');
+    expect(colorDeSku('60028-NEGRO', '60028')).toBe('NEGRO');
+    expect(colorDeSku('60028', '60028')).toBe('');
+    expect(colorDeSku('600281', '60028')).toBe('');
+  });
+
+  it('cada color es un producto nuevo: título + color, SKU código-COLOR y la etiqueta del color', () => {
+    const plan = planCargaTarget(resultado(), vacio(), {}, new Map(), col([['negro', 7], ['Blanco', 5]]));
+    const it0 = plan.items[0];
+    expect(it0.estado).toBe('listo');
+    const op = it0.opciones[0];
+    expect(op.partes?.map((p) => p.color)).toEqual(['Negro', 'Blanco']);
+    expect(op.partes![0].accion).toMatchObject({
+      tipo: 'alta', titulo: 'Riñonera Camping Alpine Skate Negro', etiquetas: ['Target', '10001', 'Negro'],
+      variantes: [{ talle: 'Default Title', sku: '10001-NEGRO', cantidad: 7 }], precio: 20000, costo: 7000,
+    });
+    expect(op.partes![1].accion).toMatchObject({ titulo: 'Riñonera Camping Alpine Skate Blanco', variantes: [{ sku: '10001-BLANCO', cantidad: 5 }] });
+    expect(it0.colores).toEqual([
+      { color: 'negro', cantidad: 7, sku: '10001-NEGRO', nuevo: true },
+      { color: 'Blanco', cantidad: 5, sku: '10001-BLANCO', nuevo: true },
+    ]);
+    // El nombre editado va antes del color, en todas las partes.
+    const acc = accionesElegidas(plan, { 10001: { clave: 'colores', titulo: 'Riñonera Reebok' } });
+    expect(acc.filter((x) => x.codigo === '10001').map((x) => (x.accion as AltaFamily).titulo)).toEqual(['Riñonera Reebok Negro', 'Riñonera Reebok Blanco']);
+  });
+
+  it('la suma de los colores tiene que dar lo que llegó', () => {
+    const falta = planCargaTarget(resultado(), vacio(), {}, new Map(), col([['Negro', 7], ['Blanco', 4]])).items[0];
+    expect(falta.estado).toBe('bloqueado');
+    expect(falta.motivo).toMatch(/suman 11 u\. y llegaron 12 u\.: faltan 1/);
+    const sobra = planCargaTarget(resultado(), vacio(), {}, new Map(), col([['Negro', 7], ['Blanco', 6]])).items[0];
+    expect(sobra.motivo).toMatch(/sobran 1/);
+    // Con la cantidad escrita a mano, manda esa.
+    expect(planCargaTarget(resultado(), vacio(), {}, new Map([['10001', 11]]), col([['Negro', 7], ['Blanco', 4]])).items[0].estado).toBe('listo');
+    expect(accionesElegidas(planCargaTarget(resultado(), vacio(), {}, new Map(), col([['Negro', 7], ['Blanco', 4]])), {}).some((x) => x.codigo === '10001')).toBe(false);
+  });
+
+  it('color vacío o repetido no se carga; un color en 0 no se crea', () => {
+    expect(planCargaTarget(resultado(), vacio(), {}, new Map(), col([['', 12]])).items[0].motivo).toMatch(/nombre de cada color/);
+    expect(planCargaTarget(resultado(), vacio(), {}, new Map(), col([['Negro', 6], ['negro', 6]])).items[0].motivo).toMatch(/dos veces/);
+    const op = planCargaTarget(resultado(), vacio(), {}, new Map(), col([['Negro', 12], ['Verde', 0]])).items[0].opciones[0];
+    expect(op.partes?.map((p) => p.color)).toEqual(['Negro']);
+  });
+
+  it('el color que ya está en Shopify (SKU código-COLOR) suma stock; los nuevos se crean', () => {
+    const e = vacio();
+    const p = producto('10001-NEGRO', ['Target', '10001'], 18000, 2, 7000);
+    p.titulo = 'Riñonera Camping Alpine Skate Negro';
+    e.porCodigo = { '10001': [p.id] };
+    e.productos = { [p.id]: p };
+    const sin = planCargaTarget(resultado(), e, {}).items[0];
+    expect(sin.coloresPosibles).toEqual(['Negro']);
+    const it0 = planCargaTarget(resultado(), e, {}, new Map(), col([['Negro', 5], ['Rojo', 7]])).items[0];
+    expect(it0.estado).toBe('listo');
+    const [negro, rojo] = it0.opciones[0].partes!;
+    expect(negro.accion).toMatchObject({ tipo: 'reposicion', productoId: p.id, lineas: [{ actual: 2, suma: 5 }] });
+    // 18.000 no llega a lista × 2: se pone el mínimo, como en las altas, y se avisa.
+    expect((negro.accion as ReposicionFamily).ajuste?.precio).toBe(20000);
+    expect(it0.opciones[0].avisos.join(' ')).toMatch(/Negro: el precio .* pasa a \$ 20\.000/);
+    expect(rojo.accion).toMatchObject({ tipo: 'alta', variantes: [{ sku: '10001-ROJO', cantidad: 7 }] });
+    expect(it0.colores?.map((c) => c.nuevo)).toEqual([false, true]);
+  });
+
+  it('al cargar: un producto por color, una sola marca para el código', async () => {
+    const plan = planCargaTarget(resultado(), vacio(), {}, new Map(), col([['Negro', 7], ['Blanco', 5]]));
+    const creados: Record<string, unknown>[] = [];
+    let n = 0;
+    const gql = vi.fn(async (q: string, v: Record<string, unknown> = {}) => {
+      if (q.includes('productSet')) { creados.push(v.input as Record<string, unknown>); return { productSet: { product: { id: `gid://shopify/Product/c${++n}` }, userErrors: [] } }; }
+      if (q.includes('publishablePublish')) return { publishablePublish: { userErrors: [] } };
+      if (q.includes('SkuLibre')) return { productVariants: { nodes: [] } };
+      // La revisión del código ve los colores recién creados: no cuentan como «apareció otro».
+      if (q.includes('productVariants')) return { productVariants: { nodes: n ? [{ sku: '10001-NEGRO', product: { id: 'gid://shopify/Product/c1', tags: ['Target', '10001'] } }] : [], pageInfo: { hasNextPage: false, endCursor: null } } };
+      throw new Error('inesperada');
+    });
+    const reservas: string[] = [];
+    const terminados: { codigo: string; estado: string; detalle: unknown }[] = [];
+    const res = await ejecutarCargaFamily(plan, { 10001: { clave: 'colores' }, 10003: { clave: 'no' } }, {
+      gql: gql as never, reservar: async (c) => { reservas.push(c); return { ok: true }; },
+      terminar: async (codigo, estado, detalle) => { terminados.push({ codigo, estado, detalle }); }, liberar: async () => {}, clave: () => 'k',
+    });
+    expect(reservas).toEqual(['10001']);
+    expect(creados.map((x) => x.title)).toEqual(['Riñonera Camping Alpine Skate Negro', 'Riñonera Camping Alpine Skate Blanco']);
+    expect(res.map((x) => [x.codigo, x.estado])).toEqual([['10001', 'cargada'], ['10001', 'cargada']]);
+    expect(terminados).toEqual([{ codigo: '10001', estado: 'cargada', detalle: expect.objectContaining({ titulo: 'Riñonera Camping Alpine Skate (Negro, Blanco)', unidades: 12, talles: [{ talle: 'Negro', cantidad: 7 }, { talle: 'Blanco', cantidad: 5 }] }) }]);
+  });
+
+  it('si aparece otro producto con el código mientras tanto, ese color no se crea y la carga queda parcial', async () => {
+    const plan = planCargaTarget(resultado(), vacio(), {}, new Map(), col([['Negro', 7], ['Blanco', 5]]));
+    let n = 0;
+    const gql = vi.fn(async (q: string) => {
+      if (q.includes('productSet')) return { productSet: { product: { id: `gid://shopify/Product/c${++n}` }, userErrors: [] } };
+      if (q.includes('publishablePublish')) return { publishablePublish: { userErrors: [] } };
+      if (q.includes('SkuLibre')) return { productVariants: { nodes: [] } };
+      if (q.includes('productVariants')) return { productVariants: { nodes: n ? [{ sku: '10001', product: { id: 'gid://shopify/Product/ajeno', tags: [] } }] : [], pageInfo: { hasNextPage: false, endCursor: null } } };
+      throw new Error('inesperada');
+    });
+    const terminados: string[] = [];
+    const res = await ejecutarCargaFamily(plan, { 10001: { clave: 'colores' }, 10003: { clave: 'no' } }, {
+      gql: gql as never, reservar: async () => ({ ok: true }), terminar: async (_c, estado) => { terminados.push(estado); }, liberar: async () => {}, clave: () => 'k',
+    });
+    expect(res.map((x) => x.estado)).toEqual(['cargada', 'error']);
+    expect(terminados).toEqual(['parcial']);
+    expect(res[1].mensaje).toMatch(/cargá a mano los que faltan/);
   });
 });

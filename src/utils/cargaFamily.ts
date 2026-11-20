@@ -412,6 +412,14 @@ export interface OpcionCarga {
   movibles?: number;
   /** Qué orden de iD se lleva cada unidad que llegó (para decir cuáles ya pueden salir). */
   cubiertas?: CubiertaOrden[];
+  /**
+   * Target (20-nov-2026, gax): un producto por color. Cada parte se crea o se suma por separado, con una sola marca
+   * «una sola vez» para el código. `accion` es la primera parte. `tituloBase` = título sin el color (editable).
+   */
+  partes?: { color: string; accion: AltaFamily | ReposicionFamily }[];
+  tituloBase?: string;
+  /** Target por colores: los productos que ya tenían ese código al armar la carga (no cuentan como «apareció otro»). */
+  conocidos?: string[];
 }
 export interface ItemCarga {
   codigo: string;
@@ -448,6 +456,15 @@ export interface ItemCarga {
   }[];
   /** Distrinando: tabla de talle del modelo. */
   tabla?: TablaItem;
+  /**
+   * Target (20-nov-2026, gax: «esta gorra va a estar en blanco, en negro, en verde»): colores escritos a mano, cada uno
+   * un producto aparte. `producto` = el que ya está en Shopify con ese color (SKU código-COLOR); si no, `nuevo`.
+   */
+  colores?: { color: string; cantidad: number; sku: string; producto?: string; nuevo: boolean }[];
+  /** Target: se pueden escribir colores. Los colores de los productos de ese código que ya están en Shopify. */
+  coloresPosibles?: string[];
+  /** Target: el nombre del producto sin el color (para mostrarlo aunque los colores todavía no cierren). */
+  tituloBase?: string;
   /**
    * iD (13-nov-2026, gax: «la factura dice por 6, es porque son 6 bandas»): el proveedor factura el pack entero y la
    * tienda vende por unidad. Las cantidades de `talles` ya están en unidades.
@@ -622,13 +639,30 @@ export function planCargaFamily(r: ResultadoFamily, estado: EstadoCarga, cargas:
 export type EleccionesCarga = Record<string, { clave: string; titulo?: string; precio?: number }>;
 
 /** Lo que se va a hacer, con las elecciones aplicadas (solo opciones sin bloqueo). */
-export function accionesElegidas(plan: PlanCarga, elecciones: EleccionesCarga): { codigo: string; firma: string; accion: AltaFamily | ReposicionFamily }[] {
-  const out: { codigo: string; firma: string; accion: AltaFamily | ReposicionFamily }[] = [];
+export function accionesElegidas(plan: PlanCarga, elecciones: EleccionesCarga): { codigo: string; firma: string; accion: AltaFamily | ReposicionFamily; color?: string }[] {
+  const out: { codigo: string; firma: string; accion: AltaFamily | ReposicionFamily; color?: string }[] = [];
   for (const it of plan.items) {
     if (it.estado !== 'listo' && it.estado !== 'elegir') continue;
     const clave = elecciones[it.codigo]?.clave ?? it.opciones[0]?.clave;
     const op = it.opciones.find((o) => o.clave === clave);
     if (!op?.accion || op.bloqueo) continue;
+    if (op.partes?.length) {
+      // Target, un producto por color: todas las partes juntas (si una no puede, no se carga ninguna).
+      const base = (elecciones[it.codigo]?.titulo ?? op.tituloBase ?? '').replace(/\s+/g, ' ').trim();
+      const partes: typeof out = [];
+      for (const pt of op.partes) {
+        let a = pt.accion;
+        if (a.tipo === 'alta') a = { ...a, titulo: base ? `${base} ${pt.color}` : a.titulo };
+        else if (a.ajuste) {
+          const precio = precioAEscribir(a.ajuste);
+          if (Number.isNaN(precio)) { partes.length = 0; break; }
+          a = { ...a, ajuste: { ...a.ajuste, precio: precio ?? undefined } };
+        }
+        partes.push({ codigo: it.codigo, firma: it.firma, accion: a, color: pt.color });
+      }
+      if (partes.length === op.partes.length) out.push(...partes);
+      continue;
+    }
     let accion = op.accion;
     if (accion.tipo === 'reposicion' && accion.ajuste) {
       // iD: sin un precio que llegue al 50% (salvo los básicos) ese artículo no se carga.
@@ -694,6 +728,7 @@ const CREAR_TALLES = `mutation CrearTallesCarga($productId: ID!, $variants: [Pro
 const CAMBIAR_SKU = `mutation CambiarSkuCarga($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
   productVariantsBulkUpdate(productId: $productId, variants: $variants) { productVariants { id } userErrors { field message } }
 }`;
+const Q_SKU_LIBRE = `query SkuLibre($q: String!) { productVariants(first: 5, query: $q) { nodes { sku } } }`;
 const ORDENAR_TALLES = `mutation OrdenarTallesCarga($productId: ID!, $options: [OptionReorderInput!]!) {
   productOptionsReorder(productId: $productId, options: $options) { userErrors { field message } }
 }`;
@@ -746,11 +781,19 @@ export function noSeEjecuto(e: unknown): boolean {
 }
 const motivo = (e: unknown) => (e instanceof Error ? e.message : 'error').slice(0, 200);
 
-async function crearAlta(codigo: string, a: AltaFamily, plan: PlanCarga, deps: DepsCarga): Promise<Paso> {
-  // Revisión fresca: si mientras tanto alguien lo creó con este código, no se duplica.
+async function crearAlta(codigo: string, a: AltaFamily, plan: PlanCarga, deps: DepsCarga, permitidos?: ReadonlySet<string>): Promise<Paso> {
+  // Revisión fresca: si mientras tanto alguien lo creó con este código, no se duplica. Target por colores: los
+  // productos de los otros colores (los que ya estaban y los recién creados) sí pueden estar.
   try {
     const ya = await productosDelCodigo([codigo], deps.gql, deps.buscador);
-    if (ya[codigo]?.length) return { estado: 'error', mensaje: 'Mientras tanto apareció en Shopify un producto con este código: no se creó nada. Armá la carga de nuevo.' };
+    const otros = (ya[codigo] ?? []).filter((id) => !permitidos?.has(id));
+    if (otros.length) return { estado: 'error', mensaje: `Mientras tanto apareció en Shopify un producto con este código: no se creó «${a.titulo}». Armá la carga de nuevo.` };
+    // El SKU de ese color tiene que estar libre.
+    const sku = a.variantes.length === 1 ? a.variantes[0].sku : '';
+    if (permitidos && sku) {
+      const d = (await deps.gql(Q_SKU_LIBRE, { q: `sku:'${sku.replace(/'/g, '')}'` })) as { productVariants?: { nodes?: { sku?: string | null }[] } } | null;
+      if ((d?.productVariants?.nodes ?? []).some((n) => String(n.sku ?? '').toUpperCase() === sku.toUpperCase())) return { estado: 'error', mensaje: `Ya hay en Shopify un producto con el SKU ${sku}: no se creó «${a.titulo}». Armá la carga de nuevo.` };
+    }
   } catch (e) {
     return { estado: 'error', mensaje: `No pude revisar Shopify antes de crear (${motivo(e)}): no se creó nada.` };
   }
@@ -1049,48 +1092,114 @@ const soloNota = (titulo: string, nota: string): DetalleResultado => ({ titulo, 
  * ANTES de escribir; si Shopify lo rechaza (no se escribió nada) se libera la marca;
  * si la respuesta no llega completa queda «dudosa» y no se reintenta sola.
  */
+type Elegida = ReturnType<typeof accionesElegidas>[number];
+
+/** Crea o suma una acción (sin la marca «una sola vez»). */
+async function ejecutarAccion(codigo: string, accion: AltaFamily | ReposicionFamily, plan: PlanCarga, deps: DepsCarga, permitidos?: ReadonlySet<string>): Promise<{ paso: Paso; renombrado: string; precioOk: boolean }> {
+  let paso: Paso;
+  let renombrado = '';
+  let precioOk = false;
+  try {
+    if (accion.tipo === 'alta') paso = await crearAlta(codigo, accion, plan, deps, permitidos);
+    else {
+      // Distrinando: primero los talles renombrados. Si no se pudo, no se toca precio ni stock.
+      const renombre = await renombrarTalles(accion, deps);
+      if (!renombre.ok) paso = { estado: 'error', mensaje: renombre.mensaje };
+      else {
+        const previo = deps.antes ? await deps.antes(codigo, accion) : null;
+        if (previo && previo.estado !== 'ok') paso = { estado: previo.estado, mensaje: `${previo.mensaje} No se sumó el stock.`, productoId: accion.productoId, titulo: accion.titulo };
+        else {
+          precioOk = !!previo?.mensaje;
+          paso = await sumarStock(codigo, accion, plan, deps);
+          if (previo?.mensaje) paso = { ...paso, mensaje: `${previo.mensaje} ${paso.mensaje}`.trim() };
+        }
+        if (renombre.mensaje) { renombrado = renombre.mensaje; paso = { ...paso, mensaje: `${renombre.mensaje} ${paso.mensaje}`.trim() }; }
+      }
+    }
+  }
+  catch (e) { paso = { estado: 'dudosa', mensaje: `Algo falló a mitad de camino (${e instanceof Error ? e.message : 'error'}): revisá en Shopify.` }; }
+  return { paso, renombrado, precioOk };
+}
+
+/** Lo que quedó hecho, para la tabla de resultados. */
+function detalleDe(accion: AltaFamily | ReposicionFamily, paso: Paso, renombrado: string, precioOk: boolean): DetalleResultado {
+  const hecho: DetalleResultado = { titulo: paso.titulo ?? accion.titulo, sumados: paso.sumados ?? [], costos: [], pasadas: [], notas: [] };
+  if (renombrado) hecho.notas.push(renombrado);
+  if (precioOk && accion.tipo === 'reposicion' && accion.ajuste) {
+    const a = accion.ajuste;
+    if (a.precio !== undefined && a.precio !== a.precioActual) hecho.precio = { antes: a.precioActual, nuevo: a.precio };
+    if (a.costos.length) hecho.costos.push(`${fmt(a.costoNuevo)} en ${a.costos.map((c) => c.talle).join(', ')}`);
+    for (const c of a.ponderados) hecho.costos.push(`${c.talle} ${fmt(c.costo)} (promedio)`);
+  }
+  if (paso.extra) hecho.notas.push(paso.extra);
+  else if (paso.estado !== 'cargada') hecho.notas.push((renombrado ? paso.mensaje.replace(renombrado, '') : paso.mensaje).trim());
+  if (accion.tipo === 'alta' && paso.estado !== 'error') { hecho.precio = { antes: null, nuevo: accion.precio }; hecho.costos.push(fmt(accion.costo)); }
+  return hecho;
+}
+
 export async function ejecutarCargaFamily(plan: PlanCarga, elecciones: EleccionesCarga, deps: DepsCarga): Promise<ResultadoCarga[]> {
   const acciones = accionesElegidas(plan, elecciones);
+  // Target por colores (20-nov-2026): las partes del mismo código van juntas, con una sola marca.
+  const grupos: Elegida[][] = [];
+  for (const x of acciones) {
+    const g = grupos[grupos.length - 1];
+    if (g && g[0].codigo === x.codigo && x.color !== undefined && g[0].color !== undefined) g.push(x); else grupos.push([x]);
+  }
   const out: ResultadoCarga[] = [];
   const mover: { codigo: string; ventas: MoverVenta[] }[] = [];
-  for (let i = 0; i < acciones.length; i++) {
-    const { codigo, firma, accion } = acciones[i];
-    const detalle = { accion: accion.tipo, titulo: accion.titulo, ...(accion.tipo === 'reposicion' ? { productoId: accion.productoId } : {}) };
+  let hechos = 0;
+  for (const grupo of grupos) {
+    const { codigo, firma } = grupo[0];
+    const colores = grupo.length > 1 || grupo[0].color !== undefined;
+    const opColores = colores ? plan.items.find((it) => it.codigo === codigo)?.opciones.find((o) => o.partes?.length) : undefined;
+    const baseGrupo = (elecciones[codigo]?.titulo ?? opColores?.tituloBase ?? '').replace(/\s+/g, ' ').trim();
+    const tituloGrupo = colores ? `${baseGrupo || codigo} (${grupo.map((x) => x.color).join(', ')})` : grupo[0].accion.titulo;
+    const tipoGrupo = grupo.some((x) => x.accion.tipo === 'alta') ? 'alta' : 'reposicion';
+    const detalle = { accion: tipoGrupo, titulo: tituloGrupo, ...(!colores && grupo[0].accion.tipo === 'reposicion' ? { productoId: grupo[0].accion.productoId } : {}) } as CargaFamily['detalle'];
     let reserva: { ok: boolean; existente?: CargaFamily | null };
     try { reserva = await deps.reservar(codigo, firma, detalle); }
     catch (e) {
       const m = `No pude anotar la carga en la base (${e instanceof Error ? e.message : 'error'}): no se cargó nada.`;
-      out.push({ codigo, estado: 'error', mensaje: m, detalle: soloNota(accion.titulo, m) });
-      deps.onProgreso?.(i + 1, acciones.length); continue;
+      out.push({ codigo, estado: 'error', mensaje: m, detalle: soloNota(tituloGrupo, m) });
+      hechos += grupo.length; deps.onProgreso?.(hechos, acciones.length); continue;
     }
     if (!reserva.ok) {
       const m = reserva.existente ? `No se cargó otra vez. ${textoCarga(reserva.existente)}` : 'Ya estaba cargado (o se está cargando en otra pantalla): no se cargó otra vez.';
-      out.push({ codigo, estado: 'saltado', mensaje: m, detalle: soloNota(accion.titulo, m) });
-      deps.onProgreso?.(i + 1, acciones.length);
+      out.push({ codigo, estado: 'saltado', mensaje: m, detalle: soloNota(tituloGrupo, m) });
+      hechos += grupo.length; deps.onProgreso?.(hechos, acciones.length);
       continue;
     }
-    let paso: Paso;
-    let renombrado = '';
-    let precioOk = false;
-    try {
-      if (accion.tipo === 'alta') paso = await crearAlta(codigo, accion, plan, deps);
-      else {
-        // Distrinando: primero los talles renombrados. Si no se pudo, no se toca precio ni stock.
-        const renombre = await renombrarTalles(accion, deps);
-        if (!renombre.ok) paso = { estado: 'error', mensaje: renombre.mensaje };
-        else {
-          const previo = deps.antes ? await deps.antes(codigo, accion) : null;
-          if (previo && previo.estado !== 'ok') paso = { estado: previo.estado, mensaje: `${previo.mensaje} No se sumó el stock.`, productoId: accion.productoId, titulo: accion.titulo };
-          else {
-            precioOk = !!previo?.mensaje;
-            paso = await sumarStock(codigo, accion, plan, deps);
-            if (previo?.mensaje) paso = { ...paso, mensaje: `${previo.mensaje} ${paso.mensaje}`.trim() };
-          }
-          if (renombre.mensaje) { renombrado = renombre.mensaje; paso = { ...paso, mensaje: `${renombre.mensaje} ${paso.mensaje}`.trim() }; }
-        }
+    if (colores) {
+      // Cada color es un producto: los que ya estaban (y los que se van creando) pueden aparecer al revisar el código.
+      const permitidos = new Set<string>([...(opColores?.conocidos ?? []), ...grupo.flatMap((x) => (x.accion.tipo === 'reposicion' ? [x.accion.productoId] : []))]);
+      const pasos: { x: Elegida; paso: Paso; hecho: DetalleResultado }[] = [];
+      for (const x of grupo) {
+        const { paso, renombrado, precioOk } = await ejecutarAccion(codigo, x.accion, plan, deps, permitidos);
+        if (paso.productoId) permitidos.add(paso.productoId);
+        pasos.push({ x, paso, hecho: detalleDe(x.accion, paso, renombrado, precioOk) });
+        hechos++; deps.onProgreso?.(hechos, acciones.length);
       }
+      const hechas = pasos.filter((p) => p.paso.estado !== 'error');
+      let nota = '';
+      if (!hechas.length) {
+        try { await deps.liberar(codigo); } catch { nota = ' (No pude liberar la marca: liberala a mano después de revisar.)'; }
+      } else {
+        const estado: 'cargada' | 'parcial' | 'dudosa' = hechas.some((p) => p.paso.estado === 'dudosa') ? 'dudosa'
+          : hechas.length < pasos.length || hechas.some((p) => p.paso.estado === 'parcial') ? 'parcial' : 'cargada';
+        const mensaje = pasos.map((p) => `${p.x.color}: ${p.paso.mensaje}`).join(' ').slice(0, 600);
+        const talles = hechas.map((p) => ({ talle: p.x.color ?? '', cantidad: p.paso.unidades ?? (p.paso.talles ?? []).reduce((s, t) => s + t.cantidad, 0) }));
+        try { await deps.terminar(codigo, estado, { accion: tipoGrupo, titulo: tituloGrupo, unidades: talles.reduce((s, t) => s + t.cantidad, 0), mensaje, talles } as CargaFamily['detalle']); }
+        catch { nota = ' (No pude anotar el resultado en la base: NO lo vuelvas a cargar.)'; }
+        if (hechas.length < pasos.length) nota += ' Algún color no se cargó y la marca quedó puesta: cargá a mano los que faltan.';
+      }
+      for (const p of pasos) {
+        if (nota) p.hecho.notas.push(nota.trim());
+        out.push({ codigo, estado: p.paso.estado, mensaje: `${p.x.color}: ${p.paso.mensaje}${nota}`, ...(p.paso.productoId ? { productoId: p.paso.productoId } : {}), detalle: p.hecho });
+      }
+      continue;
     }
-    catch (e) { paso = { estado: 'dudosa', mensaje: `Algo falló a mitad de camino (${e instanceof Error ? e.message : 'error'}): revisá en Shopify.` }; }
+    const { accion } = grupo[0];
+    const { paso, renombrado, precioOk } = await ejecutarAccion(codigo, accion, plan, deps);
     let mensaje = paso.mensaje;
     if (paso.estado === 'error') {
       // Shopify no escribió nada: se libera la marca para poder volver a armar la carga.
@@ -1099,17 +1208,7 @@ export async function ejecutarCargaFamily(plan: PlanCarga, elecciones: Eleccione
       try { await deps.terminar(codigo, paso.estado, { accion: accion.tipo, productoId: paso.productoId, titulo: paso.titulo ?? accion.titulo, unidades: paso.unidades, mensaje: paso.mensaje.slice(0, 600), ...(paso.talles ? { talles: paso.talles } : {}) }); }
       catch { mensaje += ' (No pude anotar el resultado en la base: NO lo vuelvas a cargar.)'; }
     }
-    const hecho: DetalleResultado = { titulo: paso.titulo ?? accion.titulo, sumados: paso.sumados ?? [], costos: [], pasadas: [], notas: [] };
-    if (renombrado) hecho.notas.push(renombrado);
-    if (precioOk && accion.tipo === 'reposicion' && accion.ajuste) {
-      const a = accion.ajuste;
-      if (a.precio !== undefined && a.precio !== a.precioActual) hecho.precio = { antes: a.precioActual, nuevo: a.precio };
-      if (a.costos.length) hecho.costos.push(`${fmt(a.costoNuevo)} en ${a.costos.map((c) => c.talle).join(', ')}`);
-      for (const c of a.ponderados) hecho.costos.push(`${c.talle} ${fmt(c.costo)} (promedio)`);
-    }
-    if (paso.extra) hecho.notas.push(paso.extra);
-    else if (paso.estado !== 'cargada') hecho.notas.push((renombrado ? paso.mensaje.replace(renombrado, '') : paso.mensaje).trim());
-    if (accion.tipo === 'alta' && paso.estado !== 'error') { hecho.precio = { antes: null, nuevo: accion.precio }; hecho.costos.push(fmt(accion.costo)); }
+    const hecho = detalleDe(accion, paso, renombrado, precioOk);
     if (mensaje !== paso.mensaje) hecho.notas.push(mensaje.slice(paso.mensaje.length).trim());
     out.push({ codigo, estado: paso.estado, mensaje, ...(paso.productoId ? { productoId: paso.productoId } : {}), detalle: hecho });
     if (accion.tipo === 'reposicion' && accion.mover?.length) {
@@ -1120,7 +1219,7 @@ export async function ejecutarCargaFamily(plan: PlanCarga, elecciones: Eleccione
         hecho.notas.push(m);
       }
     }
-    deps.onProgreso?.(i + 1, acciones.length);
+    hechos++; deps.onProgreso?.(hechos, acciones.length);
   }
   // Al final, con todo el stock ya sumado: una preparación de iD puede tener artículos de varios códigos.
   if (mover.length) {
