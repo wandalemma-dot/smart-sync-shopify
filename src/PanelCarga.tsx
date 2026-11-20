@@ -554,9 +554,18 @@ function Separar({ op, onModoVenta, ocupado }: { op: OpcionCarga; onModoVenta?: 
   const xs = op.separar ?? [];
   const u = xs.reduce((s, x) => s + x.cantidad, 0);
   const modo = op.modoVenta ?? (op.separarAplicado ? 'separar' : 'igual');
-  const boton = (m: ModoVenta, texto: string, titulo: string, habilitado = true) => (
-    <button key={m} style={{ ...botonChico, padding: '2px 8px', opacity: habilitado ? 1 : 0.5 }} disabled={ocupado || !habilitado} title={titulo} onClick={() => onModoVenta?.(m)}>{texto}</button>
-  );
+  // 20-nov-2026 (gax): los dos botones siempre a la vista; separar en amarillo y pasar a Martínez en verde.
+  // El elegido va relleno (con ✓); el otro, solo con el borde de su color.
+  const boton = (m: ModoVenta, texto: string, titulo: string, color: string, habilitado = true) => {
+    const elegido = modo === m;
+    return (
+      <button key={m} aria-pressed={elegido} disabled={ocupado || !habilitado} title={titulo} onClick={() => onModoVenta?.(m)}
+        style={{ ...botonChico, padding: '3px 10px', opacity: habilitado ? 1 : 0.5, border: `1px solid ${color}`,
+          background: elegido ? color : 'transparent', color: elegido ? '#111827' : color, fontWeight: elegido ? 700 : 500 }}>
+        {elegido ? '✓ ' : ''}{texto}
+      </button>
+    );
+  };
   const sinMover = !op.movibles;
   return (
     <div style={{ marginTop: 8, padding: '8px 10px', borderRadius: 6, borderLeft: `4px solid ${VIOLETA}`, background: 'rgba(167,139,250,0.12)' }}>
@@ -564,9 +573,9 @@ function Separar({ op, onModoVenta, ocupado }: { op: OpcionCarga; onModoVenta?: 
       {modo === 'igual' && <><strong>🏷️ Vendido en iD ({u} u.)</strong> — {textoSeparar(xs)}. Elegiste cargarlo igual: se suma todo a Martínez.</>}
       {modo === 'pasar' && <><strong>🔀 Vendido en iD ({u} u.)</strong> — {textoSeparar(xs)}. Elegiste cargarlo y pasar la venta a Martínez: se suma a Martínez y, después de cargar, esa orden se prepara desde Martínez.</>}
       {onModoVenta && <div style={{ marginTop: 4, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        {modo !== 'separar' && boton('separar', 'Volver a separarlo', 'No se suma a Martínez: queda para esas órdenes de iD')}
-        {modo !== 'pasar' && boton('pasar', 'Cargar y pasar la venta a Martínez',
-          sinMover ? 'En Shopify esa preparación figura en curso en iD: no se puede mover desde la app' : 'Para órdenes que esperan otro artículo: se suma a Martínez y la venta pasa a prepararse desde Martínez', !sinMover)}
+        {boton('separar', 'Separar: sale desde iD (no se suma)', 'No se suma a Martínez: se separa para esas órdenes y salen desde iD', AMARILLO)}
+        {boton('pasar', 'Cargar y pasar la venta a Martínez',
+          sinMover ? 'En Shopify esa preparación figura en curso en iD: no se puede mover desde la app' : 'Se suma a Martínez y la venta pasa a prepararse desde Martínez', VERDE, !sinMover)}
       </div>}
     </div>
   );
