@@ -24,6 +24,27 @@ const fecha = (v) => {
   if (s && !/^\d{4}-\d{2}-\d{2}$/.test(s)) throw new Error('Fecha inválida.');
   return s;
 };
+/** Momento en que se subió algo (ISO, del servidor). */
+const RE_ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+const momento = (v) => (RE_ISO.test(String(v ?? '')) ? { valido: String(v) } : {});
+/**
+ * Fecha de ingreso de la mercadería (21-nov-2026, gax: «la primera fecha tiene que ser la fecha de entrega,
+ * la última la fecha en la que lo estás haciendo»). `subida`: cuándo se subió por primera vez (la pone el
+ * servidor y no cambia); `ingreso`: el día que entró, escrito a mano.
+ */
+const conIngreso = (x) => ({
+  ...(momento(x?.subida).valido ? { subida: momento(x.subida).valido } : {}),
+  ...(x?.ingreso ? { ingreso: fecha(x.ingreso) } : {}),
+});
+/** Conserva la primera subida y el ingreso escrito de lo que ya estaba guardado. */
+function conservarIngreso(nuevo, crudoAnterior, ahora = new Date().toISOString()) {
+  let ant = null;
+  try { ant = crudoAnterior ? JSON.parse(crudoAnterior) : null; } catch { ant = null; }
+  const subida = momento(ant?.subida).valido || momento(ant?.subido).valido || nuevo.subida || nuevo.subido || ahora;
+  const ingreso = nuevo.ingreso || (ant?.ingreso && /^\d{4}-\d{2}-\d{2}$/.test(ant.ingreso) ? ant.ingreso : '');
+  return { ...nuevo, subida, ...(ingreso ? { ingreso } : {}) };
+}
+
 const id = (v) => {
   const s = String(v ?? '');
   if (!RE_ID.test(s)) throw new Error('Identificador inválido.');
@@ -76,6 +97,7 @@ export function limpiarFactura(f) {
     // Target (19-nov-2026): la empresa del grupo que factura y la comparación de precio por neto.
     ...(f?.emisor ? { emisor: txt(f.emisor, 40) } : {}),
     ...(f?.soloNeto === true ? { soloNeto: true } : {}),
+    ...conIngreso(f),
   };
 }
 
@@ -105,6 +127,7 @@ export function limpiarRemito(r) {
       talles: talles(x?.talles),
       ...retirado(x),
     })),
+    ...(momento(r?.subida).valido ? { subida: momento(r.subida).valido } : {}),
     actualizado: new Date().toISOString(),
   };
 }
@@ -152,6 +175,7 @@ export function limpiarEntrega(e) {
     dudas: lista(e?.dudas || [], 50).map((d) => txt(d, 300)),
     shopify: limpiarConsulta(e?.shopify),
     ...(e?.documento && typeof e.documento === 'object' ? { documento: limpiarDocumento(e.documento) } : {}),
+    ...conIngreso(e),
     actualizado: new Date().toISOString(),
   };
 }
@@ -452,7 +476,8 @@ export async function aplicar(kv, body) {
     }
     case 'guardarFactura': {
       const f = limpiarFactura(body.factura);
-      await kv([['HSET', clave(prov, 'facturas'), f.id, JSON.stringify(f)]]);
+      const [antes] = await kv([['HGET', clave(prov, 'facturas'), f.id]]);
+      await kv([['HSET', clave(prov, 'facturas'), f.id, JSON.stringify(conservarIngreso(f, antes))]]);
       return { ok: true };
     }
     case 'borrarFactura': {
@@ -473,7 +498,11 @@ export async function aplicar(kv, body) {
     }
     case 'guardarRemito': {
       const fid = id(body.facturaId);
-      await kv([['HSET', clave(prov, 'remitos'), fid, JSON.stringify(limpiarRemito(body.remito))]]);
+      const [antes] = await kv([['HGET', clave(prov, 'remitos'), fid]]);
+      // Un remito guardado antes de este cambio: su primera subida es la de su última edición (lo más cercano que hay).
+      const r = limpiarRemito(body.remito);
+      const { ingreso: _i, ...conSubida } = conservarIngreso(r, antes, r.actualizado);
+      await kv([['HSET', clave(prov, 'remitos'), fid, JSON.stringify(conSubida)]]);
       return { ok: true };
     }
     case 'borrarRemito': {
@@ -482,7 +511,19 @@ export async function aplicar(kv, body) {
     }
     case 'guardarEntrega': {
       const e = limpiarEntrega(body.entrega);
-      await kv([['HSET', clave(prov, 'entregas'), e.id, JSON.stringify(e)]]);
+      const [antes] = await kv([['HGET', clave(prov, 'entregas'), e.id]]);
+      await kv([['HSET', clave(prov, 'entregas'), e.id, JSON.stringify(conservarIngreso(e, antes))]]);
+      return { ok: true };
+    }
+    case 'guardarIngreso': {
+      // El día que entró la mercadería, escrito a mano (vacío = el día que se subió).
+      const fid = id(body.facturaId);
+      const dia = fecha(body.fecha);
+      const tipo = ['family', 'ullua'].includes(prov) ? 'entregas' : 'facturas';
+      const [crudo] = await kv([['HGET', clave(prov, tipo), fid]]);
+      if (!crudo) throw new Error('No encontré esa entrega.');
+      const { ingreso: _v, ...doc } = JSON.parse(crudo);
+      await kv([['HSET', clave(prov, tipo), fid, JSON.stringify(dia ? { ...doc, ingreso: dia } : doc)]]);
       return { ok: true };
     }
     case 'borrarEntrega': {

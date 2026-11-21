@@ -108,6 +108,8 @@ describe('control de facturas contra pedidos', () => {
     expect(cuerpo).not.toMatch(/OTRA NOTA|ADELANTO|FALTANTE/);
     const conDif = analizarFacturas([pA], [factura('1', '2026-10-05', [ren('ZZ9', 1)])]);
     expect(mailPagos(conDif.facturas[0], 'Distrinando').asunto).toMatch(/^Fac\. Distrinando - 0001-00000001 \((con diferencias|control incompleto)\)$/);
+    // El día que entró la mercadería (21-nov-2026, gax), debajo de la factura.
+    expect(mailPagos(r.facturas[0], 'ID', '', (id) => id, '2026-10-23').cuerpo).toMatch(/: total .*\nLa mercadería entró el 23\/10\/2026\.\n/);
   });
 
   it('pedido Excel: packs pasan a pares con precio por par', () => {

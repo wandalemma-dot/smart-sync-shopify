@@ -40,6 +40,9 @@ export interface EntregaFamily {
   actualizado?: string;
   /** Ullua (19-nov-2026): el papel de la entrega (remito con IVA o factura sin IVA), número y total. */
   documento?: { tipo: 'remito' | 'factura'; numero: string; remito: string; total: number };
+  /** Cuándo se subió por primera vez (ISO, lo pone el servidor) y el día que entró la mercadería, escrito a mano. */
+  subida?: string;
+  ingreso?: string;
 }
 /** Cómo reconoce un marketplace sus productos en Shopify (Family por defecto; Ullua en ullua.ts). */
 export interface BuscadorShopify {

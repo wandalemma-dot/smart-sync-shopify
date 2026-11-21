@@ -48,6 +48,9 @@ const manualWrites = new Set([
   'tagsRemove',
   // Carga de iD (12-nov-2026, gax): pasar a Martínez una venta asignada a iD, con confirmación.
   'fulfillmentOrderMove',
+  // Target (21-nov-2026, gax): separar por colores lo ya cargado. Cambia SOLO el título del producto
+  // original («Gorra Reebok T3» → «Gorra Reebok T3 Negro»), con confirmación, como el resto.
+  'productUpdate',
 ]);
 export function inspectUserQuery(query) {
   const { operation, roots } = inspectOperation(query);

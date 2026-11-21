@@ -121,6 +121,8 @@ export interface Remito {
   origen?: 'foto' | 'manual';
   dudas?: string[];           // lo que no se leyó bien de la foto
   actualizado?: string;
+  /** Cuándo se subió por primera vez (ISO, lo pone el servidor). */
+  subida?: string;
 }
 
 export interface RenglonFactura {
@@ -153,6 +155,9 @@ export interface Factura {
    * factura la lista con la bonificación en el pie: más barato que la nota no se marca; más caro, sí.
    */
   soloNeto?: boolean;
+  /** Cuándo se subió por primera vez (ISO, lo pone el servidor) y el día que entró la mercadería, escrito a mano. */
+  subida?: string;
+  ingreso?: string;
 }
 
 export interface Asignacion {
@@ -1012,12 +1017,14 @@ function lineasPrecio(r: ResultadoFactura): string[] {
 }
 
 /** Texto para administración: la factura, el remito y si coincide con la nota de pedido. Solo informa. */
-export function mensajePagos(r: ResultadoFactura, condicionesPago = '', nombrePedido: (id: string) => string = (id) => id): string {
+export function mensajePagos(r: ResultadoFactura, condicionesPago = '', nombrePedido: (id: string) => string = (id) => id, ingreso = ''): string {
   const f = r.factura;
   const remito = r.remito?.numero || f.remito;
   const vence = f.vencimiento ? `vence ${fechaAr(f.vencimiento).slice(0, 5)}` : f.condicionVenta ? f.condicionVenta : 'sin vencimiento';
   const lineas = [
     `Factura ${f.numero} del ${fechaAr(f.fecha)}${remito ? `, remito ${remito}` : ''}: total ${fmt(f.total)}, ${vence}.`,
+    // El día que entró la mercadería (21-nov-2026, gax: «si al mail le podemos poner qué día entró»).
+    ...(ingreso ? [`La mercadería entró el ${fechaAr(ingreso)}.`] : []),
     r.pedidosCubiertos.length
       ? `Pedido ${r.pedidosCubiertos.map(nombrePedido).join(' + ')}: ${r.unidades} u., entrega ${r.pedidosCompletos ? 'completa' : 'parcial'}.`
       : `${r.unidades} u., sin pedido asociado.`,
@@ -1036,8 +1043,8 @@ export function mensajePagos(r: ResultadoFactura, condicionesPago = '', nombrePe
 }
 
 /** El mail a administración, listo para abrir en Gmail con un toque. */
-export function mailPagos(r: ResultadoFactura, proveedor: string, condicionesPago = '', nombrePedido: (id: string) => string = (id) => id): { asunto: string; cuerpo: string } {
-  const texto = mensajePagos(r, condicionesPago, nombrePedido);
+export function mailPagos(r: ResultadoFactura, proveedor: string, condicionesPago = '', nombrePedido: (id: string) => string = (id) => id, ingreso = ''): { asunto: string; cuerpo: string } {
+  const texto = mensajePagos(r, condicionesPago, nombrePedido, ingreso);
   const ok = texto.includes('✅ Coincide');
   const asunto = `Fac. ${ok ? 'OK ' : ''}${proveedor} - ${r.factura.numero}${ok ? '' : r.semaforo === 'incompleta' ? ' (control incompleto)' : ' (con diferencias)'}`;
   return { asunto, cuerpo: ['Hola,', '', texto, '', 'Saludos.'].join('\n') };

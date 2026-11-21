@@ -13,6 +13,28 @@ export const fechaCorta = (iso: string) => {
   return m ? `${m[3]}/${m[2]}/${m[1].slice(2)}` : iso || '';
 };
 
+/** Día en Argentina (UTC−3) de un momento ISO: 2026-11-19T02:00:00Z → 2026-11-18. */
+export const diaArgentina = (iso?: string): string => {
+  const t = Date.parse(iso || '');
+  return Number.isFinite(t) ? new Date(t - 3 * 3600_000).toISOString().slice(0, 10) : '';
+};
+
+/**
+ * Día que entró la mercadería (21-nov-2026, gax: «la primera fecha tiene que ser la fecha de entrega, la última la
+ * fecha en la que lo estás haciendo»; la factura puede ser de días antes). Orden: el escrito a mano; si no, el
+ * primer día en que se subió la factura o el remito a la app; si no hay registro (entregas viejas), el de la
+ * última vez que se guardó el remito; y recién al final la fecha impresa del papel.
+ */
+export function fechaIngreso(doc: { ingreso?: string; subida?: string; fecha: string }, remito?: { subida?: string; actualizado?: string } | null):
+  { fecha: string; origen: 'escrita' | 'subida' | 'papel' } {
+  if (/^\d{4}-\d{2}-\d{2}$/.test(doc.ingreso || '')) return { fecha: doc.ingreso!, origen: 'escrita' };
+  const subidas = [doc.subida, remito?.subida].map(diaArgentina).filter(Boolean).sort();
+  if (subidas.length) return { fecha: subidas[0], origen: 'subida' };
+  const vieja = diaArgentina(remito?.actualizado);
+  if (vieja) return { fecha: vieja, origen: 'subida' };
+  return { fecha: doc.fecha, origen: 'papel' };
+}
+
 /** Proveedor como en la planilla: DISTRINANDO, ID CONVERSE, ID LE COQ (o los dos). */
 export function proveedorPlanilla(prov: 'id' | 'distrinando' | 'target', titulos: string[], emisor?: string): string {
   if (prov === 'distrinando') return 'DISTRINANDO';
@@ -40,6 +62,8 @@ export interface DatosAvisoAdmin {
   sucursal: string;
   /** Fecha de la carga (AAAA-MM-DD, Argentina). */
   hoy: string;
+  /** Día que entró la mercadería (AAAA-MM-DD); sin dato, la fecha de la factura. */
+  ingreso?: string;
 }
 
 function lineasCarga(resultados: ResultadoCarga[], sucursal: string): { lineas: string[]; sumadas: number; pasadas: number; revisar: string[] } {
@@ -67,7 +91,7 @@ export function textoAvisoAdmin(o: DatosAvisoAdmin): { asunto: string; cuerpo: s
   const f = o.r.factura;
   const proveedor = proveedorPlanilla(o.prov, o.resultados.map((x) => x.detalle?.titulo ?? ''), o.r.factura.emisor);
   const filas: [string, string][] = [
-    ['FECHA', fechaCorta(f.fecha)],
+    ['FECHA', fechaCorta(o.ingreso || f.fecha)],
     ['PROVEEDOR', proveedor],
     ['N° FACTURA', f.numero],
     ['N° REMITO', o.r.remito?.numero || f.remito || '—'],
@@ -77,15 +101,18 @@ export function textoAvisoAdmin(o: DatosAvisoAdmin): { asunto: string; cuerpo: s
   ];
   const c = lineasCarga(o.resultados, o.sucursal);
   // Como el mail que mandaba el depósito («Fac. OK ID»), pero escrito: solo informa (gax, 16-nov-2026).
-  // La fecha es la de la factura; la de la carga va en la planilla.
+  // Las dos fechas (21-nov-2026, gax): el día que entró la mercadería y el día que se cargó en stock.
   const ok = observacionesPlanilla(o.r) === 'ok';
   const corto = o.prov === 'distrinando' ? 'Distrinando' : o.prov === 'target' ? 'Target' : 'ID';
   const asunto = `Fac. ${ok ? 'OK ' : ''}${corto} - ${f.numero}${ok ? '' : ' (con diferencias)'}`;
   const remito = o.r.remito?.numero || f.remito;
   const datos = [`de ${proveedor}`, `del ${fechaCorta(f.fecha)}`, f.total ? `por ${pesos(f.total)}` : '', remito ? `(remito ${remito})` : ''].filter(Boolean).join(' ');
+  const entro = o.ingreso || '';
+  const cuando = !entro ? [] : [entro === o.hoy ? `Entró hoy, ${fechaCorta(entro)}, y se cargó en stock en el día.`
+    : `Entró el ${fechaCorta(entro)} y se cargó en stock el ${fechaCorta(o.hoy)}.`];
   const cargado = `Se cargaron ${c.sumadas} u. en ${o.sucursal}${c.pasadas ? `, ${c.pasadas} de ellas para ventas de iD que pasaron a ${o.sucursal}` : ''}.`;
   const cabeza = ['Hola,', '',
-    `Les informo que llegó y se cargó en stock la mercadería de la factura ${f.numero} ${datos}.`, '',
+    `Les informo que llegó y se cargó en stock la mercadería de la factura ${f.numero} ${datos}.`, ...cuando, '',
     ...(ok ? ['La factura coincide con la nota de pedido: OK.']
       : ['La factura no coincide con la nota de pedido. Esto es lo que se encontró:', ...diferenciasInformativas(o.r.motivos)]),
     '', cargado];
@@ -115,7 +142,7 @@ export function filaPlanilla(o: DatosAvisoAdmin): FilaPlanilla {
   const ok = obs === 'ok';
   const remito = o.r.remito?.numero || f.remito || '';
   return {
-    fecha: fechaCorta(f.fecha),
+    fecha: fechaCorta(o.ingreso || f.fecha),
     proveedor: proveedorPlanilla(o.prov, o.resultados.map((x) => x.detalle?.titulo ?? ''), o.r.factura.emisor),
     numero: f.numero,
     factura: `${ok ? 'FAC.OK' : 'FAC.'} - ${f.numero}`,
@@ -129,7 +156,7 @@ export function filaPlanilla(o: DatosAvisoAdmin): FilaPlanilla {
 
 /**
  * Fila de una carga de Family (16-nov-2026, gax, con captura de la planilla): Family no factura, así que va
- * como las que se anotaban a mano: FECHA de la planilla de entrega, «Familyarg», sin N° de factura ni monto,
+ * como las que se anotaban a mano: FECHA del día que entró (21-nov-2026; antes, la de la planilla de entrega), «Familyarg», sin N° de factura ni monto,
  * el N° de remito y CARGA STOCK hoy. Solo se carga si la planilla coincide con el remito: «APP - ok».
  */
 export function filaPlanillaFamily(o: { fecha: string; remito: string; hoy: string; proveedor?: string; factura?: string; monto?: number | null }): FilaPlanilla {
@@ -148,7 +175,7 @@ export function comentarioTrello(o: DatosAvisoAdmin): string {
   const fil = textoAvisoAdmin(o).filas;
   const lineas = [
     `**Cargado en Shopify el ${fechaCorta(o.hoy)}**: ${c.sumadas} u. en ${o.sucursal}${c.pasadas ? ` (${c.pasadas} u. para ventas de iD pasadas a ${o.sucursal})` : ''}.`,
-    fil.filter(([k]) => k !== 'CARGA STOCK').map(([k, v]) => `${k}: ${v}`).join(' · '),
+    fil.filter(([k]) => k !== 'CARGA STOCK').map(([k, v]) => `${k === 'FECHA' ? 'ENTRÓ' : k}: ${v}`).join(' · '),
     '', ...c.lineas,
     ...(c.revisar.length ? ['', 'Para revisar:', ...c.revisar] : []),
   ];
