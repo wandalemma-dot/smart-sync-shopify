@@ -20,6 +20,7 @@ import {
 import { filasPdf, leerFacturaDistrinando, leerFacturaId, leerPedidoAuto, leerTextoRemito, textoRemito, type HojaMarcada, type ItemPdf } from './utils/lectoresFacturas';
 import { esPedidoTarget, facturaTargetDeFoto, leerPedidoTarget, type FacturaFoto } from './utils/target';
 import { planCargaTarget, type ColorTarget } from './utils/cargaTarget';
+import { SepararColores } from './SepararColores';
 import { celdasVerdes, hojaVisible } from './utils/planillaVerde';
 import { consejoNota, fusionarPlanilla, marcasDeNota, type ConsejoNota, type MarcasNota, type NoEntro } from './utils/marcasPlanilla';
 import { conEstadoTrello, estadosTarjetas, listaDeParciales, listaFinalizado, listasDePendientes, movimientosTarjetas, tarjetaDeNota, type EstadoTarjeta, type ListaTrello } from './utils/listasTrello';
@@ -1238,7 +1239,7 @@ export default function ControlFacturas() {
       onAbrir={() => setAbierta(abierta === r.factura.id ? null : r.factura.id)} pedidos={pedidosOrd} cerradas={cerradas} nombrePedido={nombrePedido}
       manual={datos.asignaciones[r.factura.id] || []} condiciones={condiciones} ocupado={!!ocupado}
       onIngreso={(fecha) => guardar({ accion: 'guardarIngreso', facturaId: r.factura.id, fecha })}
-      mailsAdmin={datos.mailsAdmin ?? { para: [], copia: [] }} proveedor={prov === 'distrinando' ? 'Distrinando' : prov === 'target' ? 'Target' : 'ID'}
+      mailsAdmin={datos.mailsAdmin ?? { para: [], copia: [] }} proveedor={prov === 'distrinando' ? 'Distrinando' : prov === 'target' ? 'Target' : 'ID'} separarColores={prov === 'target'}
       onAsignar={async (ids) => { const p = prov; if (await guardar({ accion: 'guardarAsignacion', facturaId: r.factura.id, pedidos: ids })) await avanzarYAvisar(p, r.factura.id); }}
       onBorrar={() => confirm(`¿Borrar la entrega de la factura ${r.factura.numero}? Se borran también el remito y lo que contó el depósito.`) && guardar({ accion: 'borrarFactura', id: r.factura.id })}
       onDeposito={() => { setFacturaDeposito(r.factura.id); setVista('deposito'); }}
@@ -1448,7 +1449,9 @@ const EXPLICA_ID = 'Lo que llegó (el remito, menos lo que salió para órdenes 
 const EXPLICA_TARGET = 'Lo que llegó (el remito) se SUMA al stock de Martínez. Target no trae talles: un producto por código. Los que no están en Shopify se crean (activos y en Point of Sale) con el nombre de la factura (lo podés cambiar), la marca del producto, las etiquetas «Target» y el código, SKU = código, precio = lista × 2 y costo = lista menos la bonificación de esa factura. Si un artículo viene en varios colores, tocá «🎨 Viene en varios colores»: cada color se crea como un producto aparte (nombre + color, SKU código-COLOR) y la suma de los colores tiene que dar lo que llegó. Los que ya están (con la etiqueta «Target») suman stock y costo nuevo (promedio ponderado si ya había stock); si el precio no llega a la lista × 2 hay que poner uno nuevo.';
 const EXPLICA_DISTRINANDO = 'Lo que llegó (el remito) se SUMA al stock de Martínez. Cada talle US entra en el talle de Shopify que da el SKU del proveedor, el AR que informa la nota o la tabla de talle que elijas; al lado de cada talle podés escribir otro si entró en otro. La tabla elegida se agrega a las etiquetas. Los talles que no existen se crean (SKU del proveedor, precio de la curva, costo de la factura) y los modelos nuevos se crean con precio Reebok (Mayorista × 1,8755, terminado en 999). Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (con stock: promedio ponderado). Por ahora solo Reebok calzado.';
 
-function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, recordados, onSubirTrello, informe, onRecargarBorrada, res, todas, consejos, carga, mailsAdmin, proveedor, naranja, onIngreso }: {
+function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, recordados, onSubirTrello, informe, onRecargarBorrada, res, todas, consejos, carga, mailsAdmin, proveedor, naranja, onIngreso, separarColores }: {
+  /** Target: separar por colores lo ya cargado (21-nov-2026). */
+  separarColores?: boolean;
   /** Para el mail a administración (se abre en Gmail con un toque). */
   mailsAdmin: MailsAviso; proveedor: string;
   /** iD: lo que no coincide va en naranja, no en rojo (19-nov-2026). */
@@ -1559,6 +1562,10 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
           <span style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'normal', opacity: 0.9, marginTop: 3 }}>
             Tocá acá para cargarlo. Si no llegó, sacalo de la carga con «Sacar de la carga (no llegó)».</span>
         </button>)}
+      {/* Target: lo ya cargado como un solo producto se separa por colores (21-nov-2026, gax). */}
+      {separarColores && carga && !carga.plan && <SepararColores articulos={[...new Set(r.checklist.map((c) => c.codigo))]
+        .filter((c) => carga.cargas[`${f.id}|${c}`]?.estado === 'cargada')
+        .map((c) => ({ codigo: c, descripcion: f.renglones.find((x) => x.codigo === c)?.descripcion ?? '' }))} />}
       <div style={{ marginTop: 8, fontSize: '0.85rem', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}
         title="Va a la planilla de ingreso (FECHA) y al mail a administración. La fecha de carga (CARGA STOCK) es el día en que se carga.">
         <span>📅 La mercadería entró el</span>

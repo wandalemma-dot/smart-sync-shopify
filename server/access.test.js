@@ -55,7 +55,7 @@ describe('human manual functions and separate bot scope', () => {
     expect(res.statusCode).toBe(403); expect(fetch).not.toHaveBeenCalled();
   });
   const manualRoots = ['inventorySetQuantities', 'inventoryActivate', 'productSet', 'productVariantsBulkUpdate',
-    'productVariantsBulkCreate', 'productOptionsReorder', 'tagsAdd', 'tagsRemove', 'metafieldsSet', 'publishablePublish', 'fulfillmentOrderMove'];
+    'productVariantsBulkCreate', 'productOptionsReorder', 'tagsAdd', 'tagsRemove', 'metafieldsSet', 'publishablePublish', 'fulfillmentOrderMove', 'productUpdate'];
   it.each(manualRoots)('allows the human app function %s, never a bot or anonymous caller', async root => {
     const query = `mutation { action: ${root}(input: {}) { userErrors { message } } }`;
     const cookie = `${COOKIE}=${makeSession()}`;
@@ -92,7 +92,7 @@ describe('human manual functions and separate bot scope', () => {
   });
   it('permits every actual manual mutation used by the existing app', () => {
     let count = 0;
-    for (const name of ['writeStock.ts', 'createProducts.ts', 'recrearProductos.ts']) {
+    for (const name of ['writeStock.ts', 'createProducts.ts', 'recrearProductos.ts', 'coloresTarget.ts']) {
       const code = readFileSync(new URL(`../src/utils/${name}`, import.meta.url), 'utf8');
       for (const [, query] of code.matchAll(/`\s*(mutation\b[^`]+)`/g)) {
         expect(inspectUserQuery(query)).toEqual({ reports: false, write: true });
