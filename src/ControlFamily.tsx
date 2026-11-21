@@ -35,7 +35,7 @@ import { shopifyGraphQL } from './utils/shopify';
 import {
   adjuntarATrello, anotarEnPlanilla, apiControl, archivosFamily, botonChico, crearEnTrello, listasDeTrello, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, slug, td, th,
 } from './utils/entregasUi';
-import { filaPlanillaFamily } from './utils/avisoAdmin';
+import { fechaIngreso, filaPlanillaFamily } from './utils/avisoAdmin';
 import { listaFinalizado } from './utils/listasTrello';
 import { descripcionTarjetaFamily, nombreTarjetaFamily, papel } from './utils/trelloFamily';
 
@@ -268,7 +268,7 @@ export default function ControlFamily({ prov = 'family', aFotos }: { prov?: 'fam
     const que = factura ? `la factura ${factura}` : `el remito ${remito}`;
     const hoyAr = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
     try {
-      const a = await anotarEnPlanilla(filaPlanillaFamily({ fecha: r.entrega.fecha, remito, hoy: hoyAr, proveedor: cfg.planilla, factura, monto: doc?.total ?? null }));
+      const a = await anotarEnPlanilla(filaPlanillaFamily({ fecha: fechaIngreso(r.entrega, r.remito).fecha, remito, hoy: hoyAr, proveedor: cfg.planilla, factura, monto: doc?.total ?? null }));
       if (a.sinPlanilla) return 'Planilla de ingreso: todavía no está conectada (ver «Planilla de ingreso» en Notas de pedido de iD o Distrinando).';
       if (a.yaEstaba) return `Planilla de ingreso: ${que} ya estaba anotado${a.fila ? ` (fila ${a.fila})` : ''}.`;
       return `Planilla de ingreso: agregué ${que} de ${nombre}${a.fila ? ` en la fila ${a.fila}` : ''}.`;
@@ -393,6 +393,7 @@ export default function ControlFamily({ prov = 'family', aFotos }: { prov?: 'fam
         onBorrarRemito={() => confirm('¿Borrar el remito de esta entrega?') && guardar({ accion: 'borrarRemito', facturaId: r.entrega.id })}
         onGuardarEntrega={async (e) => { try { return await guardar({ accion: 'guardarEntrega', entrega: await conShopify(e) }); } catch (err) { setError(mensaje(err)); return false; } }}
         onFecha={(fecha) => guardar({ accion: 'guardarEntrega', entrega: { ...r.entrega, fecha } })}
+        onIngreso={(fecha) => guardar({ accion: 'guardarIngreso', facturaId: r.entrega.id, fecha })}
         onConsultar={() => reconsultar(r.entrega)}
         onBorrar={() => confirm(`¿Borrar la entrega del ${fechaAr(r.entrega.fecha)}?${cfg.ullua ? '' : ' Se borra también su remito.'}`) && guardar({ accion: 'borrarEntrega', id: r.entrega.id })} />;
   }
@@ -447,15 +448,18 @@ function estadoFila(f: FilaFamily, sinRemito = false): [string, string] {
   return ['✅', '#34d399'];
 }
 
-function TarjetaFamily({ cfg, r, abierta, ocupado, cargas, plan, onArmar, onConfirmar, onCancelarCarga, onLiberar, onAbrir, onFotos, enTrello, onTrello, onGuardarRemito, onBorrarRemito, onGuardarEntrega, onFecha, onConsultar, onBorrar }: {
+function TarjetaFamily({ cfg, r, abierta, ocupado, cargas, plan, onArmar, onConfirmar, onCancelarCarga, onLiberar, onAbrir, onFotos, enTrello, onTrello, onGuardarRemito, onBorrarRemito, onGuardarEntrega, onFecha, onIngreso, onConsultar, onBorrar }: {
   cfg: Config; r: ResultadoFamily; abierta: boolean; ocupado: boolean; cargas: Record<string, CargaFamily>; plan: PlanCarga | null;
   onArmar: () => void; onConfirmar: (e: EleccionesCarga) => void; onCancelarCarga: () => void; onLiberar: (codigo: string, c: CargaFamily) => void;
   onAbrir: () => void; onFotos: (f: File[]) => void;
   enTrello: string; onTrello: (que: 'planilla' | 'remito', f: File[]) => void;
   onGuardarRemito: (r: Remito) => Promise<boolean>; onBorrarRemito: () => void; onGuardarEntrega: (e: EntregaFamily) => Promise<boolean>;
   onFecha: (f: string) => void; onConsultar: () => void; onBorrar: () => void;
+  /** El día que entró la mercadería, escrito a mano (vacío = el día que se subió). */
+  onIngreso: (f: string) => void;
 }) {
   const e = r.entrega;
+  const ingreso = fechaIngreso(e, r.remito);
   const s = SEMAFORO[r.semaforo];
   const [editando, setEditando] = useState<'remito' | 'planilla' | null>(null);
   const [texto, setTexto] = useState('');
@@ -581,6 +585,9 @@ function TarjetaFamily({ cfg, r, abierta, ocupado, cargas, plan, onArmar, onConf
             <Copiar etiqueta="📋 Copiar resumen" texto={resumenFamily(r, cfg.m.nombre, cfg.opciones.mayor)} />
             <button style={botonChico} disabled={ocupado} onClick={onConsultar}>🔄 Consultar Shopify de nuevo</button>
             <label>fecha {cfg.ullua ? 'de la entrega' : 'de la planilla'} <input type="date" value={e.fecha} style={inputSt} onChange={(ev) => ev.target.value && onFecha(ev.target.value)} /></label>
+            <label title={`Va a la planilla de ingreso (FECHA). ${ingreso.origen === 'escrita' ? 'Escrita a mano.' : 'Por ahora es el día que se subió a la app: si entró otro día, cambiala antes de cargar.'}`}>
+              📅 entró el <input type="date" value={ingreso.fecha} style={inputSt} disabled={ocupado}
+                onChange={(ev) => ev.target.value && ev.target.value !== ingreso.fecha && onIngreso(ev.target.value)} /></label>
             {e.shopify?.fecha && <span style={{ opacity: 0.65 }}>Shopify consultado el {fechaAr(e.shopify.fecha)}</span>}
             {!enShopify.completa && !plan && <button style={botonChico} disabled={ocupado} onClick={onArmar}>⬆️ Cargar en Shopify</button>}
             {Object.entries(cargas).filter(([, c]) => c.estado === 'cargada').map(([codigo, c]) => (

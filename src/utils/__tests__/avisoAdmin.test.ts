@@ -1,6 +1,6 @@
 // Aviso de carga a administración y comentario en Trello (16-nov-2026, gax).
 import { describe, expect, it } from 'vitest';
-import { comentarioTrello, fechaCorta, filaPlanilla, filaPlanillaFamily, observacionesPlanilla, proveedorPlanilla, textoAvisoAdmin } from '../avisoAdmin';
+import { comentarioTrello, diaArgentina, fechaCorta, fechaIngreso, filaPlanilla, filaPlanillaFamily, observacionesPlanilla, proveedorPlanilla, textoAvisoAdmin } from '../avisoAdmin';
 import type { ResultadoCarga } from '../cargaFamily';
 import type { ResultadoFactura } from '../controlFacturas';
 
@@ -80,5 +80,31 @@ describe('Fila para la planilla de ingreso (16-nov-2026)', () => {
   it('con algo para revisar: «FAC. -» y la observación', () => {
     const f = filaPlanilla({ ...o, prov: 'distrinando', r: { ...r, totalDifPrecio: 1500 } as ResultadoFactura });
     expect(f).toMatchObject({ proveedor: 'DISTRINANDO', factura: 'FAC. - 0011-00139953', observaciones: 'APP - Facturado más caro ($ 1.500 de más)', ok: false });
+  });
+});
+
+describe('Fecha de ingreso de la mercadería (21-nov-2026, gax)', () => {
+  it('la planilla lleva el día que entró y CARGA STOCK el día que se carga; la factura es de antes', () => {
+    expect(filaPlanilla({ ...o, ingreso: '2026-11-12' })).toMatchObject({ fecha: '12/11/26', carga: '16/11/26' });
+  });
+  it('el mail dice qué día entró y qué día se cargó, además de la fecha de la factura', () => {
+    const { cuerpo } = textoAvisoAdmin({ ...o, ingreso: '2026-11-12' });
+    expect(cuerpo).toContain('de ID LE COQ del 10/11/26 por');
+    expect(cuerpo).toContain('Entró el 12/11/26 y se cargó en stock el 16/11/26.');
+    expect(textoAvisoAdmin({ ...o, ingreso: '2026-11-16' }).cuerpo).toContain('Entró hoy, 16/11/26, y se cargó en stock en el día.');
+    expect(comentarioTrello({ ...o, ingreso: '2026-11-12' })).toContain('ENTRÓ: 12/11/26');
+  });
+  it('el día: escrito a mano, si no el primero en que se subió la factura o el remito (en Argentina), si no el del papel', () => {
+    const f = { fecha: '2026-11-16' };
+    expect(fechaIngreso({ ...f, ingreso: '2026-11-18', subida: '2026-11-20T15:00:00.000Z' })).toEqual({ fecha: '2026-11-18', origen: 'escrita' });
+    // 02:00 UTC del 19 es todavía el 18 en Argentina.
+    expect(fechaIngreso({ ...f, subida: '2026-11-20T15:00:00.000Z' }, { subida: '2026-11-19T02:00:00.000Z' })).toEqual({ fecha: '2026-11-18', origen: 'subida' });
+    // Entregas de antes del cambio: la última vez que se guardó el remito.
+    expect(fechaIngreso(f, { actualizado: '2026-11-19T13:00:00.000Z' })).toEqual({ fecha: '2026-11-19', origen: 'subida' });
+    expect(fechaIngreso(f, null)).toEqual({ fecha: '2026-11-16', origen: 'papel' });
+    expect(diaArgentina('nada')).toBe('');
+  });
+  it('Family / Ullua: la fila va con el día que entró', () => {
+    expect(filaPlanillaFamily({ fecha: fechaIngreso({ fecha: '2026-11-11', subida: '2026-11-13T12:00:00.000Z' }).fecha, remito: '0001-00002716', hoy: '2026-11-16' }).fecha).toBe('13/11/26');
   });
 });

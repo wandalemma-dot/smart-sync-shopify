@@ -131,6 +131,10 @@ function anotar(f) {
   if (f.monto !== null && f.monto !== undefined) h.getRange(n, c.monto).setValue(Number(f.monto));
   h.getRange(n, c.observaciones).setValue(texto(f.observaciones));
   h.getRange(n, c.carga).setValue(fecha(f.carga));
+  // Las fechas como las demás filas (13/11/26): una fila de un proveedor nuevo no tiene de dónde copiar el formato
+  // y Sheets la mostraba como 16/11/2026 (21-nov-2026).
+  h.getRange(n, c.fecha).setNumberFormat('dd/mm/yy');
+  h.getRange(n, c.carga).setNumberFormat('dd/mm/yy');
   var obs = h.getRange(n, c.observaciones);
   if (f.ok) { if (modelo) obs.setBackground(h.getRange(modelo, c.proveedor).getBackground()); }
   else obs.setBackground('#ff6d01');

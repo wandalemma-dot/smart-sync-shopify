@@ -293,6 +293,36 @@ describe('guardado del control de facturas', () => {
     expect((await leerTodo(fn, 'id')).facturas).toEqual([]);
   });
 
+  it('fecha de ingreso (21-nov-2026): la primera subida no cambia al volver a guardar, y el día que entró se escribe a mano', async () => {
+    const { fn } = memoria();
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date('2026-11-18T14:00:00.000Z'));
+      await aplicar(fn, { proveedor: 'target', accion: 'guardarFactura', factura: { id: 'F-1', numero: '1', fecha: '2026-11-16', renglones: [] } });
+      await aplicar(fn, { proveedor: 'target', accion: 'guardarRemito', facturaId: 'F-1', remito: { numero: 'R1', renglones: [] } });
+      vi.setSystemTime(new Date('2026-11-21T14:00:00.000Z'));
+      // Volver a leer la foto de la factura o corregir el remito no cambia el día en que se subieron.
+      await aplicar(fn, { proveedor: 'target', accion: 'guardarFactura', factura: { id: 'F-1', numero: '1', fecha: '2026-11-16', renglones: [], subida: '2026-11-21T00:00:00.000Z' } });
+      await aplicar(fn, { proveedor: 'target', accion: 'guardarRemito', facturaId: 'F-1', remito: { numero: 'R1', renglones: [] } });
+      let t = await leerTodo(fn, 'target');
+      expect(t.facturas[0].subida).toBe('2026-11-18T14:00:00.000Z');
+      expect(t.remitos['F-1'].subida).toBe('2026-11-18T14:00:00.000Z');
+      await aplicar(fn, { proveedor: 'target', accion: 'guardarIngreso', facturaId: 'F-1', fecha: '2026-11-17' });
+      await aplicar(fn, { proveedor: 'target', accion: 'guardarFactura', factura: { id: 'F-1', numero: '1', fecha: '2026-11-16', renglones: [] } });
+      t = await leerTodo(fn, 'target');
+      expect(t.facturas[0]).toMatchObject({ ingreso: '2026-11-17', subida: '2026-11-18T14:00:00.000Z' });
+      await aplicar(fn, { proveedor: 'target', accion: 'guardarIngreso', facturaId: 'F-1', fecha: '' });
+      expect((await leerTodo(fn, 'target')).facturas[0].ingreso).toBeUndefined();
+      await expect(aplicar(fn, { proveedor: 'target', accion: 'guardarIngreso', facturaId: 'F-1', fecha: '17/11' })).rejects.toThrow(/Fecha/);
+      await expect(aplicar(fn, { proveedor: 'target', accion: 'guardarIngreso', facturaId: 'F-9', fecha: '2026-11-17' })).rejects.toThrow(/No encontré/);
+      // Family y Ullua: en la entrega.
+      await aplicar(fn, { proveedor: 'ullua', accion: 'guardarEntrega', entrega: { id: 'E-1', nombre: 'R', fecha: '2026-11-10', renglones: [] } });
+      await aplicar(fn, { proveedor: 'ullua', accion: 'guardarIngreso', facturaId: 'E-1', fecha: '2026-11-12' });
+      await aplicar(fn, { proveedor: 'ullua', accion: 'guardarEntrega', entrega: { id: 'E-1', nombre: 'R', fecha: '2026-11-11', renglones: [] } });
+      expect((await leerTodo(fn, 'ullua')).entregas[0]).toMatchObject({ fecha: '2026-11-11', ingreso: '2026-11-12', subida: '2026-11-21T14:00:00.000Z' });
+    } finally { vi.useRealTimers(); }
+  });
+
   it('recuerda los adjuntos de Trello revisados y los pedidos de Trello borrados, por proveedor', async () => {
     const { fn } = memoria();
     const adj = 'a'.repeat(24);
