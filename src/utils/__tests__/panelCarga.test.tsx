@@ -274,3 +274,17 @@ describe('vista previa de la carga: colores de Target (20-nov-2026)', () => {
     expect(html.replace(/<!-- -->/g, "")).toMatch(/Suman 12 de 16 u\. · faltan 4/);
   });
 });
+
+describe('vista previa de la carga: remito sin talles (21-nov-2026, gax: LAN0122012P)', () => {
+  it('el artículo bloqueado muestra los casilleros de los talles de Shopify para escribir', () => {
+    const bloqueado = { ...plan, items: [{ codigo: 'LAN0122012P', descripcion: 'LCS LOGO TRIPACK', unidades: 0, firma: 'f', estado: 'bloqueado', opciones: [],
+      motivo: 'El remito no dice los talles: escribí arriba cuántas unidades llegaron de cada talle (el remito dice 12 u. (2 packs de 6)).',
+      talles: [{ talle: '1', cantidad: 0, original: 0 }, { talle: '2', cantidad: 0, original: 0 }] }] } as unknown as PlanCarga;
+    const h = renderToStaticMarkup(<PanelCarga plan={bloqueado} ocupado={false} onConfirmar={() => undefined} onCancelar={() => undefined}
+      sucursal="DEPOSITO MARTINEZ" explicacion="" sinTildar onCantidad={() => undefined} />);
+    expect(h).toMatch(/aria-label="Cantidad talle 1"/);
+    expect(h).toMatch(/aria-label="Cantidad talle 2"/);
+    expect(h).toMatch(/El remito no dice los talles/);
+    expect(h).not.toMatch(/\(remito 0\)/);
+  });
+});
