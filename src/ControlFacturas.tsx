@@ -1643,7 +1643,11 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
                 onChange={(e) => onAsignar(e.target.checked ? [...manual, p.id] : manual.filter((x) => x !== p.id))} /> {p.nroProveedor ? `N° ${p.nroProveedor}` : p.nombre} ({fechaAr(p.fecha)}){deEsta.get(p.id) ? ` · ${deEsta.get(p.id)} artículo(s) de esta factura` : ''}{cerradas.has(p.id) ? ' · fuera de las listas de pendientes de Trello' : ''}
             </label>)}
           </details>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10 }}>
+          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 10, alignItems: 'center' }}>
+            {/* Al lado del mail (21-nov-2026, gax: «que aparezca el botón de mail de administración y la mercadería entró y seleccionar la fecha»). */}
+            <label style={{ fontSize: '0.85rem' }} title="Va en el mail a administración y en la planilla de ingreso.">📅 Entró el{' '}
+              <input type="date" value={ingreso.fecha} max={hoy()} disabled={ocupado} style={inputSt}
+                onChange={(e) => e.target.value && e.target.value !== ingreso.fecha && onIngreso(e.target.value)} /></label>
             {(() => {
               const m = mailPagos(r, proveedor, condiciones, nombrePedido, ingreso.fecha);
               return <a href={enlacesMail(mailsAdmin, m.asunto, m.cuerpo).gmail} target="_blank" rel="noreferrer"
