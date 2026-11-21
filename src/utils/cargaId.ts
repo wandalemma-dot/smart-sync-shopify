@@ -626,15 +626,29 @@ export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: 
     // para órdenes (las ventas son por unidad): de un pack de 6 con «-1» se cargan 5.
     const pk = packDeCarga(descripcion, ids.map((id) => estado.productos[id]?.titulo ?? ''), packs.get(orig.codigo), orig.codigo);
     const n = pk.error ? 1 : pk.unidades;
+    // Remito sin talles (21-nov-2026, gax, LAN0122012P «Tripack Algodon», 2 packs de 6 y en Shopify talles 1 y 2:
+    // «que nos dé alguna opción de avanzar, de corregir la falla nosotros manualmente»). Con un solo producto en
+    // Shopify, se muestran SUS talles para escribir cuántas unidades llegaron de cada uno (con un solo talle o sin
+    // talles, va todo ahí). Lo escrito ya es en unidades y en talles de Shopify: no se convierte ni se multiplica.
+    const unico = ids.length === 1 ? estado.productos[ids[0]] : undefined;
+    const enShop = !orig.talles && unico ? tallesShopify(unico) : [];
+    const sinTalleRemito = enShop.length > 0;
+    const renRemito = (r.remito?.renglones ?? []).filter((x) => claveCodigo(x.codigo) === claveCodigo(orig.codigo));
+    const delRemito = renRemito.length ? renRemito.reduce((s, x) => s + (Number(x.cantidad) || 0), 0) : orig.cantidad;
+    const esperado = sinTalleRemito ? Math.max(0, delRemito * n - (orig.retirado ?? 0)) : 0;
+    const conTalles: FilaChecklist = sinTalleRemito
+      ? { ...orig, talles: enShop.map((t) => ({ talle: t, cantidad: enShop.length === 1 ? esperado : 0 })) }
+      : orig;
     const enUnidades: FilaChecklist = n > 1 && orig.talles
       ? { ...orig, talles: orig.talles.map((t) => ({ ...t, cantidad: Math.max(0, (t.cantidad + (t.retirado ?? 0)) * n - (t.retirado ?? 0)) })) }
-      : orig;
+      : conTalles;
     const escritas = cantidades.get(orig.codigo);
     const c = enUnidades.talles && escritas
       ? { ...enUnidades, talles: enUnidades.talles.map((t) => (escritas[t.talle] !== undefined ? { ...t, cantidad: escritas[t.talle] } : t)) }
       : enUnidades;
     const unidades = (c.talles ?? []).reduce((s, t) => s + t.cantidad, 0);
-    const talles = c.talles?.map((t, i) => ({ talle: t.talle, cantidad: t.cantidad, original: enUnidades.talles![i].cantidad }));
+    // Sin talles en el remito no hay «lo que dice el remito» por talle: lo escrito no se marca como cambiado.
+    const talles = c.talles?.map((t, i) => ({ talle: t.talle, cantidad: t.cantidad, original: sinTalleRemito ? t.cantidad : enUnidades.talles![i].cantidad }));
     const cambiadas = (talles ?? []).filter((t) => t.cantidad !== t.original);
     const lista = Number(ren?.precioUnitario) || 0, bonificacion = Number(ren?.bonificacion) || 0;
     const pack: PackCarga | undefined = n > 1 || pk.manual || pk.error ? {
@@ -648,23 +662,34 @@ export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: 
     if (carga) return { codigo: c.codigo, descripcion, unidades, firma, estado: 'cargado', motivo: textoCarga(carga), opciones: [], carga };
     const otra = Object.entries(cargas).find(([k, x]) => !k.startsWith(`${f.id}|`) && x.firma === firma);
     if (otra) return bloqueado(`Esta misma mercadería (mismo día, remito, código y talles) ya se cargó desde otra entrega (${textoCarga(otra[1])}).`);
-    if (!c.talles) return bloqueado('No sé qué talles llegaron: escribí el remito con los talles («✏️ Ver o corregir») y armá la carga de nuevo.');
+    if (!c.talles) return bloqueado(ids.length > 1
+      ? 'No sé qué talles llegaron y el código está en varios productos de Shopify: escribí el remito con los talles («✏️ Ver o corregir») y armá la carga de nuevo.'
+      : 'No sé qué talles llegaron: escribí el remito con los talles («✏️ Ver o corregir») y armá la carga de nuevo.');
+    const queDice = `el remito dice ${esperado} u.${n > 1 ? ` (${delRemito} pack${delRemito === 1 ? '' : 's'} de ${n})` : ''}${orig.retirado ? `, menos ${orig.retirado} que salieron para órdenes` : ''}`;
+    if (sinTalleRemito && !unidades) return bloqueado(`El remito no dice los talles: escribí arriba cuántas unidades llegaron de cada talle (${queDice}). Si no llegó, «Sacar de la carga (no llegó)».`);
     if (!unidades) return bloqueado(cambiadas.length ? 'Pusiste 0 en todos los talles: no hay nada para cargar.' : c.retirado ? 'Todo lo que llegó salió para órdenes: no hay nada para cargar.' : 'No tiene cantidades.');
     if (!buscable(c.codigo.toUpperCase())) return bloqueado('El código tiene caracteres que no puedo buscar en Shopify: cargalo a mano.');
     if (!ids.length) return bloqueado('No está en Shopify: crealo desde Sincronización (con el archivo de iD) y armá la carga de nuevo.');
     if (pk.error) return bloqueado(`${pk.error} Escribí cuántas unidades trae cada pack.`);
     // Converse sin etiqueta TABLA DE TALLE: se elige la tabla (17-nov-2026, gax).
-    const tabla = tablaCargaId(c, ids.map((id) => estado.productos[id]), tablas.get(c.codigo));
+    const tabla = sinTalleRemito ? null : tablaCargaId(c, ids.map((id) => estado.productos[id]), tablas.get(c.codigo));
     const conTabla = (x: ItemCarga): ItemCarga => (tabla ? { ...x, tabla } : x);
     // Talle de Shopify elegido a mano (19-nov-2026): con un solo producto, se muestran sus talles para elegir.
-    const elegidos = destinos.get(c.codigo) ?? {};
-    const dest = ids.length === 1 ? destinosId(c, descripcion, estado.productos[ids[0]], tabla?.elegida ?? '', elegidos) : null;
+    // Sin talles en el remito, cada talle escrito ya es el de Shopify.
+    const elegidos = sinTalleRemito ? Object.fromEntries(enShop.map((t) => [t, t])) : destinos.get(c.codigo) ?? {};
+    const dest = ids.length === 1 && !sinTalleRemito ? destinosId(c, descripcion, estado.productos[ids[0]], tabla?.elegida ?? '', elegidos) : null;
     if (dest && base.talles) base.talles = base.talles.map((t) => (dest[t.talle] ? { ...t, destino: dest[t.talle].destino, destinoManual: dest[t.talle].manual, enShopify: dest[t.talle].enShopify, ...(dest[t.talle].problema ? { problema: dest[t.talle].problema } : {}) } : t));
     const opciones = ids.map((id) => opcion(c, descripcion, estado.productos[id], ren, estado.pendientesId, modos.get(c.codigo) ?? 'separar', n, tabla?.elegida ?? '', ids.length === 1 ? elegidos : {}));
     if (c.retirado && !cambiadas.length) {
       for (const o of opciones) o.avisos.push(n > 1
         ? `Salieron ${c.retirado} para órdenes (marca a mano en el remito): las cuento como unidades sueltas del pack y no se suman. Si salió el pack entero, corregí la cantidad.`
         : `Salieron ${c.retirado} para órdenes (marca a mano en el remito): no se suman.`);
+    }
+    if (sinTalleRemito) {
+      const escrito = (c.talles ?? []).filter((t) => t.cantidad > 0).map((t) => `${t.talle}: ${t.cantidad}`).join(' · ');
+      for (const o of opciones) o.avisos.push(unidades === esperado
+        ? `El remito no dice los talles: ${enShop.length === 1 ? `va todo al único talle (${escrito})` : `lo escribiste a mano (${escrito})`}.`
+        : `El remito no dice los talles y lo escrito (${escrito}) suma ${unidades} u., pero ${queDice}. Revisá antes de cargar.`);
     }
     if (cambiadas.length) for (const o of opciones) o.avisos.push(`Cantidad escrita a mano: ${cambiadas.map((t) => `${t.talle} ${t.original}→${t.cantidad}`).join(' · ')} (el remito dice otra cosa).`);
     // Todo vendido en iD: queda bloqueado pero con la opción, para mostrar qué separar y «cargarlo igual».

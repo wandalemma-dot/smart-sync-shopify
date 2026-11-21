@@ -175,7 +175,9 @@ describe('iD: vista previa de la carga', () => {
   });
   it('bloquea lo que no se puede cargar sin adivinar', () => {
     const casos: [FilaChecklist, EstadoCargaId, RegExp][] = [
-      [fila(null), estado(), /escribí el remito con los talles/],
+      [fila(null), { locationId: LOC, porCodigo: { CTO0325003: [] }, productos: {} }, /escribí el remito con los talles/],
+      // 21-nov-2026: con el producto en Shopify, se escriben los talles en la vista previa.
+      [fila(null), estado(), /escribí arriba cuántas unidades llegaron de cada talle/],
       [fila([{ talle: 'S', cantidad: 0, retirado: 2 }], { retirado: 2 }), estado(), /salió para órdenes/],
       [fila([{ talle: 'S', cantidad: 2 }]), { locationId: LOC, porCodigo: { CTO0325003: [] }, productos: {} }, /crealo desde Sincronización/],
       [fila([{ talle: 'XXL', cantidad: 2 }]), estado(), /no existe el talle XXL/],
@@ -927,5 +929,63 @@ describe('iD: productos pedidos que no entraron (17-nov-2026, gax, caso A10516C)
     const r = noEntraronId([{ ...falta, talle: '060', unidades: 1 }], sin);
     expect(r[0].ordenes).toEqual([]);
     expect(r[0].aviso).toMatch(/no pude leer las ventas de iD \(sin permiso\)/);
+  });
+});
+
+describe('iD: remito sin talles (21-nov-2026, gax: «que nos dé alguna opción de avanzar, de corregir la falla nosotros manualmente»)', () => {
+  // Caso real: LAN0122012P «Medias Le Coq Sportif Tripack Algodon», talles 1 y 2 en Shopify, sin alta en Martínez.
+  // Llegaron 2 packs de 6 y el remito no dice de qué talle: antes quedaba bloqueado con «No sé qué talles llegaron».
+  const COD = 'LAN0122012P';
+  const tripack = (variantes = [variante('1', null, { sku: '7790446564503' }), variante('2', null, { sku: '7790446564510' })]): ProductoId => ({
+    id: 'gid://shopify/Product/12', titulo: 'Medias Le Coq Sportif Tripack Algodon', vendor: 'Le Coq Sportif', estado: 'ACTIVE', etiquetas: [COD.toLowerCase()], variantes,
+  });
+  const ren: RenglonFactura = { codigo: COD, descripcion: 'LCS LOGO TRIPACK', precioUnitario: 30000, bonificacion: 10, cantidad: 2, total: 54000 };
+  const r = (extra: Partial<FilaChecklist> = {}) => resultado([fila(null, { codigo: COD, descripcion: 'LCS LOGO TRIPACK', cantidad: 2, nota: 'Talle a confirmar por depósito', ...extra })], [ren]);
+
+  it('muestra los talles de Shopify para escribir y explica cuánto dice el remito', () => {
+    const [it] = planCargaId(r(), estado(tripack(), COD), {}).items;
+    expect(it.estado).toBe('bloqueado');
+    expect(cantidades(it.talles)).toEqual([{ talle: '1', cantidad: 0, original: 0 }, { talle: '2', cantidad: 0, original: 0 }]);
+    expect(it.motivo).toBe('El remito no dice los talles: escribí arriba cuántas unidades llegaron de cada talle (el remito dice 12 u. (2 packs de 6)). Si no llegó, «Sacar de la carga (no llegó)».');
+    expect(it.tabla).toBeUndefined();
+  });
+
+  it('lo escrito va a esos talles de Shopify, en unidades (sin volver a multiplicar por el pack)', () => {
+    const [it] = planCargaId(r(), estado(tripack(), COD), {}, new Map(), new Map([[COD, { 1: 6, 2: 6 }]])).items;
+    expect(it.estado).toBe('listo');
+    expect(it.unidades).toBe(12);
+    const a = it.opciones[0].accion;
+    if (a?.tipo !== 'reposicion') throw new Error('esperaba reposición');
+    expect(a.lineas.map((l) => [l.talle, l.suma])).toEqual([['1', 6], ['2', 6]]);
+    expect(it.opciones[0].avisos).toContain('El remito no dice los talles: lo escribiste a mano (1: 6 · 2: 6).');
+    expect(it.opciones[0].avisos.join(' ')).not.toMatch(/el remito dice otra cosa|elegido a mano/);
+    // La firma «una sola vez» es la del remito, no la de lo escrito.
+    expect(it.firma).toBe(planCargaId(r(), estado(tripack(), COD), {}).items[0].firma);
+  });
+
+  it('si lo escrito no suma lo del remito, avisa pero deja cargar', () => {
+    const [it] = planCargaId(r(), estado(tripack(), COD), {}, new Map(), new Map([[COD, { 1: 6 }]])).items;
+    expect(it.estado).toBe('listo');
+    expect(it.opciones[0].avisos).toContain('El remito no dice los talles y lo escrito (1: 6) suma 6 u., pero el remito dice 12 u. (2 packs de 6). Revisá antes de cargar.');
+  });
+
+  it('con un solo talle (o sin talles) en Shopify va todo ahí, sin escribir nada', () => {
+    const [it] = planCargaId(r(), estado(tripack([variante('Default Title', 0, { sku: COD })]), COD), {}).items;
+    expect(it.estado).toBe('listo');
+    expect(cantidades(it.talles)).toEqual([{ talle: 'TU', cantidad: 12, original: 12 }]);
+    expect(it.opciones[0].avisos).toContain('El remito no dice los talles: va todo al único talle (TU: 12).');
+  });
+
+  it('descuenta lo que salió para órdenes (marca «-1» sin talle)', () => {
+    const [it] = planCargaId(r({ retirado: 1 }), estado(tripack(), COD), {}).items;
+    expect(it.motivo).toMatch(/el remito dice 11 u\. \(2 packs de 6\), menos 1 que salieron para órdenes/);
+  });
+
+  it('con el código en dos productos de Shopify sigue pidiendo el remito con talles', () => {
+    const otro = { ...tripack(), id: 'gid://shopify/Product/13' };
+    const e: EstadoCargaId = { locationId: LOC, porCodigo: { [COD]: [tripack().id, otro.id] }, productos: { [tripack().id]: tripack(), [otro.id]: otro } };
+    const [it] = planCargaId(r(), e, {}).items;
+    expect(it.estado).toBe('bloqueado');
+    expect(it.motivo).toMatch(/varios productos de Shopify: escribí el remito con los talles/);
   });
 });
