@@ -250,7 +250,7 @@ function analizarControl(ctrl: (Pedido & { archivada?: boolean })[], d: Datos, p
   if (!ctrl.some((x) => x.archivada)) return res;
   const cargaEnt = p === 'id' || p === 'distrinando' || p === 'target';
   const abiertas = new Set(res.facturas.filter((r) => !(cargaEnt
-    && entregaArchivada(r, estadoCargaFactura(r, d.cargas ?? {}, d.noLlego), d.archivo?.[r.factura.id]?.estado))).map((r) => r.factura.id));
+    && entregaArchivada(r, estadoCargaFactura(r, d.cargas ?? {}, d.noLlego), d.archivo?.[r.factura.id]?.estado, p !== 'distrinando'))).map((r) => r.factura.id));
   return analizarFacturas(ctrl, d.facturas, d.asignaciones, d.remitos, abiertas);
 }
 const sinListas = (elegidas: string[]) => elegidas.length
@@ -428,7 +428,7 @@ export default function ControlFacturas() {
       const rf = resF.facturas.find((x) => x.factura.id === facturaId);
       if (!rf) return [];
       const carga = p === 'id' || p === 'distrinando' || p === 'target' ? estadoCargaFactura(rf, frescos.cargas ?? {}, frescos.noLlego) : null;
-      const cerrada = entregaArchivada(rf, carga, frescos.archivo?.[facturaId]?.estado);
+      const cerrada = entregaArchivada(rf, carga, frescos.archivo?.[facturaId]?.estado, p !== 'distrinando');
       const pend = listasDePendientes(listas, frescos.listasTrello);
       const consejosDe = (tarjeta: string) => ctrl.filter((x) => tarjetaDeNota(x) === tarjeta).map((x) => {
         try {
@@ -1231,7 +1231,7 @@ export default function ControlFacturas() {
   const cargaEnt = prov === 'id' || prov === 'distrinando' || prov === 'target';
   const hayFactura = prov === 'target' ? fotosFactura.length > 0 : !!nuevaFactura;
   const esCerrada = (r: ResultadoFactura) => cargaEnt && planCarga?.entregaId !== r.factura.id
-    && entregaArchivada(r, estadoCargaFactura(r, datos.cargas ?? {}, datos.noLlego), datos.archivo?.[r.factura.id]?.estado);
+    && entregaArchivada(r, estadoCargaFactura(r, datos.cargas ?? {}, datos.noLlego), datos.archivo?.[r.factura.id]?.estado, prov !== 'distrinando');
   const cerradasEnt = facturasRes.filter(esCerrada);
   const abiertas = facturasRes.filter((r) => !esCerrada(r));
   const tarjeta = (r: ResultadoFactura) => <TarjetaEntrega key={r.factura.id} r={r} naranja={prov === 'id' || prov === 'target'} abierta={abierta === r.factura.id}
@@ -1251,7 +1251,7 @@ export default function ControlFacturas() {
       informe={informe?.prov === prov && informe.facturaId === r.factura.id ? informe : null} onRecargarBorrada={recargarBorrada}
       carga={cargaEnt ? {
         cargas: datos.cargas ?? {}, noLlego: datos.noLlego ?? {}, plan: planCarga?.entregaId === r.factura.id ? planCarga : null,
-        cerrada: esCerrada(r), onArchivar: (estado) => archivar(r, estado),
+        cerrada: esCerrada(r), cerrarIncompleta: prov === 'distrinando', onArchivar: (estado) => archivar(r, estado),
         onQuitar: (codigo, quitar) => quitarArticulo(r.factura.id, codigo, quitar),
         onArmar: () => armarCarga(r), onConfirmar: (e) => planCarga && confirmarCarga(r, planCarga, e),
         onCancelar: () => setPlanCarga(null), onLiberar: (codigo, c) => liberarCarga(r.factura.id, codigo, c), onCantidad: cantidadCarga,
@@ -1467,6 +1467,8 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
     cargas: Record<string, CargaFamily>; plan: PlanCarga | null; onArmar: () => void; onConfirmar: (e: EleccionesCarga) => void;
     /** Lo que no llegó (guardado) y si la entrega está en el apartado de cerradas. */
     noLlego: Record<string, unknown>; cerrada: boolean; onArchivar: (estado: 'cerrada' | 'abierta') => void;
+    /** Distrinando: se puede dar por cerrada aunque falte cargar (Kappa, Crocs y ropa se cargan a mano). */
+    cerrarIncompleta?: boolean;
     onCancelar: () => void; onLiberar: (codigo: string, c: CargaFamily) => void; onCantidad: (codigo: string, talle: string, n: number) => void;
     explicacion: string;
     /** iD: lo vendido en iD y las unidades por pack escritas a mano. */
@@ -1537,15 +1539,26 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
           </>}
         </Parte>
         {carga && enShopify && <Parte ok={enShopify.completa} titulo="Shopify" detalle={textoShopify(enShopify)}>
-          {!enShopify.completa && !carga.plan && <button style={{ ...botonChico, opacity: r.remito && !ocupado ? 1 : 0.5 }} disabled={ocupado}
+          {!enShopify.completa && !carga.plan && !enShopify.cargados && !enShopify.noLlego.length && <button style={{ ...botonChico, opacity: r.remito && !ocupado ? 1 : 0.5 }} disabled={ocupado}
             title={r.remito ? 'Suma lo que llegó en DEPOSITO MARTINEZ, con vista previa y confirmación' : 'Primero subí o escribí el remito'}
             onClick={carga.onArmar}>⬆️ Cargar en Shopify</button>}
           {!carga.plan && (carga.cerrada
             ? <button style={botonChico} disabled={ocupado} onClick={() => carga.onArchivar('abierta')}>Volver a abrir</button>
-            : <button style={botonChico} disabled={ocupado} title="Pasa la entrega al apartado verde de cargadas (por ejemplo, si lo que falta lo cargaste a mano). La podés volver a abrir."
-              onClick={() => carga.onArchivar('cerrada')}>✅ Dar por cerrada</button>)}
+            : (enShopify.completa || carga.cerrarIncompleta) && <button style={botonChico} disabled={ocupado}
+              title={enShopify.completa ? 'Pasa la entrega al apartado verde de cargadas. La podés volver a abrir.' : 'Solo si lo que falta lo cargaste a mano (Kappa, Crocs o ropa). Pasa la entrega al apartado verde de cargadas; la podés volver a abrir.'}
+              onClick={() => carga.onArchivar('cerrada')}>{enShopify.completa ? '✅ Dar por cerrada' : 'Lo que falta lo cargué a mano: dar por cerrada'}</button>)}
         </Parte>}
       </div>
+      {/* Carga sin terminar (21-nov-2026, gax: «que aparezca grande un botón que diga hay pendiente un producto por cargar»). */}
+      {carga && enShopify && !carga.plan && !enShopify.completa && (enShopify.cargados > 0 || enShopify.noLlego.length > 0) && enShopify.pendientes.length > 0 && (
+        <button disabled={ocupado} onClick={carga.onArmar}
+          title="Arma la carga de nuevo con lo que falta. Si no llegó, sacalo de la carga con «Sacar de la carga (no llegó)»."
+          style={{ display: 'block', width: '100%', marginTop: 10, padding: '12px 14px', fontSize: '1.05rem', fontWeight: 'bold', textAlign: 'left',
+            background: '#fbbf2426', color: '#fbbf24', border: '2px solid #fbbf24', borderRadius: 10, cursor: ocupado ? 'default' : 'pointer' }}>
+          ⚠️ {enShopify.pendientes.length === 1 ? 'Hay 1 producto pendiente por cargar' : `Hay ${enShopify.pendientes.length} productos pendientes por cargar`}: {enShopify.pendientes.slice(0, 6).join(', ')}{enShopify.pendientes.length > 6 ? '…' : ''}
+          <span style={{ display: 'block', fontSize: '0.85rem', fontWeight: 'normal', opacity: 0.9, marginTop: 3 }}>
+            Tocá acá para cargarlo. Si no llegó, sacalo de la carga con «Sacar de la carga (no llegó)».</span>
+        </button>)}
       <div style={{ marginTop: 8, fontSize: '0.85rem', display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center' }}
         title="Va a la planilla de ingreso (FECHA) y al mail a administración. La fecha de carga (CARGA STOCK) es el día en que se carga.">
         <span>📅 La mercadería entró el</span>

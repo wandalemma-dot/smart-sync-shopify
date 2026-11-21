@@ -678,11 +678,13 @@ export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: 
  * Cuántos artículos de la factura ya están cargados en Shopify. Lo que se sacó de la carga porque no llegó
  * (guardado en «noLlego», 14-nov-2026) también cuenta como terminado: no queda nada por cargar de eso.
  */
-export function estadoCargaFactura(r: ResultadoFactura, cargas: Record<string, CargaFamily>, noLlego: Record<string, unknown> = {}): { cargados: number; noLlego: string[]; total: number; completa: boolean } {
+export function estadoCargaFactura(r: ResultadoFactura, cargas: Record<string, CargaFamily>, noLlego: Record<string, unknown> = {}): { cargados: number; noLlego: string[]; pendientes: string[]; total: number; completa: boolean } {
   const codigos = [...new Set(r.checklist.map((c) => c.codigo))];
   const cargados = codigos.filter((c) => cargas[`${r.factura.id}|${c}`]?.estado === 'cargada');
   const faltan = codigos.filter((c) => !cargados.includes(c) && noLlego[`${r.factura.id}|${c}`]);
-  return { cargados: cargados.length, noLlego: faltan, total: codigos.length, completa: codigos.length > 0 && cargados.length + faltan.length === codigos.length };
+  // Lo que todavía no se cargó ni se sacó de la carga (21-nov-2026, gax: «hay pendiente un producto por cargar»).
+  const pendientes = codigos.filter((c) => !cargados.includes(c) && !faltan.includes(c));
+  return { cargados: cargados.length, noLlego: faltan, pendientes, total: codigos.length, completa: codigos.length > 0 && cargados.length + faltan.length === codigos.length };
 }
 
 /**
@@ -690,9 +692,11 @@ export function estadoCargaFactura(r: ResultadoFactura, cargas: Record<string, C
  * ya cerrado, en un apartado en verde, como archivadas»). Sola, cuando todo está cargado (o no llegó) y no hay nada que
  * reclamar al proveedor; las observaciones (faltante, adelanto) no la dejan abierta. A mano manda lo que se eligió:
  * «cerrada» (por ejemplo, Kappa o Crocs cargados a mano) o «abierta» (volver a abrirla aunque esté toda cargada).
+ * Con `soloCompleta` (iD y Target, 21-nov-2026, gax: «cuando una carga no quede terminada, no le des la opción de
+ * cerrar»), cerrarla a mano no vale mientras quede algo sin cargar ni sacar de la carga.
  */
-export function entregaArchivada(r: ResultadoFactura, carga: { completa: boolean } | null, manual?: 'cerrada' | 'abierta'): boolean {
-  if (manual === 'cerrada') return true;
+export function entregaArchivada(r: ResultadoFactura, carga: { completa: boolean } | null, manual?: 'cerrada' | 'abierta', soloCompleta = false): boolean {
+  if (manual === 'cerrada') return !(soloCompleta && carga && !carga.completa);
   if (manual === 'abierta' || !carga) return false;
   return carga.completa && r.semaforo !== 'reclamar' && r.semaforo !== 'incompleta';
 }

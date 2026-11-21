@@ -225,15 +225,15 @@ describe('iD: vista previa de la carga', () => {
     const marca: CargaFamily = { estado: 'cargada', fecha: '2026-11-12T15:00:00Z', firma: firmaCargaId('2026-11-10', '0013-00125274', r.checklist[0]) };
     expect(planCargaId(r, estado(), { 'F-0011-00139953|CTO0325003': marca }).items[0].estado).toBe('cargado');
     expect(planCargaId(r, estado(), { 'F-otra|CTO0325003': marca }).items[0]).toMatchObject({ estado: 'bloqueado', motivo: expect.stringMatching(/otra entrega/) });
-    expect(estadoCargaFactura(r, { 'F-0011-00139953|CTO0325003': marca })).toEqual({ cargados: 1, noLlego: [], total: 1, completa: true });
+    expect(estadoCargaFactura(r, { 'F-0011-00139953|CTO0325003': marca })).toEqual({ cargados: 1, noLlego: [], pendientes: [], total: 1, completa: true });
   });
   it('lo que no llegó cuenta como terminado y la entrega cargada pasa a las cerradas (gax, 14-nov-2026)', () => {
     const r = resultado([fila([{ talle: 'S', cantidad: 2 }]), { ...fila([{ talle: '9', cantidad: 1 }]), codigo: 'RBK1100033527' }]);
     const marca: CargaFamily = { estado: 'cargada', fecha: '2026-11-12T15:00:00Z', firma: 'x' };
     const cargas = { 'F-0011-00139953|CTO0325003': marca };
-    expect(estadoCargaFactura(r, cargas)).toEqual({ cargados: 1, noLlego: [], total: 2, completa: false });
+    expect(estadoCargaFactura(r, cargas)).toEqual({ cargados: 1, noLlego: [], pendientes: ['RBK1100033527'], total: 2, completa: false });
     const e = estadoCargaFactura(r, cargas, { 'F-0011-00139953|RBK1100033527': { fecha: 'x' }, 'F-otra|CTO0325003': { fecha: 'x' } });
-    expect(e).toEqual({ cargados: 1, noLlego: ['RBK1100033527'], total: 2, completa: true });
+    expect(e).toEqual({ cargados: 1, noLlego: ['RBK1100033527'], pendientes: [], total: 2, completa: true });
     // Lo cargado manda sobre «no llegó».
     expect(estadoCargaFactura(r, cargas, { 'F-0011-00139953|CTO0325003': {} }).noLlego).toEqual([]);
     const con = (semaforo: string) => ({ ...r, semaforo }) as ResultadoFactura;
@@ -246,6 +246,9 @@ describe('iD: vista previa de la carga', () => {
     expect(entregaArchivada(con('reclamar'), { completa: false }, 'cerrada')).toBe(true);
     expect(entregaArchivada(con('ok'), e, 'abierta')).toBe(false);
     expect(entregaArchivada(con('ok'), null)).toBe(false);
+    // iD y Target (21-nov-2026, gax): con algo sin cargar, cerrarla a mano no vale.
+    expect(entregaArchivada(con('ok'), { completa: false }, 'cerrada', true)).toBe(false);
+    expect(entregaArchivada(con('reclamar'), e, 'cerrada', true)).toBe(true);
   });
   it('la cantidad de cada talle viene del remito y se puede escribir a mano (gax, 12-nov-2026)', () => {
     const r = resultado([fila([{ talle: 'S', cantidad: 2 }, { talle: 'XL', cantidad: 2, retirado: 1 }], { retirado: 1 })]);
