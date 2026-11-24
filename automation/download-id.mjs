@@ -8,30 +8,38 @@ const DOWNLOAD = 'Descargar el stock disponible de esta cuenta en excel para com
 
 export async function selectIdBrand(page, brand) {
   if (!BRANDS[brand]) throw new Error('Marca no admitida.');
-  const heading = page.getByRole('heading', { name: 'Seleccioná una marca', exact: true });
+  const headings = page.getByRole('heading', { name: 'Seleccioná una marca', exact: true });
   const desired = page.getByRole('button', { name: BRANDS[brand], exact: true });
   const current = page.getByRole('button', { name: /^(Converse|Le Coq Sportif)$/ });
-  await current.or(heading).first().waitFor();
-  if (!await heading.isVisible() && !await desired.isVisible()) {
+  const choose = page.getByRole('button', { name: 'Elegir marca', exact: true });
+  await current.or(choose).first().waitFor();
+  if (await choose.isVisible()) {
+    await choose.click();
+  } else if (!await desired.isVisible()) {
     await current.click();
-    await heading.waitFor();
   }
-  if (await heading.isVisible()) {
+  if (await headings.count()) {
+    await page.getByText('Converse', { exact: true }).first().waitFor();
+    await page.getByText('Le Coq Sportif', { exact: true }).first().waitFor();
     // The brand menu can be shown automatically or opened from the header.
     // Scope to its smallest container with both brand labels; never pick a page-wide duplicate.
-    let container = heading.locator('..');
     let selected = false;
-    for (let level = 0; level < 5; level++) {
-      if (await container.getByText('Converse', { exact: true }).count() === 1 &&
-          await container.getByText('Le Coq Sportif', { exact: true }).count() === 1) {
-        await container.getByText(BRANDS[brand], { exact: true }).click();
-        selected = true;
-        break;
+    for (const heading of await headings.all()) {
+      let container = heading.locator('..');
+      for (let level = 0; level < 5; level++) {
+        if (await container.getByRole('heading', { name: 'Seleccioná una marca', exact: true }).count() === 1 &&
+            await container.getByText('Converse', { exact: true }).count() === 1 &&
+            await container.getByText('Le Coq Sportif', { exact: true }).count() === 1) {
+          await container.getByText(BRANDS[brand], { exact: true }).click();
+          await heading.waitFor({ state: 'hidden' });
+          selected = true;
+          break;
+        }
+        container = container.locator('..');
       }
-      container = container.locator('..');
+      if (selected) break;
     }
     if (!selected) throw new Error('Selector de marca ambiguo.');
-    await heading.waitFor({ state: 'hidden' });
   }
   await desired.waitFor();
   if (await desired.count() !== 1) throw new Error('No se pudo confirmar la marca.');
