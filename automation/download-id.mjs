@@ -103,26 +103,6 @@ export async function downloadIdStock(brand, directory) {
   } catch {
     // Only fixed stage labels: Playwright errors can contain credentials from fill().
     console.error(`ID: fallo en ${stage}. No se enviaron pedidos.`);
-    if (['esperar selección de marca después del acceso', 'seleccionar marca', 'cerrar selección de marca', 'confirmar marca seleccionada'].includes(stage)) {
-      // Private CI diagnostic: brand/navigation labels only, never inputs or page HTML.
-      try {
-        const controls = await page.locator('button, a, [role="button"]').evaluateAll(nodes => nodes
-          .filter(n => n.getClientRects().length)
-          .map(n => ({ tag: n.tagName, text: (n.innerText || '').trim().slice(0,150),
-            label: n.getAttribute('aria-label'), images: [...n.querySelectorAll('img')].map(i => i.alt) }))
-          .filter(n => /converse|coq|marca|stock/i.test(n.text + ' ' + n.label + ' ' + n.images.join(' '))).slice(0,20));
-        console.error('ID: controles de marca visibles: ' + JSON.stringify(controls));
-        const brandElements = await page.locator('body').evaluate(body => ({
-          headings: [...body.querySelectorAll('h1,h2,h3')].filter(n => n.getClientRects().length).map(n => n.innerText.trim().slice(0,100)),
-          labels: [...body.querySelectorAll('*')].filter(n => !n.children.length && n.getClientRects().length && /converse|coq/i.test(n.textContent || ''))
-            .slice(0,20).map(n => ({ tag: n.tagName, text: n.textContent.trim().slice(0,100), parent: n.parentElement?.tagName, role: n.parentElement?.getAttribute('role') })),
-          images: [...body.querySelectorAll('img')].filter(n => n.getClientRects().length).map(n => ({alt:n.alt, parent:n.parentElement?.tagName})).slice(0,20),
-        }));
-        console.error('ID: etiquetas de marca visibles: ' + JSON.stringify(brandElements));
-        const visibleText = (await page.locator('body').innerText()).split(process.env.ID_PASSWORD).join('[REDACTED]').split(process.env.ID_USERNAME).join('[REDACTED]');
-        console.error('ID: pantalla posterior al ingreso: ' + visibleText.slice(0,4000));
-      } catch { /* Diagnostics must not replace the original fixed-stage failure. */ }
-    }
     throw new Error('No se pudo descargar el stock de ID.');
   } finally { await browser.close(); }
 }
