@@ -6,6 +6,49 @@ const PORTAL = 'https://store.idargentinasa.com';
 const BRANDS = { converse: 'Converse', lecoq: 'Le Coq Sportif' };
 const DOWNLOAD = 'Descargar el stock disponible de esta cuenta en excel para completar cantidades';
 
+export async function selectIdBrand(page, brand) {
+  if (!BRANDS[brand]) throw new Error('Marca no admitida.');
+  const heading = page.getByRole('heading', { name: 'Seleccioná una marca', exact: true });
+  const desired = page.getByRole('button', { name: BRANDS[brand], exact: true });
+  const current = page.getByRole('button', { name: /^(Converse|Le Coq Sportif)$/ });
+  await current.or(heading).first().waitFor();
+  if (!await heading.isVisible() && !await desired.isVisible()) {
+    await current.click();
+    await heading.waitFor();
+  }
+  if (await heading.isVisible()) {
+    // The brand menu can be shown automatically or opened from the header.
+    // Scope to its smallest container with both brand labels; never pick a page-wide duplicate.
+    let container = heading.locator('..');
+    let selected = false;
+    for (let level = 0; level < 5; level++) {
+      if (await container.getByText('Converse', { exact: true }).count() === 1 &&
+          await container.getByText('Le Coq Sportif', { exact: true }).count() === 1) {
+        await container.getByText(BRANDS[brand], { exact: true }).click();
+        selected = true;
+        break;
+      }
+      container = container.locator('..');
+    }
+    if (!selected) throw new Error('Selector de marca ambiguo.');
+    await heading.waitFor({ state: 'hidden' });
+  }
+  await desired.waitFor();
+  if (await desired.count() !== 1) throw new Error('No se pudo confirmar la marca.');
+}
+
+export async function selectIdCustomer(page) {
+  const customer = page.getByText('(2059) ELEVE SAS', { exact: true });
+  // The new portal selects the account automatically. Allow that transition to finish first.
+  try { await customer.waitFor({ timeout: 8000 }); }
+  catch {
+    await page.getByRole('combobox', { name: /buscar cliente/i }).fill('ELEVE');
+    await page.getByRole('option', { name: '(2059) ELEVE SAS', exact: true }).click();
+    await customer.waitFor();
+  }
+  if (await customer.count() !== 1) throw new Error('Cliente ambiguo.');
+}
+
 /** A fresh, non-persistent browser: never save cookies, traces or passwords. */
 export async function downloadIdStock(brand, directory) {
   if (!BRANDS[brand]) throw new Error('Marca no admitida.');
@@ -18,51 +61,37 @@ export async function downloadIdStock(brand, directory) {
     const context = await browser.newContext({ acceptDownloads: true });
     page = await context.newPage();
     page.setDefaultTimeout(30000);
-    await page.goto(`${PORTAL}/ventaStock/nueva`, { waitUntil: 'domcontentloaded' });
+    await page.goto(PORTAL, { waitUntil: 'domcontentloaded' });
     stage = 'completar acceso';
     await page.getByRole('textbox', { name: 'Correo electrónico', exact: true }).fill(process.env.ID_USERNAME);
     await page.getByLabel('Contraseña', { exact: true }).fill(process.env.ID_PASSWORD);
     // ID renamed its login button to Ingresar. Keep both exact labels, never a generic submit.
     await page.getByRole('button', { name: /^(Ingresar|Iniciar sesión)$/ }).click();
-    stage = 'esperar selección de marca después del acceso';
-    await page.getByRole('heading', { name: 'Seleccioná una marca', exact: true }).waitFor();
+    stage = 'abrir Pedidos de Stock';
+    await page.getByRole('button', { name: /^Pedidos de Stock\s+Cargar y seguir pedidos de stock\.$/ }).click();
     stage = 'seleccionar marca';
-    await page.getByRole('button', { name: BRANDS[brand], exact: true }).click();
-    stage = 'cerrar selección de marca';
-    await page.getByRole('heading', { name: 'Seleccioná una marca', exact: true }).waitFor({ state: 'hidden' });
-    stage = 'abrir stock de la marca';
-    await page.goto(`${PORTAL}/ventaStock/nueva`, { waitUntil: 'domcontentloaded' });
-    stage = 'confirmar marca seleccionada';
-    await page.getByRole('button', { name: BRANDS[brand], exact: true }).waitFor();
+    await selectIdBrand(page, brand);
     stage = 'seleccionar cliente ELEVE SAS';
-    await page.getByRole('combobox', { name: 'Buscar cliente', exact: true }).fill('ELEVE');
-    await page.getByRole('option', { name: '(2059) ELEVE SAS', exact: true }).click();
-    stage = 'seleccionar canal DISPONIBLE';
-    await page.getByRole('button', { name: 'Elegir canal', exact: true }).first().click();
-    // Le Coq offers other channels as well. Never use the first Select button.
-    const channel = page.getByRole('heading', { name: 'DISPONIBLE', exact: true });
-    await channel.waitFor();
-    // ID puts the label in an inner div and the action in the surrounding card.
-    const card = channel.locator('..').locator('..');
-    const select = card.getByRole('button', { name: 'Seleccionar', exact: true });
-    if (await card.getByRole('heading').count() !== 1 || await select.count() !== 1) {
-      throw new Error('Tarjeta DISPONIBLE ambigua. Se cancela sin elegir otro canal.');
-    }
-    await select.click();
-    await page.getByRole('button', { name: 'DISPONIBLE', exact: true }).waitFor();
+    await selectIdCustomer(page);
     stage = 'comprobar pedido vacío';
     // The empty order must remain non-submittable. Never fill quantity fields.
-    if (await page.getByRole('button', { name: 'Enviar pedido', exact: true }).isEnabled()) {
+    const submit = page.getByRole('button', { name: 'Finalizar compra', exact: true });
+    await submit.waitFor();
+    if (await submit.isEnabled()) {
       throw new Error('Hay cantidades cargadas; se cancela la descarga automática.');
     }
     stage = 'descargar Excel';
-    const pending = page.waitForEvent('download', { timeout: 90000 });
-    await page.getByRole('button', { name: DOWNLOAD, exact: true }).click();
-    const download = await pending;
+    // As demonstrated by the owner on 24 Nov, this exports available account stock
+    // even with Canal = Sin elegir. It is independent of the order's channel selector.
+    const [download] = await Promise.all([
+      page.waitForEvent('download', { timeout: 90000 }),
+      page.getByRole('button', { name: DOWNLOAD, exact: true }).click(),
+    ]);
     const filename = resolve(directory, `${brand}.xlsx`);
     await download.saveAs(filename);
     if (await download.failure()) throw new Error('La descarga no se completó.');
-    return { filename, account: 'ELEVE SAS', customerCode: '2059', brand, channel: 'DISPONIBLE', downloadedAt: new Date().toISOString() };
+    return { filename, account: 'ELEVE SAS', customerCode: '2059', brand, channel: 'DISPONIBLE',
+      exportMode: 'stock-disponible-por-cuenta', channelSelected: false, downloadedAt: new Date().toISOString() };
   } catch {
     // Only fixed stage labels: Playwright errors can contain credentials from fill().
     console.error(`ID: fallo en ${stage}. No se enviaron pedidos.`);
