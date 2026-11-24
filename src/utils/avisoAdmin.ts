@@ -49,6 +49,7 @@ export function proveedorPlanilla(prov: 'id' | 'distrinando' | 'target', titulos
 /** Observaciones: «ok», «Facturado más caro ($ …)», o la diferencia encontrada (solo informa). */
 export function observacionesPlanilla(r: ResultadoFactura): string {
   const partes: string[] = [];
+  if (r.notaFaltante) partes.push(`Sin nota de pedido (${r.unidadesSinNota} de ${r.unidades} u.)`);
   if (r.totalDifPrecio > 0) partes.push(`Facturado más caro (${pesos(r.totalDifPrecio)} de más)`);
   if (r.totalSinPedirNeto > 0) partes.push(`Facturado sin pedir (${pesos(r.totalSinPedirNeto)} neto)`);
   if (!partes.length && r.semaforo === 'reclamar') partes.push(...r.motivos.slice(0, 2).map(motivoInformativo));
@@ -104,7 +105,7 @@ export function textoAvisoAdmin(o: DatosAvisoAdmin): { asunto: string; cuerpo: s
   // Las dos fechas (21-nov-2026, gax): el día que entró la mercadería y el día que se cargó en stock.
   const ok = observacionesPlanilla(o.r) === 'ok';
   const corto = o.prov === 'distrinando' ? 'Distrinando' : o.prov === 'target' ? 'Target' : 'ID';
-  const asunto = `Fac. ${ok ? 'OK ' : ''}${corto} - ${f.numero}${ok ? '' : ' (con diferencias)'}`;
+  const asunto = `Fac. ${ok ? 'OK ' : ''}${corto} - ${f.numero}${ok ? '' : o.r.notaFaltante ? ' (sin nota de pedido)' : ' (con diferencias)'}`;
   const remito = o.r.remito?.numero || f.remito;
   const datos = [`de ${proveedor}`, `del ${fechaCorta(f.fecha)}`, f.total ? `por ${pesos(f.total)}` : '', remito ? `(remito ${remito})` : ''].filter(Boolean).join(' ');
   const entro = o.ingreso || '';
@@ -114,7 +115,10 @@ export function textoAvisoAdmin(o: DatosAvisoAdmin): { asunto: string; cuerpo: s
   const cabeza = ['Hola,', '',
     `Les informo que llegó y se cargó en stock la mercadería de la factura ${f.numero} ${datos}.`, ...cuando, '',
     ...(ok ? ['La factura coincide con la nota de pedido: OK.']
-      : ['La factura no coincide con la nota de pedido. Esto es lo que se encontró:', ...diferenciasInformativas(o.r.motivos)]),
+      : o.r.notaFaltante
+        ? [`No encontramos la nota de pedido de esta factura: ${o.r.unidadesSinNota} de ${o.r.unidades} u. no están en ninguna nota cargada. Puede faltar cargarla o puede ser un pedido que no es nuestro; lo estamos revisando.`,
+          ...diferenciasInformativas(o.r.motivos.filter((m) => !/^NOTA FALTANTE:/.test(m)))]
+        : ['La factura no coincide con la nota de pedido. Esto es lo que se encontró:', ...diferenciasInformativas(o.r.motivos)]),
     '', cargado];
   const pie = c.revisar.length ? ['', 'Para revisar:', ...c.revisar] : [];
   // Los enlaces de mail tienen un largo máximo: el detalle por artículo se corta con aviso.

@@ -112,6 +112,27 @@ describe('control de facturas contra pedidos', () => {
     expect(mailPagos(r.facturas[0], 'ID', '', (id) => id, '2026-10-23').cuerpo).toMatch(/: total .*\nLa mercadería entró el 23\/10\/2026\.\n/);
   });
 
+  it('nota faltante (24-nov-2026, factura 0016-00006439): casi nada sale de las notas → avisa que falta la nota, no nombra la nota como «el pedido»', () => {
+    // Una nota con dos artículos de la factura; los otros cuatro no están en ninguna nota.
+    const nota: Pedido = { id: 'N', nombre: 'N', nroProveedor: '00002654', fecha: '2026-11-18', lineas: [linea('X1', '40', 1), linea('Y9', '38', 2)] };
+    const f = factura('1', '2026-11-19', [ren('X1', 1), ren('P1', 7), ren('P2', 4), ren('P3', 2), ren('P4', 2), ren('Y9', 2)]);
+    const r = analizarFacturas([nota], [f]).facturas[0];
+    expect(r.notaFaltante).toBe(true);
+    expect(r.unidadesSinNota).toBe(15);
+    expect(r.motivos[0]).toMatch(/^NOTA FALTANTE: 15 de 18 u\. \(4 de 6 artículos\) no salen de ninguna nota de pedido cargada/);
+    const m = mensajePagos(r, '', (id) => (id === 'N' ? 'N° 00002654' : id));
+    expect(m).toContain('18 u.: 15 u. no están en ninguna nota de pedido cargada; solo 3 u. salen de N° 00002654.');
+    expect(m).not.toMatch(/Pedido N° 00002654: 18 u\./);
+    expect(m).toContain('⚠️ No encontramos la nota de pedido de esta factura');
+    expect(m).not.toContain('NOTA FALTANTE');
+    expect(m).toMatch(/FACTURADO SIN PEDIR: P1 \(7\)/);
+    expect(mailPagos(r, 'ID').asunto).toBe('Fac. ID - 0001-00000001 (sin nota de pedido)');
+    // Uno o dos renglones de más siguen siendo «facturado sin pedir», no una nota faltante.
+    const pocos = analizarFacturas([pA], [factura('1', '2026-10-05', [ren('X1', 5), ren('ZZ9', 1), ren('ZZ8', 9)])]).facturas[0];
+    expect(pocos.notaFaltante).toBe(false);
+    expect(mailPagos(pocos, 'ID').asunto).toMatch(/\(con diferencias\)$/);
+  });
+
   it('pedido Excel: packs pasan a pares con precio por par', () => {
     const filas = [
       ['SKU', 'Modelo color', 'Descripción del artículo', 'UDM', 'Mayorista', 'Descuento', 'Mayorista con descuento', 'Pedido'],

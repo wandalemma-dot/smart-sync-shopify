@@ -1534,9 +1534,11 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
           {r.remito && <button style={{ ...botonChico, color: '#f87171' }} disabled={ocupado} title="Borra solo el remito de esta entrega (la factura, las notas y lo ya cargado en Shopify quedan). Después lo podés subir de nuevo."
             onClick={() => { setEditando(false); onBorrarRemito(); }}>🗑️ Borrar remito</button>}
         </Parte>
-        <Parte ok={!r.faltaNota && !r.codigosSinNota.length} titulo="Nota de pedido"
-          detalle={r.faltaNota ? 'falta: no la encontré en Trello' : `${notas || '—'}${r.codigosSinNota.length ? ` · falta la de ${r.codigosSinNota.length} artículo(s)` : ''}`}>
-          {(r.faltaNota || r.codigosSinNota.length > 0) && <>
+        <Parte ok={!r.faltaNota && !r.notaFaltante && !r.codigosSinNota.length} titulo="Nota de pedido"
+          detalle={r.faltaNota ? 'falta: no la encontré en Trello'
+            : r.notaFaltante ? `falta: ${r.unidadesSinNota} de ${r.unidades} u. no están en ninguna nota`
+            : `${notas || '—'}${r.codigosSinNota.length ? ` · falta la de ${r.codigosSinNota.length} artículo(s)` : ''}`}>
+          {(r.faltaNota || r.notaFaltante || r.codigosSinNota.length > 0) && <>
             <button style={botonChico} disabled={ocupado} onClick={onTrello}>🗂️ Buscar en Trello</button>
             <Archivo etiqueta="📎 Subir nota" accept=".xlsx,.xls" multiple disabled={ocupado} estilo={botonChico} onArchivos={onNota} />
           </>}
@@ -1552,6 +1554,17 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
               onClick={() => carga.onArchivar('cerrada')}>{enShopify.completa ? '✅ Dar por cerrada' : 'Lo que falta lo cargué a mano: dar por cerrada'}</button>)}
         </Parte>}
       </div>
+      {/* Casi nada de la factura sale de las notas (24-nov-2026, factura 0016-00006439): no son «diferencias», falta la nota. */}
+      {r.notaFaltante && (
+        <div style={{ marginTop: 10, padding: '10px 14px', background: '#fbbf2426', color: '#fbbf24', border: '2px solid #fbbf24', borderRadius: 10 }}>
+          <div style={{ fontSize: '1.02rem', fontWeight: 'bold' }}>⚠️ Falta la nota de pedido de esta factura</div>
+          <div style={{ fontSize: '0.86rem', marginTop: 4 }}>
+            {r.unidadesSinNota} de {r.unidades} u. no están en ninguna nota de pedido cargada
+            {r.pedidosCubiertos.length ? ` (solo ${r.unidades - r.unidadesSinNota} u. salen de ${r.pedidosCubiertos.map(nombrePedido).join(' + ')})` : ''}.
+            {' '}Buscá la nota en Trello o subila. Si no hiciste este pedido, el proveedor facturó algo que no es tuyo: no lo reclames como diferencia hasta revisarlo.
+          </div>
+        </div>
+      )}
       {/* Carga sin terminar (21-nov-2026, gax: «que aparezca grande un botón que diga hay pendiente un producto por cargar»). */}
       {carga && enShopify && !carga.plan && !enShopify.completa && (enShopify.cargados > 0 || enShopify.noLlego.length > 0) && enShopify.pendientes.length > 0 && (
         <button disabled={ocupado} onClick={carga.onArmar}
@@ -1737,6 +1750,8 @@ function Controles({ r, unidadesRemito, pendiente, naranja }: { r: ResultadoFact
   ].filter(Boolean);
   const nota = r.faltaNota
     ? linea(null, '2 · Nota de pedido: falta la nota.')
+    : r.notaFaltante
+    ? linea(null, `2 · Nota de pedido: falta la nota (${r.unidadesSinNota} de ${r.unidades} u. no están en ninguna nota).`)
     : linea(!problemas.length, `2 · Nota de pedido contra factura y remito: ${problemas.length ? problemas.join(' · ') : 'todo lo facturado está pedido'}${pendiente ? ` (de la nota falta entregar ${pendiente} u.)` : ''}.`);
   return <div style={{ marginTop: 8, fontSize: '0.86rem' }}>{remito}{nota}</div>;
 }

@@ -28,6 +28,17 @@ describe('Aviso de carga a administración', () => {
     expect(cuerpo).toMatch(/Detalle:\n• LTO0224043 .*: 4 u\. \(M 2, S 2\)/);
     expect(cuerpo).toMatch(/Para revisar:\n• LTO0226092: No se pudo dar de alta: XXL/);
   });
+  it('sin nota de pedido (24-nov-2026): lo dice primero, en el asunto y en la planilla', () => {
+    const sinNota = { ...r, semaforo: 'reclamar', totalSinPedirNeto: 900000, notaFaltante: true, unidadesSinNota: 38, unidades: 41, motivos: [
+      'NOTA FALTANTE: 38 de 41 u. (18 de 19 artículos) no salen de ninguna nota de pedido cargada. Falta subir la nota de este pedido, o el proveedor facturó un pedido que no es nuestro: revisar antes de reclamar.',
+      'FACTURADO SIN PEDIR: ZZ9 (1): $ 60.000,00 neto, $ 79.200,00 con impuestos.',
+    ] } as unknown as ResultadoFactura;
+    const { asunto, cuerpo } = textoAvisoAdmin({ ...o, r: sinNota });
+    expect(asunto).toBe('Fac. ID - 0011-00139953 (sin nota de pedido)');
+    expect(cuerpo).toContain('No encontramos la nota de pedido de esta factura: 38 de 41 u. no están en ninguna nota cargada.');
+    expect(cuerpo).not.toContain('NOTA FALTANTE');
+    expect(observacionesPlanilla(sinNota)).toBe('Sin nota de pedido (38 de 41 u.) · Facturado sin pedir ($ 900.000 neto)');
+  });
   it('con diferencias: las informa, primero lo que no se pidió, sin reclamar', () => {
     const conDif = { ...r, semaforo: 'reclamar', totalSinPedirNeto: 60000, motivos: [
       'PRECIO: 1 artículo(s) más caros que en el pedido: $ 30.000,00 neto + IVA $ 6.300,00 + percepciones $ 3.300,00 = $ 39.600,00. Pedir nota de crédito por $ 30.000,00 neto más impuestos.',
