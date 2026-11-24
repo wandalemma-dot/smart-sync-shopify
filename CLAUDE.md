@@ -1,12 +1,21 @@
 # Guía del proyecto — Sincronización de Stock e Inventario (INDY)
 
-**Acceso automático a ID (24-nov-2026).** El portal muestra «Ingresar» en el login;
-el ejecutor anterior esperaba «Iniciar sesión» y se detenía antes de descargar.
-Aceptar ambos nombres completos y exigir una coincidencia única. Ante fallos,
-registrar únicamente la etapa fija del recorrido, nunca errores crudos de Playwright
-(pueden contener valores de los campos), contraseñas, cookies o trazas. Conservar
-cliente ELEVE SAS, canal DISPONIBLE y comprobación de pedido vacío; nunca enviar pedidos.
-El ejecutor privado debe fijar el commit corregido para tomar el cambio.
+**Nuevo portal de ID (24-nov-2026, video de la dueña).** «Ingresar» lleva a un
+inicio con «Pedidos de Stock» y «Facturas»: entrar a Pedidos de Stock antes de
+elegir marca. La marca se cambia desde el botón superior derecho; puede venir
+recordada. ELEVE SAS (2059) puede seleccionarse automáticamente: esperarla y
+verificarla, usando el buscador solo si hace falta. La flecha «Descargar el stock
+disponible de esta cuenta en excel para completar cantidades» exporta el disponible
+de esa cuenta/marca SIN elegir canal (en el video dice «Sin elegir»). No confundir
+ese export con el selector de canal de un pedido. El informe registra
+`exportMode: stock-disponible-por-cuenta`, `channelSelected: false` y DISPONIBLE
+como tipo de stock exportado. Exigir marca y cuenta correctas y «Finalizar compra»
+deshabilitado; nunca cargar cantidades ni enviar pedidos. El Excel debe seguir
+pasando los controles de Plantilla y stock válido. Ante fallos registrar etapas
+fijas, nunca errores crudos de Playwright, contraseñas, cookies o trazas.
+El ejecutor privado debe fijar el commit corregido para tomar el cambio. El horario
+se pausó temporalmente durante la reparación porque la dueña actualiza a mano;
+las pruebas de recuperación se ejecutan con operación `verificar` (sin escrituras).
 
 **Funciones manuales de TODAS las marcas (4-nov-2026).** Wanda pidió quitar las
 restricciones agregadas a su usuario: stock, altas, talles, activación en sucursal,
