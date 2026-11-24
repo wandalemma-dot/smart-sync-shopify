@@ -66,7 +66,7 @@ export async function downloadIdStock(brand, directory) {
   } catch {
     // Only fixed stage labels: Playwright errors can contain credentials from fill().
     console.error(`ID: fallo en ${stage}. No se enviaron pedidos.`);
-    if (['seleccionar marca', 'cerrar selección de marca', 'confirmar marca seleccionada'].includes(stage)) {
+    if (['esperar selección de marca después del acceso', 'seleccionar marca', 'cerrar selección de marca', 'confirmar marca seleccionada'].includes(stage)) {
       // Private CI diagnostic: brand/navigation labels only, never inputs or page HTML.
       try {
         const controls = await page.locator('button, a, [role="button"]').evaluateAll(nodes => nodes
@@ -82,6 +82,8 @@ export async function downloadIdStock(brand, directory) {
           images: [...body.querySelectorAll('img')].filter(n => n.getClientRects().length).map(n => ({alt:n.alt, parent:n.parentElement?.tagName})).slice(0,20),
         }));
         console.error('ID: etiquetas de marca visibles: ' + JSON.stringify(brandElements));
+        const visibleText = (await page.locator('body').innerText()).split(process.env.ID_PASSWORD).join('[REDACTED]').split(process.env.ID_USERNAME).join('[REDACTED]');
+        console.error('ID: pantalla posterior al ingreso: ' + visibleText.slice(0,4000));
       } catch { /* Diagnostics must not replace the original fixed-stage failure. */ }
     }
     throw new Error('No se pudo descargar el stock de ID.');
