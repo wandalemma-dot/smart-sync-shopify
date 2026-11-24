@@ -12,21 +12,28 @@ export async function downloadIdStock(brand, directory) {
   if (!process.env.ID_USERNAME || !process.env.ID_PASSWORD) throw new Error('Faltan ID_USERNAME e ID_PASSWORD en el almacén de secretos del ejecutor.');
   await mkdir(directory, { recursive: true });
   const browser = await chromium.launch({ headless: true });
+  let stage = 'abrir portal';
   try {
     const context = await browser.newContext({ acceptDownloads: true });
     const page = await context.newPage();
     page.setDefaultTimeout(30000);
     await page.goto(`${PORTAL}/ventaStock/nueva`, { waitUntil: 'domcontentloaded' });
+    stage = 'completar acceso';
     await page.getByRole('textbox', { name: 'Correo electrónico', exact: true }).fill(process.env.ID_USERNAME);
     await page.getByLabel('Contraseña', { exact: true }).fill(process.env.ID_PASSWORD);
-    await page.getByRole('button', { name: 'Iniciar sesión', exact: true }).click();
+    // ID renamed its login button to Ingresar. Keep both exact labels, never a generic submit.
+    await page.getByRole('button', { name: /^(Ingresar|Iniciar sesión)$/ }).click();
+    stage = 'esperar selección de marca después del acceso';
     await page.getByRole('heading', { name: 'Seleccioná una marca', exact: true }).waitFor();
+    stage = 'seleccionar marca';
     await page.getByRole('button', { name: BRANDS[brand], exact: true }).click();
     await page.getByRole('heading', { name: 'Seleccioná una marca', exact: true }).waitFor({ state: 'hidden' });
     await page.goto(`${PORTAL}/ventaStock/nueva`, { waitUntil: 'domcontentloaded' });
     await page.getByRole('button', { name: BRANDS[brand], exact: true }).waitFor();
+    stage = 'seleccionar cliente ELEVE SAS';
     await page.getByRole('combobox', { name: 'Buscar cliente', exact: true }).fill('ELEVE');
     await page.getByRole('option', { name: '(2059) ELEVE SAS', exact: true }).click();
+    stage = 'seleccionar canal DISPONIBLE';
     await page.getByRole('button', { name: 'Elegir canal', exact: true }).first().click();
     // Le Coq offers other channels as well. Never use the first Select button.
     const channel = page.getByRole('heading', { name: 'DISPONIBLE', exact: true });
@@ -39,10 +46,12 @@ export async function downloadIdStock(brand, directory) {
     }
     await select.click();
     await page.getByRole('button', { name: 'DISPONIBLE', exact: true }).waitFor();
+    stage = 'comprobar pedido vacío';
     // The empty order must remain non-submittable. Never fill quantity fields.
     if (await page.getByRole('button', { name: 'Enviar pedido', exact: true }).isEnabled()) {
       throw new Error('Hay cantidades cargadas; se cancela la descarga automática.');
     }
+    stage = 'descargar Excel';
     const pending = page.waitForEvent('download', { timeout: 90000 });
     await page.getByRole('button', { name: DOWNLOAD, exact: true }).click();
     const download = await pending;
@@ -50,5 +59,9 @@ export async function downloadIdStock(brand, directory) {
     await download.saveAs(filename);
     if (await download.failure()) throw new Error('La descarga no se completó.');
     return { filename, account: 'ELEVE SAS', customerCode: '2059', brand, channel: 'DISPONIBLE', downloadedAt: new Date().toISOString() };
+  } catch {
+    // Only fixed stage labels: Playwright errors can contain credentials from fill().
+    console.error(`ID: fallo en ${stage}. No se enviaron pedidos.`);
+    throw new Error('No se pudo descargar el stock de ID.');
   } finally { await browser.close(); }
 }
