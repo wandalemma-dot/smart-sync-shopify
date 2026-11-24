@@ -64,16 +64,20 @@ function brandPage(currentBrand, initialMenu = false, ambiguous = false) {
   let menu = initialMenu;
   const clicked = [];
   function container(depth) {
-    return { locator: () => container(depth + 1), getByText: name => ({
+    return { locator: () => container(depth + 1), getByRole: () => ({ count: async () => 1 }), getByText: name => ({
       count: async () => !depth ? 0 : ambiguous ? 2 : 1,
       click: async () => { clicked.push(name); currentBrand = name; menu = false; },
     }) };
   }
   const heading = { isVisible: async () => menu, locator: () => container(0),
+    count: async () => menu ? 1 : 0, all: async () => menu ? [heading] : [],
     waitFor: async options => { expect(menu).toBe(options?.state !== 'hidden'); } };
   const current = { or: () => ({ first: () => ({ waitFor: async () => {} }) }),
     click: async () => { clicked.push('open menu'); menu = true; } };
-  const page = { getByRole: (role, { name }) => role === 'heading' ? heading : name instanceof RegExp ? current : {
+  const page = { getByText: () => ({ first: () => ({ waitFor: async () => { expect(menu).toBe(true); } }) }),
+    getByRole: (role, { name }) => role === 'heading' ? heading : name instanceof RegExp ? current : name === 'Elegir marca' ? {
+      isVisible: async () => !currentBrand, click: async () => { clicked.push('choose brand'); menu = true; },
+    } : {
     isVisible: async () => menu || currentBrand === name,
     waitFor: async () => { expect(currentBrand).toBe(name); expect(menu).toBe(false); },
     count: async () => currentBrand === name && !menu ? 1 : 0,
@@ -85,6 +89,12 @@ it('conserva la marca correcta cuando el portal ya la recuerda', async () => {
   const fixture = brandPage('Converse');
   await selectIdBrand(fixture.page, 'converse');
   expect(fixture.clicked).toEqual([]);
+});
+
+it('abre Elegir marca en una sesión nueva, aunque el portal muestre un encabezado sin opciones', async () => {
+  const fixture = brandPage(null);
+  await selectIdBrand(fixture.page, 'converse');
+  expect(fixture.clicked).toEqual(['choose brand', 'Converse']);
 });
 
 it('cambia la marca desde el encabezado antes de descargar', async () => {
