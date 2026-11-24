@@ -13,9 +13,10 @@ export async function downloadIdStock(brand, directory) {
   await mkdir(directory, { recursive: true });
   const browser = await chromium.launch({ headless: true });
   let stage = 'abrir portal';
+  let page;
   try {
     const context = await browser.newContext({ acceptDownloads: true });
-    const page = await context.newPage();
+    page = await context.newPage();
     page.setDefaultTimeout(30000);
     await page.goto(`${PORTAL}/ventaStock/nueva`, { waitUntil: 'domcontentloaded' });
     stage = 'completar acceso';
@@ -27,8 +28,11 @@ export async function downloadIdStock(brand, directory) {
     await page.getByRole('heading', { name: 'Seleccioná una marca', exact: true }).waitFor();
     stage = 'seleccionar marca';
     await page.getByRole('button', { name: BRANDS[brand], exact: true }).click();
+    stage = 'cerrar selección de marca';
     await page.getByRole('heading', { name: 'Seleccioná una marca', exact: true }).waitFor({ state: 'hidden' });
+    stage = 'abrir stock de la marca';
     await page.goto(`${PORTAL}/ventaStock/nueva`, { waitUntil: 'domcontentloaded' });
+    stage = 'confirmar marca seleccionada';
     await page.getByRole('button', { name: BRANDS[brand], exact: true }).waitFor();
     stage = 'seleccionar cliente ELEVE SAS';
     await page.getByRole('combobox', { name: 'Buscar cliente', exact: true }).fill('ELEVE');
@@ -62,6 +66,17 @@ export async function downloadIdStock(brand, directory) {
   } catch {
     // Only fixed stage labels: Playwright errors can contain credentials from fill().
     console.error(`ID: fallo en ${stage}. No se enviaron pedidos.`);
+    if (['seleccionar marca', 'cerrar selección de marca', 'confirmar marca seleccionada'].includes(stage)) {
+      // Private CI diagnostic: brand/navigation labels only, never inputs or page HTML.
+      try {
+        const controls = await page.locator('button, a, [role="button"]').evaluateAll(nodes => nodes
+          .filter(n => n.getClientRects().length)
+          .map(n => ({ tag: n.tagName, text: (n.innerText || '').trim().slice(0,150),
+            label: n.getAttribute('aria-label'), images: [...n.querySelectorAll('img')].map(i => i.alt) }))
+          .filter(n => /converse|coq|marca|stock/i.test(n.text + ' ' + n.label + ' ' + n.images.join(' '))).slice(0,20));
+        console.error('ID: controles de marca visibles: ' + JSON.stringify(controls));
+      } catch { /* Diagnostics must not replace the original fixed-stage failure. */ }
+    }
     throw new Error('No se pudo descargar el stock de ID.');
   } finally { await browser.close(); }
 }
