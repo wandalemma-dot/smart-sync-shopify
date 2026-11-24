@@ -1,5 +1,13 @@
 # Guía del proyecto — Sincronización de Stock e Inventario (INDY)
 
+**Acceso automático a ID (24-nov-2026).** El portal muestra «Ingresar» en el login;
+el ejecutor anterior esperaba «Iniciar sesión» y se detenía antes de descargar.
+Aceptar ambos nombres completos y exigir una coincidencia única. Ante fallos,
+registrar únicamente la etapa fija del recorrido, nunca errores crudos de Playwright
+(pueden contener valores de los campos), contraseñas, cookies o trazas. Conservar
+cliente ELEVE SAS, canal DISPONIBLE y comprobación de pedido vacío; nunca enviar pedidos.
+El ejecutor privado debe fijar el commit corregido para tomar el cambio.
+
 **Funciones manuales de TODAS las marcas (4-nov-2026).** Wanda pidió quitar las
 restricciones agregadas a su usuario: stock, altas, talles, activación en sucursal,
 orden/corrección de talles y precios deben seguir disponibles en la app para todas
