@@ -238,6 +238,13 @@ export interface ResultadoFactura {
   faltaNota: boolean;
   /** Códigos facturados que no están en ninguna nota cargada (¿falta subir una nota?). */
   codigosSinNota: string[];
+  /**
+   * Más de la mitad de lo facturado no sale de ninguna nota (24-nov-2026, factura 0016-00006439: 38 de 41 u.):
+   * falta subir la nota de ese pedido o el proveedor facturó algo que no es nuestro. No es «diferencias con la nota».
+   */
+  notaFaltante: boolean;
+  /** Unidades facturadas que no salen de ninguna nota (lo facturado sin pedir). */
+  unidadesSinNota: number;
   remito: Remito | null;
   /** Códigos donde el remito y la factura no dicen la misma cantidad. */
   difRemito: { codigo: string; factura: number; remito: number }[];
@@ -768,10 +775,18 @@ export function analizarFacturas(
     const codigosSinNota = [...new Set(renglones.filter((r) => r.noEstaEnPedidos).map((r) => r.codigo))];
     const faltaNota = !!remitos && renglones.length > 0 && renglones.every((r) => r.noEstaEnPedidos);
     const faltaRemito = !!remitos && !rem;
+    const unidadesFactura = renglones.reduce((s, r) => s + r.cantidad, 0);
+    const unidadesSinNota = renglones.reduce((s, r) => s + r.sinPedir, 0);
+    const articulosSinNota = renglones.filter((r) => r.sinPedir > 0).length;
+    // Varios artículos y más de la mitad de las unidades: uno o dos renglones de más siguen siendo «facturado sin pedir».
+    const notaFaltante = !faltaNota && articulosSinNota >= 3 && unidadesSinNota * 2 > unidadesFactura;
 
     const motivos: string[] = [];
     let criticas = 0, medias = 0;
     if (faltaRemito) motivos.push('INCOMPLETA: falta subir la foto del remito.');
+    if (notaFaltante) {
+      motivos.push(`NOTA FALTANTE: ${unidadesSinNota} de ${unidadesFactura} u. (${articulosSinNota} de ${renglones.length} artículos) no salen de ninguna nota de pedido cargada. Falta subir la nota de este pedido, o el proveedor facturó un pedido que no es nuestro: revisar antes de reclamar.`);
+    }
     if (faltaNota) motivos.push('INCOMPLETA: falta la nota de pedido. Ningún artículo de la factura está en las notas pendientes (las de las listas de pendientes de Trello o subidas a mano): subila o tildala a mano.');
     // 1. Primer control (gax, 12-nov-2026): el remito tiene que traer lo mismo que la factura.
     const faltanRemito = difRemito.filter((d) => d.remito < d.factura);
@@ -868,6 +883,8 @@ export function analizarFacturas(
       faltaRemito,
       faltaNota,
       codigosSinNota,
+      notaFaltante,
+      unidadesSinNota,
       remito: rem,
       difRemito,
       tallesNoPedidos,
@@ -980,7 +997,8 @@ export function motivoInformativo(m: string): string {
     .replace(/: revisar\.$/, '.')
     .replace(/ no figura en ninguna nota de pedido pendiente: ¿falta cargar un pedido\?$/, ' no figura en ninguna nota de pedido.')
     .replace(/: ¿es el remito correcto\?$/, '.')
-    .replace(/: subila o tildala a mano\.$/, '.');
+    .replace(/: subila o tildala a mano\.$/, '.')
+    .replace(/: revisar antes de reclamar\.$/, '.');
 }
 
 /** Lo que vino sin pedirse: lo único que no tiene que pasar (va primero en el mensaje). */
@@ -1000,7 +1018,7 @@ export function diferenciasInformativas(motivos: string[]): string[] {
  * informar la diferencia… que no manden algo que no se pidió»). Afuera lo interno del control: a qué nota
  * corresponde cada artículo (OTRA NOTA), lo que falta entregar, adelantos y avisos de carga.
  */
-const PARA_ADMIN = /^(FACTURADO SIN PEDIR|DOBLE COBRO|TALLES|REMITO: facturaron|REMITO: llegó|CUENTAS):| no figura en ninguna nota de pedido/;
+const PARA_ADMIN = /^(NOTA FALTANTE|FACTURADO SIN PEDIR|DOBLE COBRO|TALLES|REMITO: facturaron|REMITO: llegó|CUENTAS):| no figura en ninguna nota de pedido/;
 
 function lineasPrecio(r: ResultadoFactura): string[] {
   const out: string[] = [];
@@ -1025,13 +1043,21 @@ export function mensajePagos(r: ResultadoFactura, condicionesPago = '', nombrePe
     `Factura ${f.numero} del ${fechaAr(f.fecha)}${remito ? `, remito ${remito}` : ''}: total ${fmt(f.total)}, ${vence}.`,
     // El día que entró la mercadería (21-nov-2026, gax: «si al mail le podemos poner qué día entró»).
     ...(ingreso ? [`La mercadería entró el ${fechaAr(ingreso)}.`] : []),
-    r.pedidosCubiertos.length
-      ? `Pedido ${r.pedidosCubiertos.map(nombrePedido).join(' + ')}: ${r.unidades} u., entrega ${r.pedidosCompletos ? 'completa' : 'parcial'}.`
-      : `${r.unidades} u., sin pedido asociado.`,
+    // Si casi nada sale de las notas, no se nombran como «el pedido» (24-nov-2026, factura 0016-00006439).
+    r.notaFaltante
+      ? `${r.unidades} u.: ${r.unidadesSinNota} u. no están en ninguna nota de pedido cargada${r.pedidosCubiertos.length ? `; solo ${r.unidades - r.unidadesSinNota} u. salen de ${r.pedidosCubiertos.map(nombrePedido).join(' + ')}` : ''}.`
+      : r.pedidosCubiertos.length
+        ? `Pedido ${r.pedidosCubiertos.map(nombrePedido).join(' + ')}: ${r.unidades} u., entrega ${r.pedidosCompletos ? 'completa' : 'parcial'}.`
+        : `${r.unidades} u., sin pedido asociado.`,
   ];
   const motivos = r.motivos.filter((m) => PARA_ADMIN.test(m));
   const precio = lineasPrecio(r);
   if (r.semaforo === 'incompleta') lineas.push('⏳ Control incompleto: falta el remito o la nota de pedido.');
+  else if (r.notaFaltante) {
+    lineas.push('⚠️ No encontramos la nota de pedido de esta factura: puede faltar cargarla o puede ser un pedido que no es nuestro. Lo estamos revisando.');
+    lineas.push(...diferenciasInformativas(motivos.filter((m) => !/^NOTA FALTANTE:/.test(m))));
+    if (precio.length) lineas.push('Precio distinto al del pedido:', ...precio);
+  }
   else if (!motivos.length && !precio.length) lineas.push('✅ Coincide con la nota de pedido: OK.');
   else {
     lineas.push('⚠️ Diferencias con la nota de pedido:');
@@ -1046,7 +1072,7 @@ export function mensajePagos(r: ResultadoFactura, condicionesPago = '', nombrePe
 export function mailPagos(r: ResultadoFactura, proveedor: string, condicionesPago = '', nombrePedido: (id: string) => string = (id) => id, ingreso = ''): { asunto: string; cuerpo: string } {
   const texto = mensajePagos(r, condicionesPago, nombrePedido, ingreso);
   const ok = texto.includes('✅ Coincide');
-  const asunto = `Fac. ${ok ? 'OK ' : ''}${proveedor} - ${r.factura.numero}${ok ? '' : r.semaforo === 'incompleta' ? ' (control incompleto)' : ' (con diferencias)'}`;
+  const asunto = `Fac. ${ok ? 'OK ' : ''}${proveedor} - ${r.factura.numero}${ok ? '' : r.semaforo === 'incompleta' ? ' (control incompleto)' : r.notaFaltante ? ' (sin nota de pedido)' : ' (con diferencias)'}`;
   return { asunto, cuerpo: ['Hola,', '', texto, '', 'Saludos.'].join('\n') };
 }
 
