@@ -3,7 +3,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { chromium } from 'playwright';
-import { downloadIdStock } from './download-id.mjs';
+import { downloadIdStock, selectIdBrand, selectIdCustomer } from './download-id.mjs';
 
 vi.mock('playwright', () => ({ chromium: { launch: vi.fn() } }));
 let directory;
@@ -13,7 +13,7 @@ afterEach(async () => {
   if (directory) await rm(directory, { recursive: true, force: true });
 });
 
-it.each(['Ingresar', 'Iniciar sesión'])('envía el acceso con el nombre real %s y espera la marca', async label => {
+it.each(['Ingresar', 'Iniciar sesión'])('envía el acceso con el nombre real %s y busca Pedidos de Stock', async label => {
   directory = await mkdtemp(join(tmpdir(), 'id-login-test-'));
   vi.stubEnv('ID_USERNAME', 'fixture@example.invalid');
   vi.stubEnv('ID_PASSWORD', 'fixture-secret');
@@ -37,8 +37,69 @@ it.each(['Ingresar', 'Iniciar sesión'])('envía el acceso con el nombre real %s
   chromium.launch.mockResolvedValue({ newContext: async () => ({ newPage: async () => page }), close: closed });
   await expect(downloadIdStock('converse', directory)).rejects.toThrow('No se pudo descargar');
   expect(submitted).toHaveBeenCalledOnce();
-  expect(logged).toHaveBeenCalledWith('ID: fallo en esperar selección de marca después del acceso. No se enviaron pedidos.');
+  expect(logged).toHaveBeenCalledWith('ID: fallo en abrir Pedidos de Stock. No se enviaron pedidos.');
   expect(closed).toHaveBeenCalledOnce();
+});
+
+it('espera la cuenta seleccionada automáticamente sin escribir en el buscador', async () => {
+  const page = { getByText: vi.fn(() => ({ waitFor: async () => {}, count: async () => 1 })),
+    getByRole: vi.fn(() => { throw new Error('No debe buscar otra cuenta'); }) };
+  await selectIdCustomer(page);
+  expect(page.getByRole).not.toHaveBeenCalled();
+  expect(page.getByText).toHaveBeenCalledWith('(2059) ELEVE SAS', { exact: true });
+});
+
+it('busca únicamente ELEVE SAS cuando no se seleccionó automáticamente', async () => {
+  const waitFor = vi.fn().mockRejectedValueOnce(new Error('No auto-selection')).mockResolvedValue(undefined);
+  const fill = vi.fn(), click = vi.fn();
+  const page = { getByText: () => ({ waitFor, count: async () => 1 }),
+    getByRole: vi.fn(role => role === 'combobox' ? { fill } : { click }) };
+  await selectIdCustomer(page);
+  expect(fill).toHaveBeenCalledWith('ELEVE');
+  expect(page.getByRole).toHaveBeenCalledWith('option', { name: '(2059) ELEVE SAS', exact: true });
+  expect(click).toHaveBeenCalledOnce();
+});
+
+function brandPage(currentBrand, initialMenu = false, ambiguous = false) {
+  let menu = initialMenu;
+  const clicked = [];
+  function container(depth) {
+    return { locator: () => container(depth + 1), getByText: name => ({
+      count: async () => !depth ? 0 : ambiguous ? 2 : 1,
+      click: async () => { clicked.push(name); currentBrand = name; menu = false; },
+    }) };
+  }
+  const heading = { isVisible: async () => menu, locator: () => container(0),
+    waitFor: async options => { expect(menu).toBe(options?.state !== 'hidden'); } };
+  const current = { or: () => ({ first: () => ({ waitFor: async () => {} }) }),
+    click: async () => { clicked.push('open menu'); menu = true; } };
+  const page = { getByRole: (role, { name }) => role === 'heading' ? heading : name instanceof RegExp ? current : {
+    isVisible: async () => menu || currentBrand === name,
+    waitFor: async () => { expect(currentBrand).toBe(name); expect(menu).toBe(false); },
+    count: async () => currentBrand === name && !menu ? 1 : 0,
+  } };
+  return { page, clicked };
+}
+
+it('conserva la marca correcta cuando el portal ya la recuerda', async () => {
+  const fixture = brandPage('Converse');
+  await selectIdBrand(fixture.page, 'converse');
+  expect(fixture.clicked).toEqual([]);
+});
+
+it('cambia la marca desde el encabezado antes de descargar', async () => {
+  const fixture = brandPage('Converse');
+  await selectIdBrand(fixture.page, 'lecoq');
+  expect(fixture.clicked).toEqual(['open menu', 'Le Coq Sportif']);
+});
+
+it('elige la marca en el menú inicial y rechaza opciones ambiguas', async () => {
+  const fixture = brandPage('Le Coq Sportif', true);
+  await selectIdBrand(fixture.page, 'converse');
+  expect(fixture.clicked).toEqual(['Converse']);
+  const invalid = brandPage('Le Coq Sportif', true, true);
+  await expect(selectIdBrand(invalid.page, 'converse')).rejects.toThrow('ambiguo');
+  expect(invalid.clicked).toEqual([]);
 });
 
 it('no expone valores de campos cuando Playwright falla al completar el acceso', async () => {
