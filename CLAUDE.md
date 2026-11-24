@@ -1,5 +1,13 @@
 # Guía del proyecto — Sincronización de Stock e Inventario (INDY)
 
+**Acceso automático a ID (24-nov-2026).** El portal muestra «Ingresar» en el login;
+el ejecutor anterior esperaba «Iniciar sesión» y se detenía antes de descargar.
+Aceptar ambos nombres completos y exigir una coincidencia única. Ante fallos,
+registrar únicamente la etapa fija del recorrido, nunca errores crudos de Playwright
+(pueden contener valores de los campos), contraseñas, cookies o trazas. Conservar
+cliente ELEVE SAS, canal DISPONIBLE y comprobación de pedido vacío; nunca enviar pedidos.
+El ejecutor privado debe fijar el commit corregido para tomar el cambio.
+
 **Stock de ID.** Los botones de cantidades y talles habilitados usan `/api/id-stock`.
 La sesión humana confirma las filas de la simulación. Cada cuatro horas, el ejecutor privado procesa
 Converse y Le Coq Sportif, cada marca con su propio Excel, simulación y verificación. Acredita
