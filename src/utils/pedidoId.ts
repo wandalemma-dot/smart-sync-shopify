@@ -87,6 +87,63 @@ export function idsOrdenes(text: string): string[] {
   return [...ids];
 }
 
+// Órdenes pendientes de iD leídas directo de Shopify, sin exportar el CSV (25-nov-2026, gax: «que tome
+// directamente las órdenes de Shopify… busco por marca, primero Le Coq y después Converse»). Mismo filtro que
+// usaba gax en Pedidos: sucursal iD, sin preparar o en parte, pagadas, sin «pedido id» ni «solucionar», con
+// algo pendiente de la marca. Solo junta los ids: el armado vuelve a leer y controlar cada orden como siempre.
+export const PENDIENTES_ID_QUERY = `query PedidoIdPendientes($q: String!, $after: String) {
+  fulfillmentOrders(first: 25, after: $after, query: $q) {
+    pageInfo { hasNextPage endCursor }
+    nodes { status
+      order { id name cancelledAt closed displayFinancialStatus tags }
+      lineItems(first: 10) { pageInfo { hasNextPage } nodes { remainingQuantity lineItem { product { vendor } } } }
+    }
+  }
+}`;
+export interface OrdenesPendientesId { ids: string[]; pedidoId: number; solucionar: number; sinPagar: number; otraMarca: number }
+type Gql = (query: string, variables?: Record<string, unknown>) => Promise<any>;
+export async function ordenesPendientesId(marca: 'Converse' | 'Le Coq', progreso?: (n: number) => void, gql: Gql = shopifyGraphQL): Promise<OrdenesPendientesId> {
+  const locs: any = await gql(`query PedidoIdSucursales { locations(first: 100) { nodes { id name } } }`);
+  const loc = (locs?.locations?.nodes || []).find((l: any) => mismaSucursal(l.name, STOCK_LOCATION.converse));
+  if (!loc) throw new Error(`No encontré la sucursal ${STOCK_LOCATION.converse} en Shopify.`);
+  const q = `assigned_location_id:${String(loc.id).split('/').pop()}`;
+  const incluir = new Set<string>();
+  const motivo = new Map<string, 'pedidoId' | 'solucionar' | 'sinPagar' | 'otraMarca'>();
+  let after: string | null = null;
+  for (let pagina = 0; ; pagina++) {
+    if (pagina >= 120) throw new Error('Hay demasiadas preparaciones abiertas en iD para leerlas todas. Usá el export de órdenes (.csv).');
+    const d: any = await gql(PENDIENTES_ID_QUERY, { q, after });
+    const conn = d?.fulfillmentOrders;
+    const next = cursor(conn, after);
+    for (const fo of conn.nodes) {
+      const o = fo.order;
+      if (!o?.id || !['OPEN', 'IN_PROGRESS'].includes(fo.status) || o.cancelledAt || o.closed) continue;
+      const tags = (o.tags || []).map((t: string) => t.trim().toLowerCase());
+      const lineas = fo.lineItems?.nodes || [];
+      const deLaMarca = lineas.some((l: any) => l.remainingQuantity > 0 && marcaPedidoId(l.lineItem?.product?.vendor || '') === marca);
+      // Con más de 10 artículos en la preparación no se ven todos: entra y el armado la revisa entera.
+      const tal = deLaMarca || !!fo.lineItems?.pageInfo?.hasNextPage;
+      const m = tags.includes('pedido id') ? 'pedidoId' : tags.includes('solucionar') ? 'solucionar'
+        : o.displayFinancialStatus !== 'PAID' ? 'sinPagar' : !tal ? 'otraMarca' : null;
+      if (m) { if (!incluir.has(o.id) && (m !== 'otraMarca' || !motivo.has(o.id))) motivo.set(o.id, m); continue; }
+      incluir.add(o.id); motivo.delete(o.id);
+    }
+    progreso?.(incluir.size);
+    if (!next) break;
+    after = next;
+  }
+  const cuenta = (m: string) => [...motivo.values()].filter(x => x === m).length;
+  return { ids: [...incluir], pedidoId: cuenta('pedidoId'), solucionar: cuenta('solucionar'), sinPagar: cuenta('sinPagar'), otraMarca: cuenta('otraMarca') };
+}
+
+/** Marca de la plantilla de iD por sus códigos: Le Coq usa L + 2 letras + números (LFN9924029, LAN0122012P). */
+export function marcaDePlantilla(p: Pick<PlantillaId, 'articulos'>): 'Converse' | 'Le Coq' | null {
+  const lecoq = p.articulos.filter(a => /^L[A-Z]{2}\d/i.test(a.codigo)).length;
+  const otros = p.articulos.length - lecoq;
+  if (!p.articulos.length || lecoq === otros) return null;
+  return lecoq > otros ? 'Le Coq' : 'Converse';
+}
+
 function cursor(conn: any, anterior: string | null): string | null {
   if (!conn?.pageInfo || !Array.isArray(conn.nodes)) throw new Error('Shopify no devolvió una respuesta completa. No se generó el pedido.');
   if (!conn.pageInfo.hasNextPage) return null;

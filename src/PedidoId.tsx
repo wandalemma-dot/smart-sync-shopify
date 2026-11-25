@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
-import { idsOrdenes, leerPendientesId, leerPlantillaId, cruzarPedido, generarExcelPedido, detectarPedidosMixtos, marcaPedidoId } from './utils/pedidoId';
-import type { PlantillaId, PendientesSucursal } from './utils/pedidoId';
+import { idsOrdenes, ordenesPendientesId, marcaDePlantilla, leerPendientesId, leerPlantillaId, cruzarPedido, generarExcelPedido, detectarPedidosMixtos, marcaPedidoId } from './utils/pedidoId';
+import type { PlantillaId, PendientesSucursal, OrdenesPendientesId } from './utils/pedidoId';
 import ExclusionPedidoId from './ExclusionPedidoId';
 import { entranteDe, textoEntrante } from './utils/entrantesId';
 import { leerEntrantes, type Entrantes } from './utils/leerEntrantes';
@@ -9,7 +9,12 @@ import NumeroPedidoId, { guardarUltimaDescarga, leerUltimaDescarga, type UltimaD
 import { etiquetarOrdenes, etiquetasPedidoId, hoyArgentina, ordenesAEtiquetar, type ResultadoEtiquetas } from './utils/etiquetaPedidoId';
 
 export default function PedidoId() {
+  // Por defecto las órdenes se leen directo de Shopify, por marca (25-nov-2026, gax); el CSV queda de respaldo.
+  const [usarCsv, setUsarCsv] = useState(false);
   const [csv, setCsv] = useState<File | null>(null);
+  const [marca, setMarca] = useState<'Converse' | 'Le Coq' | null>(null);
+  const [marcaAuto, setMarcaAuto] = useState(false);
+  const [salteadas, setSalteadas] = useState<OrdenesPendientesId | null>(null);
   const [excel, setExcel] = useState<File | null>(null);
   const [plantilla, setPlantilla] = useState<PlantillaId | null>(null);
   const [pendientes, setPendientes] = useState<(PendientesSucursal & { ordenes: number }) | null>(null);
@@ -25,31 +30,50 @@ export default function PedidoId() {
   // Órdenes etiquetadas en la última descarga: ahí va después el número de pedido de iD (19-nov-2026).
   const [ultima, setUltima] = useState<UltimaDescarga | null>(() => leerUltimaDescarga());
   const cambiarUltima = (d: UltimaDescarga | null) => { setUltima(d); guardarUltimaDescarga(d); };
-  const reset = () => { setEtiquetas(null); setEntrantes(null); setErrorEntrantes(''); setPendientes(null); setPlantilla(null); setOmitidas([]); setRevisado(false); setError(''); setEstado(''); };
+  const reset = () => { setSalteadas(null); setEtiquetas(null); setEntrantes(null); setErrorEntrantes(''); setPendientes(null); setPlantilla(null); setOmitidas([]); setRevisado(false); setError(''); setEstado(''); };
   const resultado = useMemo(() => pendientes && plantilla
     ? cruzarPedido(pendientes.lineas, plantilla, pendientes.avisos, pendientes.ordenes, omitidas) : null, [pendientes, plantilla, omitidas]);
   const mixtos = useMemo(() => detectarPedidosMixtos(pendientes?.lineas || [], pendientes?.etiquetadas || []), [pendientes]);
   const ordenesMixtas = new Set(mixtos.map(o => o.orden));
   // Órdenes que quedan etiquetadas «pedido id» al descargar (18-nov-2026, gax): solo las que se piden completas.
   const aEtiquetar = useMemo(() => pendientes && plantilla ? ordenesAEtiquetar(pendientes.lineas, plantilla, omitidas) : null, [pendientes, plantilla, omitidas]);
+  async function elegirPlantilla(f: File | null) {
+    setExcel(f);
+    if (!f) return;
+    try {
+      const m = marcaDePlantilla(leerPlantillaId(new Uint8Array(await f.arrayBuffer())));
+      if (m) { setMarca(m); setMarcaAuto(true); }
+    } catch { /* el error de la plantilla se muestra al armar */ }
+  }
   function seleccionar(id: string, incluir: boolean) {
     setOmitidas(actual => incluir ? actual.filter(x => x !== id) : [...new Set([...actual, id])]);
     setRevisado(false);
   }
   async function armar() {
-    if (!csv || !excel) return;
+    if (!excel || (usarCsv ? !csv : !marca)) return;
     reset(); setOcupado(true);
+    // Lo que ya está en camino (Trello), en paralelo con Shopify. Si falla, el pedido se arma igual.
+    let enCamino: Promise<void> | null = null;
     try {
       const p = leerPlantillaId(new Uint8Array(await excel.arrayBuffer()));
-      const ids = idsOrdenes(await csv.text());
-      // Lo que ya está en camino (Trello), en paralelo con Shopify. Si falla, el pedido se arma igual.
-      const enCamino = leerEntrantes().then(setEntrantes, (e: unknown) => setErrorEntrantes(`No pude leer lo que está por entrar: ${(e as Error)?.message || e}. La columna «Entrantes» queda vacía.`));
+      const delaPlantilla = marcaDePlantilla(p);
+      if (!usarCsv && marca && delaPlantilla && delaPlantilla !== marca) throw new Error(`La plantilla parece de ${delaPlantilla} y elegiste ${marca}. Elegí la marca de la plantilla.`);
+      enCamino = leerEntrantes().then(setEntrantes, (e: unknown) => setErrorEntrantes(`No pude leer lo que está por entrar: ${(e as Error)?.message || e}. La columna «Entrantes» queda vacía.`));
+      let ids: string[];
+      if (usarCsv && csv) ids = idsOrdenes(await csv.text());
+      else {
+        setEstado(`Buscando en Shopify las órdenes de ${marca} pendientes en iD…`);
+        const r = await ordenesPendientesId(marca!, n => setEstado(`Buscando en Shopify las órdenes de ${marca} pendientes en iD… ${n} encontradas`));
+        setSalteadas(r);
+        ids = r.ids;
+        if (!ids.length) { await enCamino; setEstado(`No hay órdenes de ${marca} pagadas y sin preparar en iD (sin «pedido id» ni «solucionar»). No hay nada para pedir.`); return; }
+      }
       setEstado(`Consultando 0 de ${ids.length} órdenes…`);
       const pendientes = await leerPendientesId(ids, n => setEstado(`Consultando ${n} de ${ids.length} órdenes…`));
       await enCamino;
       setPlantilla(p); setPendientes({ ...pendientes, ordenes: ids.length });
       setEstado('Revisión lista. El Excel todavía no se envió a iD.');
-    } catch (e: any) { setError(e.message || 'No se pudo armar el pedido.'); setEstado(''); }
+    } catch (e: any) { await enCamino?.catch(() => undefined); setError(e.message || 'No se pudo armar el pedido.'); setEstado(''); }
     finally { setOcupado(false); }
   }
   async function descargar() {
@@ -87,16 +111,34 @@ export default function PedidoId() {
     <p>Órdenes pendientes → revisión por artículo y talle → Excel de iD completo.</p>
     <p style={{ opacity: .8 }}>Incluye únicamente cantidades pendientes asignadas a iD en órdenes abiertas y pagadas. Excluye etiquetas «pedido id» y «solucionar». Conserva Martínez. No envía pedidos. Al descargar, etiqueta «pedido id» y la fecha en las órdenes que se piden completas; después podés sumar el número de pedido de iD.</p>
     <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-      <label className="dropzone" style={{ flex: 1, minWidth: 240 }}>1. Export de órdenes (.csv)
-        <input aria-label="Export de órdenes" type="file" accept=".csv" disabled={ocupado} onChange={e => { reset(); setCsv(e.target.files?.[0] || null); }} />
+      <label className="dropzone" style={{ flex: 1, minWidth: 240 }}>1. Plantilla actual de iD (.xlsx)
+        <input aria-label="Plantilla de iD" type="file" accept=".xlsx" disabled={ocupado} onChange={e => { reset(); elegirPlantilla(e.target.files?.[0] || null); }} />
       </label>
-      <label className="dropzone" style={{ flex: 1, minWidth: 240 }}>2. Plantilla actual de iD (.xlsx)
-        <input aria-label="Plantilla de iD" type="file" accept=".xlsx" disabled={ocupado} onChange={e => { reset(); setExcel(e.target.files?.[0] || null); }} />
-      </label>
+      {usarCsv
+        ? <label className="dropzone" style={{ flex: 1, minWidth: 240 }}>2. Export de órdenes (.csv)
+            <input aria-label="Export de órdenes" type="file" accept=".csv" disabled={ocupado} onChange={e => { reset(); setCsv(e.target.files?.[0] || null); }} />
+          </label>
+        : <div style={{ flex: 1, minWidth: 240, border: '1px dashed #6366f1', borderRadius: 8, padding: 12 }}>
+            <div>2. Órdenes: se leen directo de Shopify, de la marca</div>
+            <div role="radiogroup" aria-label="Marca del pedido" style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+              {(['Le Coq', 'Converse'] as const).map(m => <button key={m} type="button" role="radio" aria-checked={marca === m} disabled={ocupado}
+                onClick={() => { reset(); setMarca(m); setMarcaAuto(false); }}
+                style={{ padding: '6px 14px', borderRadius: 6, border: '1px solid #818cf8', background: marca === m ? '#6366f1' : 'transparent', color: 'inherit', fontWeight: marca === m ? 'bold' : undefined }}>{marca === m ? '✓ ' : ''}{m}</button>)}
+            </div>
+            {marca && marcaAuto && <div style={{ fontSize: '.8rem', opacity: .8, marginTop: 6 }}>Elegida según los códigos de la plantilla.</div>}
+          </div>}
     </div>
+    <p style={{ fontSize: '.85rem', opacity: .85 }}>{usarCsv
+      ? <>Se usan solo las órdenes del CSV. <button type="button" disabled={ocupado} onClick={() => { reset(); setUsarCsv(false); setCsv(null); }} style={{ background: 'none', border: 'none', color: '#a5b4fc', textDecoration: 'underline', cursor: 'pointer', padding: 0 }}>Volver a leerlas de Shopify</button></>
+      : <>Busca las órdenes de la marca con algo sin preparar en iD, pagadas y sin «pedido id» ni «solucionar» (lo mismo que filtrabas en Pedidos para exportar). <button type="button" disabled={ocupado} onClick={() => { reset(); setUsarCsv(true); }} style={{ background: 'none', border: 'none', color: '#a5b4fc', textDecoration: 'underline', cursor: 'pointer', padding: 0 }}>Prefiero subir un export de órdenes (.csv)</button></>}</p>
     <p>Podés procesar una plantilla por vez. Los artículos de otra plantilla aparecerán en «Revisar».</p>
-    <button className="btn-primary" style={{ background: '#6366f1', marginTop: 12 }} disabled={!csv || !excel || ocupado} onClick={armar}>{ocupado ? 'Consultando Shopify…' : 'Armar y revisar pedido'}</button>
+    <button className="btn-primary" style={{ background: '#6366f1', marginTop: 12 }} disabled={!excel || (usarCsv ? !csv : !marca) || ocupado} onClick={armar}>{ocupado ? 'Consultando Shopify…' : 'Armar y revisar pedido'}</button>
     <p role="status">{estado}</p>
+    {salteadas && (salteadas.pedidoId + salteadas.solucionar + salteadas.sinPagar) > 0 && <p style={{ fontSize: '.85rem', opacity: .8 }}>No se tienen en cuenta: {[
+      salteadas.pedidoId && `${salteadas.pedidoId} con «pedido id» (ya pedidas)`,
+      salteadas.solucionar && `${salteadas.solucionar} con «solucionar»`,
+      salteadas.sinPagar && `${salteadas.sinPagar} sin pagar del todo`,
+    ].filter(Boolean).join(' · ')}.</p>}
     {error && <p role="alert" style={{ color: '#fda4af', whiteSpace: 'pre-wrap' }}>{error}</p>}
     {ultima && !etiquetando && <NumeroPedidoId key={`${ultima.fecha}|${ultima.ordenes.map(o => o.ordenId).join(',')}`} ultima={ultima} onCambio={cambiarUltima} />}
     {resultado && <>
@@ -119,7 +161,7 @@ export default function PedidoId() {
             </label>;
           })}
         </details>)}
-        <p style={{ opacity: .85 }}>La selección vale para este análisis. No cambia etiquetas ni preparaciones en Shopify. Solo se revisan las órdenes incluidas en el CSV y sus artículos pendientes en iD.</p>
+        <p style={{ opacity: .85 }}>La selección vale para este análisis. No cambia etiquetas ni preparaciones en Shopify. Solo se revisan las órdenes de este armado y sus artículos pendientes en iD.</p>
       </div>}
       {omitidas.length > 0 && <p style={{ color: '#e9d5ff' }}>{omitidas.length} artículo(s) excluido(s) manualmente de esta compra. Podés volver a tildarlos en los pedidos mixtos.</p>}
       {plantilla?.previas ? <p style={{ color: '#fcd34d' }}>La plantilla tenía {plantilla.previas} cantidades cargadas. La descarga las reemplaza por este pedido nuevo; no las suma.</p> : null}
