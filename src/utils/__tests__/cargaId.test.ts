@@ -282,6 +282,18 @@ describe('iD: vista previa de la carga', () => {
   });
 });
 
+describe('iD: la foto del remito no trae un artículo de la factura (25-nov-2026, factura 0011-00140160)', () => {
+  it('avisa que se arma con lo facturado y cómo corregirlo', () => {
+    const r = { ...resultado([fila([{ talle: 'L', cantidad: 2 }])]), difRemito: [{ codigo: 'CTO0325003', factura: 4, remito: 0 }] } as ResultadoFactura;
+    const plan = planCargaId(r, estado(), {});
+    const av = plan.avisos.join(' ');
+    expect(av).toMatch(/El remito leído no trae CTO0325003 \(factura 4\): se arma con lo facturado\..*Ver o corregir.*no llegó/);
+    expect(av).not.toMatch(/se carga lo del remito/);
+    const otro = planCargaId({ ...r, difRemito: [{ codigo: 'CTO0325003', factura: 4, remito: 3 }] } as ResultadoFactura, estado(), {});
+    expect(otro.avisos.join(' ')).toMatch(/se carga lo del remito/);
+  });
+});
+
 describe('iD: carga después de confirmar (precio y costo ANTES del stock)', () => {
   const setOk = () => ({ inventorySetQuantities: { inventoryAdjustmentGroup: { createdAt: 'x' }, userErrors: [] } });
   function deps(gql: DepsCarga['gql'], precios: (v: unknown) => Promise<unknown>) {

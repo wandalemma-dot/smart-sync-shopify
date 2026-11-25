@@ -193,9 +193,10 @@ export async function probarPlanilla(): Promise<{ hoja?: string; sinPlanilla?: b
 }
 
 /** Lee fotos con IA (api/leer-remito.js): el remito, o la planilla de entrega de Family. */
-export async function leerFotos<T>(files: File[], tipo: 'remito' | 'entrega' | 'factura' | 'ullua' = 'remito'): Promise<T> {
+export async function leerFotos<T>(files: File[], tipo: 'remito' | 'entrega' | 'factura' | 'ullua' = 'remito', esperados?: string[]): Promise<T> {
   const fotos = await prepararFotos(files);
-  const r = await fetch('/api/leer-remito', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fotos, tipo }) });
+  // esperados: los códigos de la factura, para que la lectura del remito no se saltee renglones (25-nov-2026).
+  const r = await fetch('/api/leer-remito', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fotos, tipo, ...(esperados?.length ? { esperados } : {}) }) });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(d.error || `Error ${r.status}`);
   return d as T;

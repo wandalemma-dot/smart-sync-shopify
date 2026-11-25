@@ -5,7 +5,7 @@
 // escrito y la persona lo manda. El destinatario se guarda en la base (cf:config), nunca en el código.
 import { pesos } from './avisoPrecio';
 import type { ResultadoCarga } from './cargaFamily';
-import { diferenciasInformativas, motivoInformativo, type ResultadoFactura } from './controlFacturas';
+import { claveCodigo, diferenciasInformativas, motivoInformativo, type ResultadoFactura } from './controlFacturas';
 
 /** 2026-11-10 → 10/11/26, como la planilla. */
 export const fechaCorta = (iso: string) => {
@@ -46,13 +46,49 @@ export function proveedorPlanilla(prov: 'id' | 'distrinando' | 'target', titulos
   return 'ID CONVERSE';
 }
 
+/**
+ * Lo interno del control, que no es una diferencia con el proveedor (25-nov-2026, planilla de ingreso: «FALTANTE:
+ * CTO0226101 (pedido 8, facturado 6…)» salía en naranja): a qué nota corresponde cada artículo, lo que todavía
+ * falta entregar de la nota y los adelantos. No va a la planilla ni al mail a administración.
+ */
+const INTERNO = /^(OTRA NOTA|FALTANTE|ADELANTO|INCOMPLETA):/;
+/** Lo que se le dice al proveedor como diferencia (se lo pide antes de pagar). */
+const GRAVE = /^(REMITO: facturaron |DOBLE COBRO:)/;
+
+/**
+ * Con lo que ya se cargó (25-nov-2026, factura 0011-00140160: la foto del remito se salteó el primer renglón,
+ * 10027339A03, y la planilla anotó «facturaron más de lo que dice el remito» aunque el depósito lo tenía en la mano
+ * y lo cargó): un artículo que la foto del remito no trae completo pero se cargó en Shopify por lo menos con lo
+ * facturado sí llegó. Se saca de esa diferencia; lo que no se cargó sigue.
+ */
+export function conLoCargado(r: ResultadoFactura, resultados: ResultadoCarga[]): ResultadoFactura {
+  const cargado = new Map<string, number>();
+  for (const x of resultados) {
+    if (x.estado !== 'cargada' && x.estado !== 'parcial') continue;
+    const u = (x.detalle?.sumados ?? []).reduce((s, t) => s + (Number(t.suma) || 0), 0);
+    cargado.set(claveCodigo(x.codigo), (cargado.get(claveCodigo(x.codigo)) ?? 0) + u);
+  }
+  const llego = (d: { codigo: string; factura: number }) => (cargado.get(claveCodigo(d.codigo)) ?? 0) >= d.factura;
+  const faltan = (r.difRemito ?? []).filter((d) => d.remito < d.factura);
+  if (!faltan.some(llego)) return r;
+  const quedan = faltan.filter((d) => !llego(d));
+  const motivos = r.motivos.flatMap((m) => {
+    if (!/^REMITO: facturaron más de lo que dice el remito:/.test(m)) return [m];
+    return quedan.length ? [`REMITO: facturaron más de lo que dice el remito: ${quedan.map((d) => `${d.codigo} (factura ${d.factura}, remito ${d.remito})`).join(', ')}.`] : [];
+  });
+  return { ...r, motivos, difRemito: (r.difRemito ?? []).filter((d) => !(d.remito < d.factura && llego(d))) };
+}
+
+/** Las diferencias que se le informan a administración, sin lo interno del control. */
+export const motivosParaAdmin = (r: ResultadoFactura) => r.motivos.filter((m) => !INTERNO.test(m) && !/^REMITO: el remito cargado es el /.test(m));
+
 /** Observaciones: «ok», «Facturado más caro ($ …)», o la diferencia encontrada (solo informa). */
 export function observacionesPlanilla(r: ResultadoFactura): string {
   const partes: string[] = [];
   if (r.notaFaltante) partes.push(`Sin nota de pedido (${r.unidadesSinNota} de ${r.unidades} u.)`);
   if (r.totalDifPrecio > 0) partes.push(`Facturado más caro (${pesos(r.totalDifPrecio)} de más)`);
   if (r.totalSinPedirNeto > 0) partes.push(`Facturado sin pedir (${pesos(r.totalSinPedirNeto)} neto)`);
-  if (!partes.length && r.semaforo === 'reclamar') partes.push(...r.motivos.slice(0, 2).map(motivoInformativo));
+  if (!partes.length) partes.push(...r.motivos.filter((m) => GRAVE.test(m)).slice(0, 2).map(motivoInformativo));
   return partes.length ? partes.join(' · ') : 'ok';
 }
 
@@ -88,7 +124,8 @@ function lineasCarga(resultados: ResultadoCarga[], sucursal: string): { lineas: 
 const MAX_CUERPO = 1800;
 
 /** Asunto y texto del mail a administración. */
-export function textoAvisoAdmin(o: DatosAvisoAdmin): { asunto: string; cuerpo: string; filas: [string, string][] } {
+export function textoAvisoAdmin(entrada: DatosAvisoAdmin): { asunto: string; cuerpo: string; filas: [string, string][] } {
+  const o = { ...entrada, r: conLoCargado(entrada.r, entrada.resultados) };
   const f = o.r.factura;
   const proveedor = proveedorPlanilla(o.prov, o.resultados.map((x) => x.detalle?.titulo ?? ''), o.r.factura.emisor);
   const filas: [string, string][] = [
@@ -117,8 +154,8 @@ export function textoAvisoAdmin(o: DatosAvisoAdmin): { asunto: string; cuerpo: s
     ...(ok ? ['La factura coincide con la nota de pedido: OK.']
       : o.r.notaFaltante
         ? [`No encontramos la nota de pedido de esta factura: ${o.r.unidadesSinNota} de ${o.r.unidades} u. no están en ninguna nota cargada. Puede faltar cargarla o puede ser un pedido que no es nuestro; lo estamos revisando.`,
-          ...diferenciasInformativas(o.r.motivos.filter((m) => !/^NOTA FALTANTE:/.test(m)))]
-        : ['La factura no coincide con la nota de pedido. Esto es lo que se encontró:', ...diferenciasInformativas(o.r.motivos)]),
+          ...diferenciasInformativas(motivosParaAdmin(o.r).filter((m) => !/^NOTA FALTANTE:/.test(m)))]
+        : ['La factura no coincide con la nota de pedido. Esto es lo que se encontró:', ...diferenciasInformativas(motivosParaAdmin(o.r))]),
     '', cargado];
   const pie = c.revisar.length ? ['', 'Para revisar:', ...c.revisar] : [];
   // Los enlaces de mail tienen un largo máximo: el detalle por artículo se corta con aviso.
@@ -140,7 +177,8 @@ export interface FilaPlanilla {
 }
 
 /** Como las filas que ya están: «FAC.OK - 0011-…» si está todo bien, «FAC. - …» si hay algo; observaciones «APP - …». */
-export function filaPlanilla(o: DatosAvisoAdmin): FilaPlanilla {
+export function filaPlanilla(datos: DatosAvisoAdmin): FilaPlanilla {
+  const o = { ...datos, r: conLoCargado(datos.r, datos.resultados) };
   const f = o.r.factura;
   const obs = observacionesPlanilla(o.r);
   const ok = obs === 'ok';

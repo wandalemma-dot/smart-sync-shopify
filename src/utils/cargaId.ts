@@ -614,7 +614,11 @@ export function planCargaId(r: ResultadoFactura, estado: EstadoCargaId, cargas: 
   const enFactura = new Set(r.checklist.map((c) => claveCodigo(c.codigo)));
   const fuera = (r.remito?.renglones ?? []).filter((x) => !enFactura.has(claveCodigo(x.codigo))).map((x) => x.codigo);
   if (fuera.length) avisos.push(`En el remito y no en la factura: ${[...new Set(fuera)].join(', ')}. No se cargan desde acá: revisalo y cargalo a mano.`);
-  if (r.difRemito.length) avisos.push('El remito y la factura no coinciden en algún artículo: se carga lo del remito (lo que llegó).');
+  // Un artículo de la factura que la foto del remito no trae (25-nov-2026, factura 0011-00140160: la foto girada se
+  // salteó el primer renglón) se arma con lo facturado: que el depósito confirme si llegó antes de cargarlo.
+  const sinRemito = r.remito ? r.difRemito.filter((d) => d.remito === 0 && d.factura > 0) : [];
+  if (sinRemito.length) avisos.push(`El remito leído no trae ${sinRemito.map((d) => `${d.codigo} (factura ${d.factura})`).join(', ')}: se arma con lo facturado. Si llegó, cargalo y, si la foto se salteó el renglón, corregí el remito en «✏️ Ver o corregir»; si no llegó, «Sacar de la carga (no llegó)».`);
+  if (r.difRemito.length > sinRemito.length) avisos.push('El remito y la factura no coinciden en algún artículo: se carga lo del remito (lo que llegó).');
   if (estado.errorPendientes) avisos.push(`No pude leer las ventas pendientes de iD (${estado.errorPendientes}): no separo nada. Revisá a mano si algo de lo que llegó ya está vendido antes de cargar.`);
   const items = r.checklist.map((orig): ItemCarga => {
     const ren = r.factura.renglones.find((x) => claveCodigo(x.codigo) === claveCodigo(orig.codigo));

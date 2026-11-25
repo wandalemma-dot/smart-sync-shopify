@@ -1,6 +1,6 @@
 // Aviso de carga a administración y comentario en Trello (16-nov-2026, gax).
 import { describe, expect, it } from 'vitest';
-import { comentarioTrello, diaArgentina, fechaCorta, fechaIngreso, filaPlanilla, filaPlanillaFamily, observacionesPlanilla, proveedorPlanilla, textoAvisoAdmin } from '../avisoAdmin';
+import { comentarioTrello, conLoCargado, diaArgentina, fechaCorta, fechaIngreso, filaPlanilla, filaPlanillaFamily, observacionesPlanilla, proveedorPlanilla, textoAvisoAdmin } from '../avisoAdmin';
 import type { ResultadoCarga } from '../cargaFamily';
 import type { ResultadoFactura } from '../controlFacturas';
 
@@ -72,6 +72,38 @@ describe('Aviso de carga a administración', () => {
     const { cuerpo } = textoAvisoAdmin({ ...o, resultados: muchos });
     expect(cuerpo.length).toBeLessThan(2000);
     expect(cuerpo).toMatch(/… y \d+ artículo\(s\) más\./);
+  });
+});
+
+describe('Planilla y mail sin lo interno del control (25-nov-2026, factura 0011-00140160)', () => {
+  const f140160 = { ...r, semaforo: 'reclamar', difRemito: [{ codigo: '10027339A03', factura: 1, remito: 0 }], motivos: [
+    'REMITO: facturaron más de lo que dice el remito: 10027339A03 (factura 1, remito 0).',
+    'FALTANTE: CTO0226101 (pedido 8, facturado 6, faltan 2).',
+    'ADELANTO: toma unidades de un pedido posterior; no deben volver a facturarse.',
+  ] } as unknown as ResultadoFactura;
+  const pantalon: ResultadoCarga = { codigo: '10027339A03', estado: 'cargada', mensaje: '', detalle: { titulo: 'Pantalón Converse Cargo', sumados: [{ talle: 'L', antes: 0, suma: 1 }], costos: [], pasadas: [], notas: [] } };
+  it('lo que falta entregar de la nota no va: no es una diferencia con el proveedor', () => {
+    const soloFaltante = { ...r, semaforo: 'observaciones', motivos: ['FALTANTE: CTO0226101 (pedido 8, facturado 6, faltan 2).', 'OTRA NOTA: X (1) corresponde al pedido N° 1.'] } as unknown as ResultadoFactura;
+    expect(observacionesPlanilla(soloFaltante)).toBe('ok');
+    expect(textoAvisoAdmin({ ...o, r: soloFaltante }).cuerpo).not.toMatch(/FALTANTE|OTRA NOTA/);
+  });
+  it('la foto del remito se salteó un renglón pero el artículo se cargó: llegó, no se anota', () => {
+    expect(observacionesPlanilla(f140160)).toBe('REMITO: facturaron más de lo que dice el remito: 10027339A03 (factura 1, remito 0).');
+    const conCarga = { ...o, r: f140160, resultados: [pantalon] };
+    expect(filaPlanilla(conCarga)).toMatchObject({ factura: 'FAC.OK - 0011-00139953', observaciones: 'APP - ok', ok: true });
+    const { asunto, cuerpo } = textoAvisoAdmin(conCarga);
+    expect(asunto).toBe('Fac. OK ID - 0011-00139953');
+    expect(cuerpo).not.toMatch(/REMITO:|FALTANTE|ADELANTO/);
+  });
+  it('lo que no se cargó (o se cargó de menos) sigue como diferencia con el remito', () => {
+    const otro = { ...f140160, difRemito: [{ codigo: '10027339A03', factura: 1, remito: 0 }, { codigo: 'CTN1', factura: 3, remito: 1 }],
+      motivos: ['REMITO: facturaron más de lo que dice el remito: 10027339A03 (factura 1, remito 0), CTN1 (factura 3, remito 1).'] } as unknown as ResultadoFactura;
+    const menos: ResultadoCarga = { codigo: 'CTN1', estado: 'cargada', mensaje: '', detalle: { sumados: [{ talle: 'M', antes: 0, suma: 1 }], costos: [], pasadas: [], notas: [] } };
+    const x = conLoCargado(otro, [pantalon, menos]);
+    expect(x.motivos).toEqual(['REMITO: facturaron más de lo que dice el remito: CTN1 (factura 3, remito 1).']);
+    expect(filaPlanilla({ ...o, r: otro, resultados: [pantalon, menos] }).observaciones).toBe('APP - REMITO: facturaron más de lo que dice el remito: CTN1 (factura 3, remito 1).');
+    // Una carga con error no cuenta como que llegó.
+    expect(conLoCargado(f140160, [{ ...pantalon, estado: 'error' }]).motivos[0]).toMatch(/^REMITO: facturaron/);
   });
 });
 

@@ -19,7 +19,7 @@ export default async function handler(req, res) {
   }
   try {
     const tipo = ['entrega', 'factura', 'ullua'].includes(req.body?.tipo) ? req.body.tipo : 'remito';
-    return res.status(200).json(await leerRemito({ fotos: req.body?.fotos, tipo }));
+    return res.status(200).json(await leerRemito({ fotos: req.body?.fotos, tipo, esperados: req.body?.esperados }));
   } catch (e) {
     if (e && typeof e === 'object' && 'propio' in e) return res.status(400).json({ error: e.message });
     const status = e && typeof e === 'object' && 'status' in e ? e.status : 0;

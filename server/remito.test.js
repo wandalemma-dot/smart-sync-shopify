@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { COOKIE, makeSession } from './access.js';
-import { leerRemito, normalizarEntrega, normalizarFactura, normalizarRemito, normalizarUllua, validarFotos } from './remito.js';
+import { codigosEsperados, leerRemito, normalizarEntrega, normalizarFactura, normalizarRemito, normalizarUllua, validarFotos } from './remito.js';
 import handler from '../api/leer-remito.js';
 
 const foto = { media: 'image/jpeg', datos: 'QUJD' };
@@ -105,6 +105,24 @@ describe('lectura de la foto del remito', () => {
     const pedido = create.mock.calls[0][0];
     expect(JSON.stringify(pedido.output_config)).not.toMatch(/retirado/);
     expect(JSON.stringify(pedido.messages)).toMatch(/NO cambian nada/);
+  });
+});
+
+describe('códigos de la factura como ayuda (25-nov-2026, factura 0011-00140160)', () => {
+  it('se le pasan al modelo para que no se saltee renglones, sin pedirle que los complete', async () => {
+    const { create, cliente: c } = cliente(json({ numero: '', fecha: '', renglones: [{ codigo: 'CTN0124014', cantidad: 10, talles: [] }], dudas: [] }));
+    await leerRemito({ fotos: [foto], cliente: c, esperados: ['10027339a03', 'CTN0124014', 'CTN0124014', '=HACK()', ''] });
+    const texto = create.mock.calls[0][0].messages[0].content.find((b) => b.type === 'text').text;
+    expect(texto).toContain('trae estos códigos: 10027339A03, CTN0124014.');
+    expect(texto).toMatch(/No agregues un código que no ves en la foto/);
+    expect(texto).not.toContain('HACK');
+  });
+  it('solo en el remito, y sin lista no cambia nada', async () => {
+    const a = cliente(json({ numero: '', fecha: '', renglones: [{ codigo: 'A1', cantidad: 1, talles: [] }], dudas: [] }));
+    await leerRemito({ fotos: [foto], cliente: a.cliente });
+    expect(JSON.stringify(a.create.mock.calls[0][0].messages)).not.toMatch(/trae estos códigos/);
+    expect(codigosEsperados('A1')).toEqual([]);
+    expect(codigosEsperados(Array.from({ length: 300 }, (_, i) => `C${i}`))).toHaveLength(150);
   });
 });
 
