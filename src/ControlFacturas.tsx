@@ -841,10 +841,12 @@ export default function ControlFacturas() {
   }
 
   /** Lee la foto del remito y la guarda en la factura. Si no se puede, deja el error para escribirlo a mano. */
-  async function remitoDeFotos(facturaId: string, files: File[]): Promise<string[]> {
+  async function remitoDeFotos(facturaId: string, files: File[], factura?: Factura): Promise<string[]> {
     setOcupado('Leyendo la foto del remito… (puede tardar un minuto)');
     try {
-      const remito = await leerFotos<Remito>(files);
+      // Los códigos de la factura, para que la lectura no se saltee renglones (25-nov-2026, factura 0011-00140160).
+      const f = factura ?? datos.facturas.find((x) => x.id === facturaId);
+      const remito = await leerFotos<Remito>(files, 'remito', [...new Set((f?.renglones ?? []).map((x) => x.codigo))]);
       await api({ proveedor: prov, accion: 'guardarRemito', facturaId, remito });
       const u = remito.renglones.reduce((s, r) => s + r.cantidad, 0);
       return [`Remito ${remito.numero || ''} leído de la foto: ${remito.renglones.length} artículos, ${u} unidades.${remito.dudas?.length ? ' Revisá las dudas que marqué.' : ''}`];
@@ -1185,7 +1187,7 @@ export default function ControlFacturas() {
     } catch (e) { setAvisos([`${nombreArchivo}: ${mensaje(e)}`]); return; }
     if (p === 'target') for (const f of paraTrello) fotosDeFactura.current.add(f);
     recordar(factura.id, [...paraTrello, ...nuevasFotos], false);
-    if (nuevasFotos.length) nuevos.push(...await remitoDeFotos(factura.id, nuevasFotos));
+    if (nuevasFotos.length) nuevos.push(...await remitoDeFotos(factura.id, nuevasFotos, factura));
     if (!sigue(p)) return;
     setNuevaFactura(null); setFotosFactura([]); setNuevasFotos([]);
     await recargar();

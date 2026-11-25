@@ -1018,7 +1018,7 @@ export function diferenciasInformativas(motivos: string[]): string[] {
  * informar la diferencia… que no manden algo que no se pidió»). Afuera lo interno del control: a qué nota
  * corresponde cada artículo (OTRA NOTA), lo que falta entregar, adelantos y avisos de carga.
  */
-const PARA_ADMIN = /^(NOTA FALTANTE|FACTURADO SIN PEDIR|DOBLE COBRO|TALLES|REMITO: facturaron|REMITO: llegó|CUENTAS):| no figura en ninguna nota de pedido/;
+const PARA_ADMIN = /^(NOTA FALTANTE:|FACTURADO SIN PEDIR:|DOBLE COBRO:|TALLES:|REMITO: facturaron |REMITO: llegó |CUENTAS:)| no figura en ninguna nota de pedido/;
 
 function lineasPrecio(r: ResultadoFactura): string[] {
   const out: string[] = [];

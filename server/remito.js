@@ -330,18 +330,42 @@ export function normalizarUllua(crudo) {
 }
 
 /**
+ * Códigos de la factura de la entrega (25-nov-2026, factura 0011-00140160: la foto girada y con reflejo se salteó el
+ * primer renglón, 10027339A03, y el control dijo «facturaron más de lo que dice el remito»). Se le pasan al modelo
+ * solo para que no se le pase ningún renglón: nunca para completar lo que no ve.
+ */
+export function codigosEsperados(lista) {
+  if (!Array.isArray(lista)) return [];
+  const out = [];
+  for (const x of lista) {
+    const c = String(x ?? '').trim().toUpperCase();
+    if (/^[A-Z0-9][A-Z0-9.\-\/]{1,39}$/.test(c) && !out.includes(c)) out.push(c);
+    if (out.length >= 150) break;
+  }
+  return out;
+}
+
+function ayudaEsperados(lista) {
+  if (!lista.length) return '';
+  return `\nLa factura de esta entrega trae estos códigos: ${lista.join(', ')}.
+Usalos solo para no saltearte renglones: recorré el remito renglón por renglón (también el primero y el último, aunque la foto esté girada o con reflejo) y buscá cada uno.
+No agregues un código que no ves en la foto ni copies cantidades de la factura. Si un código de la lista no está en el remito o no se lee, anotalo en «dudas» («no encontré X en la foto»).`;
+}
+
+/**
  * Lee el remito (o, con tipo 'entrega', la planilla de entrega de Family) de las fotos.
  * `cliente` se inyecta en los tests para no llamar a la API real.
  */
-export async function leerRemito({ fotos, cliente, tipo = 'remito' }) {
+export async function leerRemito({ fotos, cliente, tipo = 'remito', esperados }) {
   const validas = validarFotos(fotos);
+  const lista = tipo === 'remito' ? codigosEsperados(esperados) : [];
   const esEntrega = tipo === 'entrega';
   const esFactura = tipo === 'factura';
   const esUllua = tipo === 'ullua';
   const client = cliente || new Anthropic({ apiKey: claveEnv('ANTHROPIC_API_KEY') });
   const content = [
     ...validas.map((f) => ({ type: 'image', source: { type: 'base64', media_type: f.media, data: f.datos } })),
-    { type: 'text', text: esUllua ? INSTRUCCIONES_ULLUA : esFactura ? INSTRUCCIONES_FACTURA : esEntrega ? INSTRUCCIONES_ENTREGA : INSTRUCCIONES },
+    { type: 'text', text: esUllua ? INSTRUCCIONES_ULLUA : esFactura ? INSTRUCCIONES_FACTURA : esEntrega ? INSTRUCCIONES_ENTREGA : INSTRUCCIONES + ayudaEsperados(lista) },
   ];
   const respuesta = await client.beta.messages.create({
     model: process.env.ANTHROPIC_MODEL || MODELO_POR_DEFECTO,
