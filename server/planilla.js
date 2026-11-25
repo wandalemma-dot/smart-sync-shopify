@@ -80,6 +80,19 @@ export async function anotarFila(fila, fetchImpl = fetch) {
   return { ok: true, yaEstaba: d.yaEstaba === true, ...(Number.isInteger(n) && n > 0 ? { fila: n } : {}) };
 }
 
+/**
+ * Corrige la fila de una factura que ya está en la planilla (25-nov-2026, gax: «que se corrija»): solo N° FACTURA
+ * («FAC.OK - …» / «FAC. - …») y OBSERVACIONES, con su color. No agrega filas ni toca fechas, remito ni monto.
+ */
+export async function corregirFila(fila, fetchImpl = fetch) {
+  const f = validarFila(fila);
+  if (!f.factura) throw error('Solo se corrigen filas de facturas.', 400);
+  const d = await llamar({ accion: 'corregir', fila: f }, fetchImpl);
+  const n = Number(d.fila);
+  return { ok: true, noEsta: d.noEsta === true, sinCambios: d.sinCambios === true, ...(Number.isInteger(n) && n > 0 ? { fila: n } : {}),
+    ...(typeof d.antes === 'string' ? { antes: d.antes.slice(0, 300) } : {}) };
+}
+
 /** Prueba la conexión sin escribir nada. */
 export async function probarPlanilla(fetchImpl = fetch) {
   const d = await llamar({ accion: 'probar' }, fetchImpl);

@@ -183,6 +183,17 @@ export async function anotarEnPlanilla(fila: unknown): Promise<{ fila?: number; 
   return d;
 }
 
+/** Corrige N° FACTURA y OBSERVACIONES de la fila de una factura que ya está en la planilla de ingreso. */
+export async function corregirEnPlanilla(fila: unknown): Promise<{ fila?: number; noEsta?: boolean; sinCambios?: boolean; antes?: string; sinPlanilla?: boolean; scriptViejo?: boolean }> {
+  const r = await fetch('/api/planilla', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ accion: 'corregir', fila }) });
+  const d = await r.json().catch(() => ({}));
+  if (r.status === 503 && d.sinPlanilla) return { sinPlanilla: true };
+  // El Apps Script de antes no conoce «corregir»: hay que pegar el código nuevo y publicar una versión nueva.
+  if (!r.ok && /Pedido inv/.test(String(d.error || ''))) return { scriptViejo: true };
+  if (!r.ok) throw new Error(d.error || `Error ${r.status}`);
+  return d;
+}
+
 /** Prueba la conexión con la planilla de ingreso, sin escribir nada. */
 export async function probarPlanilla(): Promise<{ hoja?: string; sinPlanilla?: boolean }> {
   const r = await fetch('/api/planilla?accion=probar');

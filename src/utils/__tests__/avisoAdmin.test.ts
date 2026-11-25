@@ -1,6 +1,7 @@
 // Aviso de carga a administración y comentario en Trello (16-nov-2026, gax).
 import { describe, expect, it } from 'vitest';
-import { comentarioTrello, conLoCargado, diaArgentina, fechaCorta, fechaIngreso, filaPlanilla, filaPlanillaFamily, observacionesPlanilla, proveedorPlanilla, textoAvisoAdmin } from '../avisoAdmin';
+import { comentarioTrello, conLoCargado, diaArgentina, fechaCorta, fechaIngreso, filaPlanilla, filaPlanillaFamily, observacionesPlanilla, proveedorPlanilla, resultadosGuardados, textoAvisoAdmin } from '../avisoAdmin';
+import type { CargaFamily } from '../cargaFamily';
 import type { ResultadoCarga } from '../cargaFamily';
 import type { ResultadoFactura } from '../controlFacturas';
 
@@ -104,6 +105,26 @@ describe('Planilla y mail sin lo interno del control (25-nov-2026, factura 0011-
     expect(filaPlanilla({ ...o, r: otro, resultados: [pantalon, menos] }).observaciones).toBe('APP - REMITO: facturaron más de lo que dice el remito: CTN1 (factura 3, remito 1).');
     // Una carga con error no cuenta como que llegó.
     expect(conLoCargado(f140160, [{ ...pantalon, estado: 'error' }]).motivos[0]).toMatch(/^REMITO: facturaron/);
+  });
+});
+
+describe('Corregir la fila en la planilla con lo cargado guardado (25-nov-2026)', () => {
+  const cargas: Record<string, CargaFamily> = {
+    'F-1|LTO0224043': { estado: 'cargada', fecha: '2026-11-21', firma: 'x', detalle: { titulo: 'Remera Le Coq Sportif Monochrome Tee', unidades: 4, talles: [{ talle: 'M', cantidad: 2 }, { talle: 'S', cantidad: 2 }] } },
+    'F-1|MA5672FF7': { estado: 'parcial', fecha: '2026-11-21', firma: 'x', detalle: { titulo: 'Mochila Converse', unidades: 1 } },
+    'F-1|LTO0226092': { estado: 'dudosa', fecha: '2026-11-21', firma: 'x' },
+    'F-10|LTO0224043': { estado: 'cargada', fecha: '2026-11-21', firma: 'x', detalle: { talles: [{ talle: 'L', cantidad: 9 }] } },
+  };
+  it('arma los resultados de esa factura (cargados o en parte), con las unidades por talle', () => {
+    const x = resultadosGuardados('F-1', cargas);
+    expect(x.map((y) => [y.codigo, y.estado, y.detalle?.sumados.map((t) => `${t.talle}:${t.suma}`).join(',')])).toEqual([
+      ['LTO0224043', 'cargada', 'M:2,S:2'], ['MA5672FF7', 'parcial', ':1'],
+    ]);
+  });
+  it('con la nota ya cargada la fila queda «FAC.OK» y «APP - ok», y el proveedor sale de lo cargado', () => {
+    expect(filaPlanilla({ ...o, resultados: resultadosGuardados('F-1', cargas), hoy: '2026-11-25' })).toMatchObject({
+      proveedor: 'ID CONVERSE / LE COQ', factura: 'FAC.OK - 0011-00139953', observaciones: 'APP - ok', ok: true,
+    });
   });
 });
 

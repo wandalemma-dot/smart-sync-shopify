@@ -31,7 +31,7 @@ import { Archivo, Copiar, Parte } from './EntregasPartes';
 import { NoEntraron, OrdenesQueSalen, PanelCarga } from './PanelCarga';
 import { accionesElegidas, ejecutarCargaFamily, resumenCarga, textoCarga, type CargaFamily, type EleccionesCarga, type ModoVenta, type NoEntroCarga, type PlanCarga, type ResultadoCarga } from './utils/cargaFamily';
 import { ResultadosCarga } from './ResultadosCarga';
-import { comentarioTrello, fechaIngreso, filaPlanilla, textoAvisoAdmin } from './utils/avisoAdmin';
+import { comentarioTrello, fechaIngreso, filaPlanilla, resultadosGuardados, textoAvisoAdmin } from './utils/avisoAdmin';
 import { cambiosDePrecio, enlacesMail, textoAvisoPrecio, type CambioPrecio, type MailsAviso } from './utils/avisoPrecio';
 import { diferenciasDeTalles, netosDeCarga, textoAvisoTalles } from './utils/avisoTalles';
 import { planCargaDistrinando } from './utils/cargaDistrinando';
@@ -39,7 +39,7 @@ import { entregaArchivada, estadoCargaFactura, leerEstadoCargaId, noEntraronId, 
 import { actualizarPreciosManualmente, shopifyGraphQL } from './utils/shopify';
 import {
   adjuntarATrello, apiControl, archivosParaTrello, boton, botonChico, botonPrincipal, enlace, fechaAr, hoy, inputSt, leerFotos, mensaje, slug, td, th,
-  anotarEnPlanilla, comentarEnTrello, moverEnTrello, probarPlanilla,
+  anotarEnPlanilla, comentarEnTrello, corregirEnPlanilla, moverEnTrello, probarPlanilla,
 } from './utils/entregasUi';
 
 type Prov = 'distrinando' | 'id' | 'family' | 'target' | 'ullua';
@@ -1084,6 +1084,31 @@ export default function ControlFacturas() {
   }
 
   /**
+   * Corrige la fila de la factura en la planilla de ingreso (25-nov-2026, gax: «que se corrija», con la planilla
+   * en naranja de facturas cuya nota se cargó después). Arma la fila otra vez con el control de hoy y lo cargado
+   * guardado; solo cambia N° FACTURA y OBSERVACIONES de la fila que ya está.
+   */
+  async function corregirPlanilla(r: ResultadoFactura) {
+    const p = prov;
+    if (esMarket(p)) return;
+    const resultados = resultadosGuardados(r.factura.id, datos.cargas ?? {});
+    if (!resultados.length) { setAvisos([`Planilla de ingreso: la factura ${r.factura.numero} todavía no se cargó en Shopify, así que no tiene fila.`]); return; }
+    const fila = filaPlanilla({ prov: p, r, resultados, sucursal: SUCURSAL_CARGA_ID, hoy: hoyAr(), ingreso: fechaIngreso(r.factura, r.remito).fecha });
+    if (!confirm(`Se va a corregir en la planilla de ingreso la fila de la factura ${r.factura.numero}:\n\nN° FACTURA: ${fila.factura}\nOBSERVACIONES: ${fila.observaciones}${fila.ok ? '' : ' (en naranja)'}\n\nNo cambia las fechas, el remito ni el monto. ¿Confirmás?`)) return;
+    setOcupado('Corrigiendo la planilla de ingreso…');
+    try {
+      const a = await corregirEnPlanilla(fila);
+      if (!sigue(p)) return;
+      if (a.sinPlanilla) setAvisos(['Planilla de ingreso: todavía no está conectada (ver «Planilla de ingreso» en Notas de pedido).']);
+      else if (a.scriptViejo) setAvisos(['Planilla de ingreso: el Apps Script de la planilla es el de antes y no sabe corregir filas. Pegá el código nuevo (automation/planilla-ingreso.gs) y publicá una versión nueva: Implementar → Gestionar implementaciones → editar → Nueva versión.']);
+      else if (a.noEsta) setAvisos([`Planilla de ingreso: no encontré la factura ${r.factura.numero} en la columna N° FACTURA. Si la anotaron a mano con otro número, corregila a mano.`]);
+      else if (a.sinCambios) setAvisos([`Planilla de ingreso: la fila ${a.fila ?? ''} de la factura ${r.factura.numero} ya estaba así.`]);
+      else setAvisos([`Planilla de ingreso: corregí la fila ${a.fila ?? ''} de la factura ${r.factura.numero}: ahora dice «${fila.observaciones}»${a.antes ? ` (antes: «${a.antes}»)` : ''}.`]);
+    } catch (e) { if (sigue(p)) setAvisos([`Planilla de ingreso: no pude corregir la fila (${mensaje(e)}). Corregila a mano.`]); }
+    finally { setOcupado(''); }
+  }
+
+  /**
    * Después de una carga (16-nov-2026, gax: «que la app cargue la carga en Trello y avise a administración»):
    * comenta lo cargado en la tarjeta de cada nota de la entrega (automático) y arma el mail a administración
    * con los datos de la planilla de ingreso (lo envía la persona).
@@ -1241,6 +1266,7 @@ export default function ControlFacturas() {
       onAbrir={() => setAbierta(abierta === r.factura.id ? null : r.factura.id)} pedidos={pedidosOrd} cerradas={cerradas} nombrePedido={nombrePedido}
       manual={datos.asignaciones[r.factura.id] || []} condiciones={condiciones} ocupado={!!ocupado}
       onIngreso={(fecha) => guardar({ accion: 'guardarIngreso', facturaId: r.factura.id, fecha })}
+      onPlanilla={cargaEnt ? () => corregirPlanilla(r) : undefined}
       mailsAdmin={datos.mailsAdmin ?? { para: [], copia: [] }} proveedor={prov === 'distrinando' ? 'Distrinando' : prov === 'target' ? 'Target' : 'ID'} separarColores={prov === 'target'}
       onAsignar={async (ids) => { const p = prov; if (await guardar({ accion: 'guardarAsignacion', facturaId: r.factura.id, pedidos: ids })) await avanzarYAvisar(p, r.factura.id); }}
       onBorrar={() => confirm(`¿Borrar la entrega de la factura ${r.factura.numero}? Se borran también el remito y lo que contó el depósito.`) && guardar({ accion: 'borrarFactura', id: r.factura.id })}
@@ -1451,7 +1477,7 @@ const EXPLICA_ID = 'Lo que llegó (el remito, menos lo que salió para órdenes 
 const EXPLICA_TARGET = 'Lo que llegó (el remito) se SUMA al stock de Martínez. Target no trae talles: un producto por código. Los que no están en Shopify se crean (activos y en Point of Sale) con el nombre de la factura (lo podés cambiar), la marca del producto, las etiquetas «Target» y el código, SKU = código, precio = lista × 2 y costo = lista menos la bonificación de esa factura. Si un artículo viene en varios colores, tocá «🎨 Viene en varios colores»: cada color se crea como un producto aparte (nombre + color, SKU código-COLOR) y la suma de los colores tiene que dar lo que llegó. Los que ya están (con la etiqueta «Target») suman stock y costo nuevo (promedio ponderado si ya había stock); si el precio no llega a la lista × 2 hay que poner uno nuevo.';
 const EXPLICA_DISTRINANDO = 'Lo que llegó (el remito) se SUMA al stock de Martínez. Cada talle US entra en el talle de Shopify que da el SKU del proveedor, el AR que informa la nota o la tabla de talle que elijas; al lado de cada talle podés escribir otro si entró en otro. La tabla elegida se agrega a las etiquetas. Los talles que no existen se crean (SKU del proveedor, precio de la curva, costo de la factura) y los modelos nuevos se crean con precio Reebok (Mayorista × 1,8755, terminado en 999). Antes de sumar, el costo de la factura va a los talles que llegan y a los que están en 0 en Martínez (con stock: promedio ponderado). Por ahora solo Reebok calzado.';
 
-function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, recordados, onSubirTrello, informe, onRecargarBorrada, res, todas, consejos, carga, mailsAdmin, proveedor, naranja, onIngreso, separarColores }: {
+function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, manual, condiciones, ocupado, onAsignar, onBorrar, onDeposito, onFotos, onGuardarRemito, onBorrarRemito, onNota, onTrello, recordados, onSubirTrello, informe, onRecargarBorrada, res, todas, consejos, carga, mailsAdmin, proveedor, naranja, onIngreso, onPlanilla, separarColores }: {
   /** Target: separar por colores lo ya cargado (21-nov-2026). */
   separarColores?: boolean;
   /** Para el mail a administración (se abre en Gmail con un toque). */
@@ -1460,6 +1486,8 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
   naranja?: boolean;
   /** El día que entró la mercadería, escrito a mano (vacío = el día que se subió). */
   onIngreso: (fecha: string) => void;
+  /** Corrige la fila de esta factura en la planilla de ingreso (solo si ya se cargó algo). */
+  onPlanilla?: () => void;
   r: ResultadoFactura; abierta: boolean; onAbrir: () => void; pedidos: PedidoGuardado[]; cerradas: Set<string>; nombrePedido: (id: string) => string;
   res: ResultadoGeneral; todas: PedidoGuardado[]; consejos: Map<string, ConsejoNota>;
   manual: string[]; condiciones: string; ocupado: boolean; onAsignar: (ids: string[]) => void; onBorrar: () => void; onDeposito: () => void;
@@ -1690,6 +1718,9 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
                 style={{ ...botonChico, textDecoration: 'none' }}>✉️ Mail a administración</a>;
             })()}
             <Copiar etiqueta="📋 Copiar" texto={mensajePagos(r, condiciones, nombrePedido, ingreso.fecha)} />
+            {onPlanilla && carga && Object.entries(carga.cargas).some(([k, c]) => k.startsWith(`${f.id}|`) && (c.estado === 'cargada' || c.estado === 'parcial')) && (
+              <button style={botonChico} disabled={ocupado} title="Vuelve a escribir N° FACTURA y OBSERVACIONES de esta factura en la planilla de ingreso, con el control de ahora (por ejemplo, después de cargar la nota que faltaba)."
+                onClick={onPlanilla}>📊 Corregir en la planilla</button>)}
             {reclamo && <Copiar etiqueta="📋 Texto de reclamo" texto={reclamo} />}
             <button style={botonChico} onClick={onDeposito}>📦 Checklist del depósito</button>
             {carga && Object.entries(carga.cargas).filter(([k, c]) => k.startsWith(`${f.id}|`) && c.estado === 'cargada').map(([k, c]) => (

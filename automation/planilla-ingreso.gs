@@ -11,6 +11,8 @@
 // última fila del mismo proveedor (su color); pinta OBSERVACIONES en naranja si hubo algo para revisar.
 // Si el N° de factura ya está en la planilla, no la repite. Family no factura: la fila va sin N° de
 // factura y no se repite si su N° de remito ya está. No borra ni cambia otras filas.
+// «corregir» (25-nov-2026): cambia N° FACTURA y OBSERVACIONES (y su color) de la fila de esa factura, la última
+// que la tenga. No agrega filas ni toca fechas, proveedor, remito ni monto.
 
 function crearClave() {
   var p = PropertiesService.getScriptProperties();
@@ -81,11 +83,11 @@ function doPost(e) {
     var clave = PropertiesService.getScriptProperties().getProperty('CLAVE');
     if (!clave || datos.clave !== clave) return responder({ error: 'Clave incorrecta.' });
     if (datos.accion === 'probar') return responder({ ok: true, hoja: hoja().getName() });
-    if (datos.accion !== 'anotar' || !datos.fila) return responder({ error: 'Pedido inválido.' });
+    if ((datos.accion !== 'anotar' && datos.accion !== 'corregir') || !datos.fila) return responder({ error: 'Pedido inválido.' });
     var lock = LockService.getScriptLock();
     lock.waitLock(20000);
     try {
-      return responder(anotar(datos.fila));
+      return responder(datos.accion === 'corregir' ? corregir(datos.fila) : anotar(datos.fila));
     } finally {
       lock.releaseLock();
     }
@@ -139,4 +141,26 @@ function anotar(f) {
   if (f.ok) { if (modelo) obs.setBackground(h.getRange(modelo, c.proveedor).getBackground()); }
   else obs.setBackground('#ff6d01');
   return { ok: true, fila: n };
+}
+
+function corregir(f) {
+  var h = hoja();
+  var c = columnas(h);
+  var ultima = Math.max(h.getLastRow(), 1);
+  if (ultima < 2 || !f.numero) return { ok: true, noEsta: true };
+  var vistos = h.getRange(2, c.factura, ultima - 1, 1).getDisplayValues();
+  var n = 0;
+  for (var j = vistos.length - 1; j >= 0; j--) {
+    if (String(vistos[j][0]).indexOf(f.numero) >= 0) { n = j + 2; break; }
+  }
+  if (!n) return { ok: true, noEsta: true };
+  var obs = h.getRange(n, c.observaciones);
+  var antes = String(obs.getDisplayValue());
+  var factAntes = String(h.getRange(n, c.factura).getDisplayValue());
+  if (antes === String(f.observaciones) && factAntes === String(f.factura)) return { ok: true, fila: n, sinCambios: true, antes: antes };
+  h.getRange(n, c.factura).setValue(texto(f.factura));
+  obs.setValue(texto(f.observaciones));
+  if (f.ok) obs.setBackground(h.getRange(n, c.proveedor).getBackground());
+  else obs.setBackground('#ff6d01');
+  return { ok: true, fila: n, antes: antes };
 }
