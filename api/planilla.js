@@ -1,7 +1,7 @@
-// Planilla «CONTROL INGRESO MERCADERIA»: agrega la fila de una carga (POST, mismo origen) o prueba la
+// Planilla «CONTROL INGRESO MERCADERIA»: agrega o corrige la fila de una carga (POST, mismo origen) o prueba la
 // conexión (GET). Solo sesión humana: el bot no entra. No toca Shopify.
 import { allowedOrigin, identity, noStore } from '../server/access.js';
-import { anotarFila, planillaConfigurada, probarPlanilla } from '../server/planilla.js';
+import { anotarFila, corregirFila, planillaConfigurada, probarPlanilla } from '../server/planilla.js';
 import { mensajeSeguro } from '../server/secretos.js';
 
 export default async function handler(req, res) {
@@ -15,6 +15,7 @@ export default async function handler(req, res) {
       if (!String(req.headers?.['content-type'] || '').toLowerCase().startsWith('application/json')) return res.status(415).json({ error: 'Se requiere JSON.' });
       const b = req.body || {};
       if (b.accion === 'anotar') return res.status(200).json(await anotarFila(b.fila));
+      if (b.accion === 'corregir') return res.status(200).json(await corregirFila(b.fila));
       return res.status(400).json({ error: 'Acción inválida.' });
     }
     if ((req.query || {}).accion === 'probar') return res.status(200).json(await probarPlanilla());

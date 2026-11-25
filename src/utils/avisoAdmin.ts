@@ -4,7 +4,7 @@
 // observaciones y fecha de carga de stock, más lo que se cargó. La app no envía el mail: lo abre
 // escrito y la persona lo manda. El destinatario se guarda en la base (cf:config), nunca en el código.
 import { pesos } from './avisoPrecio';
-import type { ResultadoCarga } from './cargaFamily';
+import type { CargaFamily, ResultadoCarga } from './cargaFamily';
 import { claveCodigo, diferenciasInformativas, motivoInformativo, type ResultadoFactura } from './controlFacturas';
 
 /** 2026-11-10 → 10/11/26, como la planilla. */
@@ -168,6 +168,22 @@ export function textoAvisoAdmin(entrada: DatosAvisoAdmin): { asunto: string; cue
   if (usadas.length < c.lineas.length) usadas.push(`… y ${c.lineas.length - usadas.length} artículo(s) más.`);
   const cuerpo = [...cabeza, ...(usadas.length ? ['', 'Detalle:', ...usadas] : []), ...pie, '', 'Saludos.'].join('\n');
   return { asunto, cuerpo, filas };
+}
+
+/**
+ * Lo cargado en Shopify de una entrega, tal como quedó guardado en la base (`{facturaId}|{código}`), para armar
+ * de nuevo su fila de la planilla después (25-nov-2026, gax: «que se corrija»). Solo lo que quedó cargado o
+ * cargado en parte; las unidades salen de los talles guardados.
+ */
+export function resultadosGuardados(facturaId: string, cargas: Record<string, CargaFamily>): ResultadoCarga[] {
+  const pre = `${facturaId}|`;
+  return Object.entries(cargas).filter(([k, c]) => k.startsWith(pre) && (c.estado === 'cargada' || c.estado === 'parcial')).map(([k, c]) => {
+    const talles = c.detalle?.talles ?? [];
+    const sumados = talles.length ? talles.map((t) => ({ talle: t.talle, antes: null, suma: Number(t.cantidad) || 0 }))
+      : (c.detalle?.unidades ?? 0) > 0 ? [{ talle: '', antes: null, suma: Number(c.detalle!.unidades) }] : [];
+    return { codigo: k.slice(pre.length), estado: c.estado as 'cargada' | 'parcial', mensaje: c.detalle?.mensaje ?? '',
+      detalle: { titulo: c.detalle?.titulo, sumados, costos: [], pasadas: [], notas: [] } };
+  });
 }
 
 /** Fila para la planilla «CONTROL INGRESO MERCADERIA» (la agrega el Apps Script de la planilla). */

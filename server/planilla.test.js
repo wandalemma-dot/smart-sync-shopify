@@ -1,6 +1,6 @@
 // Fila en la planilla «CONTROL INGRESO MERCADERIA» (16-nov-2026, gax).
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { anotarFila, probarPlanilla, validarFila } from './planilla.js';
+import { anotarFila, corregirFila, probarPlanilla, validarFila } from './planilla.js';
 import handler from '../api/planilla.js';
 import { makeSession, COOKIE } from './access.js';
 
@@ -34,6 +34,18 @@ describe('Planilla de ingreso', () => {
     vi.stubEnv('PLANILLA_URL', URL_OK); vi.stubEnv('PLANILLA_SECRETO', 'clave-secreta-larga');
     const { f } = script({ ok: true, yaEstaba: true, fila: 236 });
     expect(await anotarFila(fila, f)).toEqual({ ok: true, yaEstaba: true, fila: 236 });
+  });
+
+  it('corregir (25-nov-2026): manda la fila con «corregir» y devuelve la fila y lo que decía antes; sin factura no se corrige', async () => {
+    vi.stubEnv('PLANILLA_URL', URL_OK); vi.stubEnv('PLANILLA_SECRETO', 'clave-secreta-larga');
+    const { f, llamadas } = script({ ok: true, fila: 54, antes: 'APP - Facturado sin pedir ($ 1.274.342,28 neto)' });
+    expect(await corregirFila(fila, f)).toEqual({ ok: true, noEsta: false, sinCambios: false, fila: 54, antes: 'APP - Facturado sin pedir ($ 1.274.342,28 neto)' });
+    expect(llamadas[0].cuerpo).toEqual({ accion: 'corregir', fila, clave: 'clave-secreta-larga' });
+    expect(await corregirFila(fila, script({ ok: true, noEsta: true }).f)).toEqual({ ok: true, noEsta: true, sinCambios: false });
+    const family = { ...fila, factura: '', numero: '0001-00002716', remito: '0001-00002716' };
+    await expect(corregirFila(family, script({ ok: true }).f)).rejects.toThrow(/facturas/);
+    // El Apps Script de antes no conoce «corregir».
+    await expect(corregirFila(fila, script({ error: 'Pedido inválido.' }).f)).rejects.toThrow(/Pedido inválido/);
   });
 
   it('valida la fila: fechas, número, monto y nada que empiece como fórmula', () => {
