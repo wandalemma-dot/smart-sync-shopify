@@ -42,9 +42,9 @@ import {
   anotarEnPlanilla, comentarEnTrello, corregirEnPlanilla, moverEnTrello, probarPlanilla,
 } from './utils/entregasUi';
 
-type Prov = 'distrinando' | 'id' | 'family' | 'target' | 'ullua';
+type Prov = 'distrinando' | 'id' | 'family' | 'target' | 'ullua' | 'reef';
 /** Marketplaces con su propia pantalla (ControlFamily): sin nota de pedido ni Trello de pendientes. */
-const esMarket = (p: Prov) => p === 'family' || p === 'ullua';
+const esMarket = (p: Prov): p is 'family' | 'ullua' | 'reef' => p === 'family' || p === 'ullua' || p === 'reef';
 type PedidoGuardado = Pedido & { nroProveedor?: string; origen?: string; enlace?: string };
 type RecepcionGuardada = Recepcion & { nota?: string; actualizado?: string };
 interface Datos {
@@ -81,6 +81,7 @@ const PROVS: { id: Prov; nombre: string }[] = [
   { id: 'target', nombre: 'Target (Discovery, Reebok, NBA…)' },
   { id: 'family', nombre: 'Family (sin factura)' },
   { id: 'ullua', nombre: 'Ullua (Thrasher, Spitfire, DTS)' },
+  { id: 'reef', nombre: 'Reef (New Arrecife)' },
 ];
 type Vista = 'entregas' | 'pedidos' | 'deposito' | 'reportes';
 interface AdjuntoTrello { id: string; nombre: string; fecha?: string }

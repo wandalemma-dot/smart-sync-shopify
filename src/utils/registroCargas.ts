@@ -44,8 +44,8 @@ export interface GrupoRegistro {
   unidades: number;
 }
 
-export const NOMBRE_PROVEEDOR: Record<string, string> = { family: 'Family', id: 'iD', distrinando: 'Distrinando', target: 'Target', ullua: 'Ullua' };
-const SIN_FACTURA = new Set(['family', 'ullua']);
+export const NOMBRE_PROVEEDOR: Record<string, string> = { family: 'Family', id: 'iD', distrinando: 'Distrinando', target: 'Target', ullua: 'Ullua', reef: 'Reef' };
+const SIN_FACTURA = new Set(['family', 'ullua', 'reef']);
 const TIENDA = 'indy-com-ar';
 
 /** Enlace al producto en el admin de Shopify. */

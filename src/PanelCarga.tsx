@@ -324,7 +324,7 @@ function PrecioAlta({ a, precio, disabled, onPrecio }: { a: AltaFamily; precio?:
         style={{ ...inputSt, width: 110, borderColor: texto.trim() && !valido ? ROJO : undefined }} />
       <span style={{ opacity: 0.8 }}>
         {texto.trim() && !valido ? <span style={{ color: ROJO }}>no es un precio: se usa el sugerido {fmt(a.precio)}</span>
-          : <>sugerido {fmt(a.precio)}{a.precioBase ? ` (c/u sin IVA ${fmt(a.precioBase)} × 2)` : ''} · margen {pct(margenPct(final, a.costo))}</>}
+          : <>sugerido {fmt(a.precio)}{a.origenPrecio ? ` (${a.origenPrecio})` : a.precioBase ? ` (c/u sin IVA ${fmt(a.precioBase)} × 2)` : ''} · margen {pct(margenPct(final, a.costo))}</>}
       </span>
     </div>
   );

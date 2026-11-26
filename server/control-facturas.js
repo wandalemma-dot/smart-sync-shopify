@@ -6,7 +6,7 @@
 // remito y la factura de la entrega, para ver después qué se cargó y cuándo.
 // Los archivos se leen en el navegador; acá solo se valida y se guarda el JSON.
 // No toca Shopify: la carga la hace el navegador por /api/shopify, con confirmación.
-export const PROVEEDORES = ['distrinando', 'id', 'family', 'target', 'ullua'];
+export const PROVEEDORES = ['distrinando', 'id', 'family', 'target', 'ullua', 'reef'];
 // «entregas»: planillas de Family (marketplace, sin factura). El resto, factura + remito + nota.
 const TIPOS = ['pedidos', 'facturas', 'asignaciones', 'recepciones', 'remitos', 'entregas'];
 const RE_ID = /^[A-Za-z0-9_.-]{1,80}$/;
@@ -188,7 +188,9 @@ export function limpiarEntrega(e) {
 // ---------------------------------------------------------------------------
 // Family desde el 11-nov; iD (Converse/Le Coq, a Martínez) desde el 12-nov-2026.
 // Distrinando (Reebok, a Martínez) desde el 13-nov-2026.
-const CARGAN = ['family', 'id', 'distrinando', 'target', 'ullua'];
+const CARGAN = ['family', 'id', 'distrinando', 'target', 'ullua', 'reef'];
+/** Marketplaces: sin factura de por medio, cada entrega es «entregas» (planilla, remito o factura en papel). */
+const MARKETPLACES = ['family', 'ullua', 'reef'];
 const RE_COD_CARGA = /^[A-Z0-9][A-Z0-9._/-]{1,79}$/;
 const ESTADOS_CARGA = ['cargada', 'parcial', 'dudosa'];
 const campoCarga = (body) => {
@@ -324,7 +326,38 @@ export async function leerTodo(kv, prov) {
     out.noLlego = parsear(res[TIPOS.length + 7]);
     out.archivo = parsear(res[TIPOS.length + 8]);
   }
+  if (prov === 'reef') {
+    const [crudoLista] = await kv([['HGET', LISTA_REEF, 'actual']]);
+    const l = json(crudoLista);
+    if (l && Array.isArray(l.articulos)) out.lista = l;
+  }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// LISTA DE PRECIOS DE REEF (26-nov-2026, gax: «te paso el Excel donde están todos los productos»).
+// El remito de New Arrecife no trae precios ni la curva por talle: salen de la lista vigente, que
+// se lee en el navegador (hojas CALZADO, INDUMENTARIA, OJOTAS) y se guarda acá ya limpia. Solo los
+// artículos: nunca la hoja de apertura de cuenta ni datos del cliente.
+// ---------------------------------------------------------------------------
+export const LISTA_REEF = 'cf:reef:lista';
+const MAX_LISTA_REEF = 3000;
+export function limpiarListaReef(l) {
+  const articulos = lista(l?.articulos, MAX_LISTA_REEF).map((a) => {
+    const codigo = String(a?.codigo ?? '').trim();
+    if (!/^[A-Z0-9][A-Z0-9.-]{2,29}$/i.test(codigo)) throw new Error('Código de la lista inválido.');
+    const unidades = Math.round(num(a?.unidades || 0));
+    return {
+      codigo: codigo.toUpperCase(), hoja: txt(a?.hoja, 30), linea: txt(a?.linea, 80), descripcion: txt(a?.descripcion, 120), curva: txt(a?.curva, 160),
+      talles: lista(a?.talles || [], 20).map((t) => ({ talle: txt(t?.talle, 12), cantidad: Math.round(num(t?.cantidad || 0)) })),
+      pvm: num(a?.pvm || 0), pvp: num(a?.pvp || 0), unidades: unidades >= 0 && unidades <= 1000 ? unidades : 0,
+      ...(a?.us === true ? { us: true } : {}),
+    };
+  });
+  if (!articulos.length) throw new Error('La lista no tiene artículos.');
+  const codigos = new Set(articulos.map((a) => a.codigo));
+  if (codigos.size !== articulos.length) throw new Error('La lista tiene códigos repetidos.');
+  return { nombre: txt(l?.nombre, 120), articulos, guardada: new Date().toISOString() };
 }
 
 // ---------------------------------------------------------------------------
@@ -509,6 +542,12 @@ export async function aplicar(kv, body) {
       await kv([['HDEL', clave(prov, 'remitos'), id(body.facturaId)]]);
       return { ok: true };
     }
+    case 'guardarListaReef': {
+      if (prov !== 'reef') throw new Error('Solo Reef tiene lista de precios.');
+      const l = limpiarListaReef(body.lista);
+      await kv([['HSET', LISTA_REEF, 'actual', JSON.stringify(l)]]);
+      return { ok: true, articulos: l.articulos.length };
+    }
     case 'guardarEntrega': {
       const e = limpiarEntrega(body.entrega);
       const [antes] = await kv([['HGET', clave(prov, 'entregas'), e.id]]);
@@ -519,7 +558,7 @@ export async function aplicar(kv, body) {
       // El día que entró la mercadería, escrito a mano (vacío = el día que se subió).
       const fid = id(body.facturaId);
       const dia = fecha(body.fecha);
-      const tipo = ['family', 'ullua'].includes(prov) ? 'entregas' : 'facturas';
+      const tipo = MARKETPLACES.includes(prov) ? 'entregas' : 'facturas';
       const [crudo] = await kv([['HGET', clave(prov, tipo), fid]]);
       if (!crudo) throw new Error('No encontré esa entrega.');
       const { ingreso: _v, ...doc } = JSON.parse(crudo);

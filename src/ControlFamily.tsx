@@ -13,9 +13,13 @@
 // prov="ullua". En lugar de planilla + remito, la entrega es UN papel (remito con
 // IVA o factura sin IVA) que se lee de la foto; las curvas y el precio c/u salen
 // de utils/ullua.ts y el stock va a su sucursal.
+// REEF (26-nov-2026, gax): igual que Ullua (un solo papel: el remito de New Arrecife,
+// sin precios). El precio y la curva salen de la lista de precios de Reef, que se
+// sube una vez acá y queda guardada (utils/reef.ts).
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { costoUllua, entregaDeDocumentoUllua, ULLUA, type DocumentoUllua } from './utils/ullua';
+import { entregaDeRemitoReef, leerListaReef, marketplaceReef, type ListaReef, type RemitoReef } from './utils/reef';
 import * as XLSX from 'xlsx';
 import { Archivo, Copiar, Parte } from './EntregasPartes';
 import { PanelCarga } from './PanelCarga';
@@ -39,13 +43,19 @@ import { fechaIngreso, filaPlanillaFamily } from './utils/avisoAdmin';
 import { listaFinalizado } from './utils/listasTrello';
 import { descripcionTarjetaFamily, nombreTarjetaFamily, papel } from './utils/trelloFamily';
 
-/** Lo que cambia entre Family y Ullua. */
-interface Config { prov: 'family' | 'ullua'; m: Marketplace; opciones: OpcionesControl; planilla: string; ullua: boolean }
-const CONFIG: Record<Config['prov'], Config> = {
-  family: { prov: 'family', m: FAMILY, opciones: {}, planilla: 'Familyarg', ullua: false },
+/** Lo que cambia entre Family, Ullua y Reef. unPapel: la entrega es un solo papel (remito o factura), sin planilla aparte. */
+type ProvMarket = 'family' | 'ullua' | 'reef';
+interface Config { prov: ProvMarket; m: Marketplace; opciones: OpcionesControl; planilla: string; unPapel: boolean; reef: boolean }
+const REEF_SIN_LISTA = marketplaceReef(null);
+const CONFIG: Record<ProvMarket, Config> = {
+  family: { prov: 'family', m: FAMILY, opciones: {}, planilla: 'Familyarg', unPapel: false, reef: false },
   ullua: {
-    prov: 'ullua', m: ULLUA, planilla: 'ULLUA', ullua: true,
+    prov: 'ullua', m: ULLUA, planilla: 'ULLUA', unPapel: true, reef: false,
     opciones: { nombre: 'Ullua', mayor: 'c/u sin IVA', sinRemito: true, costoEsperado: ULLUA.costoEsperado },
+  },
+  reef: {
+    prov: 'reef', m: REEF_SIN_LISTA, planilla: 'REEF', unPapel: true, reef: true,
+    opciones: { nombre: 'Reef', mayor: 'PMV', sinRemito: true, costoEsperado: REEF_SIN_LISTA.costoEsperado },
   },
 };
 
@@ -68,6 +78,21 @@ async function leerDocumentoUllua(files: File[], aFotos?: (f: File[]) => Promise
   return { ...entrega, origen: 'foto', avisos };
 }
 
+/** Reef: el remito (fotos, o PDF pasado a fotos) leído con IA, completado con la lista de precios. */
+async function leerRemitoReef(files: File[], lista: ListaReef | null, aFotos?: (f: File[]) => Promise<File[]>): Promise<Leida> {
+  const doc = await leerFotos<RemitoReef>(aFotos ? await aFotos(files) : files, 'reef');
+  const { entrega, avisos } = entregaDeRemitoReef(doc, lista, hoy());
+  return { ...entrega, origen: 'foto', avisos };
+}
+
+/** Lee la lista de precios de Reef (Excel): solo las hojas con artículos; la de apertura de cuenta se ignora. */
+async function leerExcelListaReef(f: File): Promise<{ lista: ListaReef; avisos: string[] }> {
+  const wb = XLSX.read(await f.arrayBuffer());
+  const hojas = wb.SheetNames.filter((_, i) => !wb.Workbook?.Sheets?.[i]?.Hidden)
+    .map((nombre) => ({ nombre, filas: XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[nombre], { header: 1, raw: true }) }));
+  return leerListaReef(hojas, f.name.replace(/\.[^.]+$/, ''));
+}
+
 /** Lee la planilla de entrega: Excel (por encabezados) o fotos (con IA). */
 async function leerPlanilla(files: File[]): Promise<Leida> {
   const excel = files.find(esExcel);
@@ -82,8 +107,14 @@ async function leerPlanilla(files: File[]): Promise<Leida> {
   return { fecha: d.fecha || hoy(), renglones: d.renglones, dudas: d.dudas, origen: 'foto', nombre: 'Planilla (foto)', avisos: d.fecha ? [] : ['La foto no trae la fecha: se usó la de hoy (se puede corregir).'] };
 }
 
-export default function ControlFamily({ prov = 'family', aFotos }: { prov?: 'family' | 'ullua'; aFotos?: (f: File[]) => Promise<File[]> } = {}) {
-  const cfg = CONFIG[prov];
+export default function ControlFamily({ prov = 'family', aFotos }: { prov?: ProvMarket; aFotos?: (f: File[]) => Promise<File[]> } = {}) {
+  // Reef: la lista de precios guardada (de ahí salen el tipo de producto de las altas y el costo esperado).
+  const [lista, setLista] = useState<ListaReef | null>(null);
+  const cfg = useMemo<Config>(() => {
+    if (prov !== 'reef') return CONFIG[prov];
+    const m = marketplaceReef(lista);
+    return { ...CONFIG.reef, m, opciones: { ...CONFIG.reef.opciones, costoEsperado: m.costoEsperado } };
+  }, [prov, lista]);
   const nombre = cfg.m.nombre, sucursal = cfg.m.sucursal;
   const api = useMemo(() => (body?: object) => (body ? apiControl({ proveedor: prov, ...body }) : apiControl(undefined, prov)), [prov]);
   const [entregas, setEntregas] = useState<EntregaFamily[]>([]);
@@ -113,6 +144,7 @@ export default function ControlFamily({ prov = 'family', aFotos }: { prov?: 'fam
       const d = await api();
       // Cualquier cambio guardado deja vieja la vista previa de la carga: hay que armarla de nuevo.
       setEntregas(d.entregas ?? []); setRemitos(d.remitos ?? {}); setCargas(d.cargas ?? {}); setSinBase(false); setArmado(null);
+      setLista(d.lista && Array.isArray(d.lista.articulos) ? d.lista : null);
     } catch (e) { setError(mensaje(e)); setSinBase(!!(e as { sinBase?: boolean }).sinBase); setEntregas([]); setRemitos({}); setCargas({}); }
     finally { setCargando(false); }
   }, [api]);
@@ -168,7 +200,7 @@ export default function ControlFamily({ prov = 'family', aFotos }: { prov?: 'fam
     // Ullua: las fotos del remito o la factura van a Trello como «Remito …» / «Factura …».
     guardarArchivos(id, planillaFiles, fotos.length ? fotos : papelFiles);
     const u = leida.renglones.reduce((s, r) => s + r.cantidad, 0);
-    nuevos.push(`${cfg.ullua ? leida.nombre : 'Planilla'} del ${fechaAr(leida.fecha)} ${repetida ? 'actualizada (ya estaba cargada)' : 'guardada'}: ${leida.renglones.length} artículos, ${u} unidades.`, ...leida.avisos);
+    nuevos.push(`${cfg.unPapel ? leida.nombre : 'Planilla'} del ${fechaAr(leida.fecha)} ${repetida ? 'actualizada (ya estaba cargada)' : 'guardada'}: ${leida.renglones.length} artículos, ${u} unidades.`, ...leida.avisos);
     if (entrega.shopify?.error) nuevos.push(`No pude consultar Shopify: ${entrega.shopify.error}`);
     if (fotos.length) nuevos.push(await remitoDeFotos(id, fotos));
     await recargar();
@@ -179,10 +211,10 @@ export default function ControlFamily({ prov = 'family', aFotos }: { prov?: 'fam
   async function controlar() {
     if (!planilla.length) return;
     let leida: Leida;
-    if (cfg.ullua) {
-      setOcupado('Leyendo el remito o la factura… (puede tardar un minuto)');
-      try { leida = await leerDocumentoUllua(planilla, aFotos); }
-      catch (e) { setAvisos([`No pude leer el remito o la factura: ${mensaje(e)} Podés escribirlo a mano.`]); setOcupado(''); return; }
+    if (cfg.unPapel) {
+      setOcupado(cfg.reef ? 'Leyendo el remito… (puede tardar un minuto)' : 'Leyendo el remito o la factura… (puede tardar un minuto)');
+      try { leida = cfg.reef ? await leerRemitoReef(planilla, lista, aFotos) : await leerDocumentoUllua(planilla, aFotos); }
+      catch (e) { setAvisos([`No pude leer ${cfg.reef ? 'el remito' : 'el remito o la factura'}: ${mensaje(e)} Podés escribirlo a mano.`]); setOcupado(''); return; }
       setOcupado('');
       try { await guardarNueva(leida, [], [], planilla); } catch (e) { setAvisos([mensaje(e)]); return; }
       setPlanilla([]);
@@ -196,11 +228,30 @@ export default function ControlFamily({ prov = 'family', aFotos }: { prov?: 'fam
     setPlanilla([]); setFotosRemito([]);
   }
 
+  /** Reef: sube la lista de precios (Excel) y la guarda en la base. */
+  async function subirLista(files: File[]) {
+    const f = files[0];
+    if (!f) return;
+    setOcupado('Leyendo la lista de precios…');
+    try {
+      const { lista: l, avisos: av } = await leerExcelListaReef(f);
+      await api({ accion: 'guardarListaReef', lista: l });
+      await recargar();
+      const us = l.articulos.filter((a) => a.us).length;
+      setAvisos([
+        `Lista de precios «${l.nombre}» guardada: ${l.articulos.length} artículos.${us ? ` ${us} vienen en talle de EE.UU. (esos piden escribir el talle argentino).` : ''}`,
+        ...(entregas.length ? ['Las entregas que ya estaban no cambian solas: si alguna quedó sin precio o sin talles, volvé a subir su remito.'] : []),
+        ...av.slice(0, 15), ...(av.length > 15 ? [`… y ${av.length - 15} avisos más.`] : []),
+      ]);
+    } catch (e) { setAvisos([`No pude leer la lista de precios: ${mensaje(e)}`]); }
+    finally { setOcupado(''); }
+  }
+
   async function guardarAMano() {
     const { fecha, renglones, errores } = leerTextoEntregaFamily(aMano ?? '');
     if (errores.length) { setAvisos(errores); return; }
     if (!renglones.length) { setAvisos(['Escribí al menos un artículo.']); return; }
-    try { await guardarNueva({ fecha: fecha || hoy(), renglones, origen: 'manual', nombre: cfg.ullua ? 'Entrega escrita a mano' : 'Planilla escrita a mano', avisos: fecha ? [] : ['Sin fecha: se usó la de hoy.'] }, cfg.ullua ? [] : fotosRemito); }
+    try { await guardarNueva({ fecha: fecha || hoy(), renglones, origen: 'manual', nombre: cfg.unPapel ? 'Entrega escrita a mano' : 'Planilla escrita a mano', avisos: fecha ? [] : ['Sin fecha: se usó la de hoy.'] }, cfg.unPapel ? [] : fotosRemito); }
     catch (e) { setAvisos([mensaje(e)]); return; }
     setAMano(null); setFotosRemito([]);
   }
@@ -264,7 +315,7 @@ export default function ControlFamily({ prov = 'family', aFotos }: { prov?: 'fam
     const doc = r.entrega.documento;
     const factura = doc?.tipo === 'factura' ? doc.numero.trim() : '';
     const remito = (doc ? doc.remito : r.remito?.numero)?.trim() ?? '';
-    if (!remito && !factura) return `Planilla de ingreso: ${cfg.ullua ? 'el remito o la factura' : 'el remito'} no tiene número, así que no agregué la fila. ${cfg.ullua ? 'Anotala a mano.' : 'Escribí el número en «✏️ Ver o corregir» del remito y anotala a mano.'}`;
+    if (!remito && !factura) return `Planilla de ingreso: ${cfg.unPapel ? 'el remito o la factura' : 'el remito'} no tiene número, así que no agregué la fila. ${cfg.unPapel ? 'Anotala a mano.' : 'Escribí el número en «✏️ Ver o corregir» del remito y anotala a mano.'}`;
     const que = factura ? `la factura ${factura}` : `el remito ${remito}`;
     const hoyAr = new Date(Date.now() - 3 * 3600_000).toISOString().slice(0, 10);
     try {
@@ -294,7 +345,7 @@ export default function ControlFamily({ prov = 'family', aFotos }: { prov?: 'fam
     } catch (e) { return [`Trello: no pude crear la tarjeta (${mensaje(e)}). Creala a mano en «FINALIZADO».`]; }
     const files = elegidos ?? archivos[r.entrega.id] ?? { planilla: [], remito: [] };
     if (!files.planilla.length && !files.remito.length) {
-      hechos.push(cfg.ullua
+      hechos.push(cfg.unPapel
         ? 'Trello: no tengo en esta pantalla las fotos del remito o la factura (se suben de nuevo si se recargó la página). Adjuntalas con «📎» en la parte Trello de la entrega.'
         : 'Trello: no tengo en esta pantalla la planilla ni la foto del remito (se suben de nuevo si se recargó la página). Adjuntalos con «📎» en la parte Trello de la entrega.');
       return hechos;
@@ -305,13 +356,13 @@ export default function ControlFamily({ prov = 'family', aFotos }: { prov?: 'fam
         catch (e) { hechos.push(`Trello: no pude adjuntar «${a.nombre}» (${mensaje(e)}).`); }
       }
     } catch (e) { hechos.push(`Trello: ${mensaje(e)}`); }
-    if (!files.planilla.length && !cfg.ullua) hechos.push('Trello: la planilla no está en esta pantalla; adjuntala con «📎 Planilla».');
-    if (!files.remito.length) hechos.push(cfg.ullua ? 'Trello: las fotos del remito o la factura no están en esta pantalla; adjuntalas con «📎».' : 'Trello: la foto del remito no está en esta pantalla; adjuntala con «📎 Remito».');
+    if (!files.planilla.length && !cfg.unPapel) hechos.push('Trello: la planilla no está en esta pantalla; adjuntala con «📎 Planilla».');
+    if (!files.remito.length) hechos.push(cfg.unPapel ? 'Trello: las fotos del remito o la factura no están en esta pantalla; adjuntalas con «📎».' : 'Trello: la foto del remito no está en esta pantalla; adjuntala con «📎 Remito».');
     return hechos;
   }
 
   async function adjuntarElegidos(r: ResultadoFamily, que: 'planilla' | 'remito', files: File[]) {
-    if (!confirm(`Se ${files.length === 1 ? 'adjunta 1 archivo' : `adjuntan ${files.length} archivos`} como ${cfg.ullua ? (papel(r).split(' ')[0] || 'remito').toLowerCase() : que} a la tarjeta «${nombreTarjetaFamily(r, nombre)}» de Trello (si no existe, se crea en «FINALIZADO»). ¿Confirmás?`)) return;
+    if (!confirm(`Se ${files.length === 1 ? 'adjunta 1 archivo' : `adjuntan ${files.length} archivos`} como ${cfg.unPapel ? (papel(r).split(' ')[0] || 'remito').toLowerCase() : que} a la tarjeta «${nombreTarjetaFamily(r, nombre)}» de Trello (si no existe, se crea en «FINALIZADO»). ¿Confirmás?`)) return;
     guardarArchivos(r.entrega.id, que === 'planilla' ? files : [], que === 'remito' ? files : []);
     setOcupado('Subiendo a Trello…');
     try { setAvisos(await tarjetaFamily(r, { planilla: que === 'planilla' ? files : [], remito: que === 'remito' ? files : [] })); }
@@ -346,22 +397,30 @@ export default function ControlFamily({ prov = 'family', aFotos }: { prov?: 'fam
 
       <div style={{ border: '1px solid rgba(99,102,241,0.55)', borderRadius: 10, padding: '12px 14px', background: 'rgba(99,102,241,0.08)', marginBottom: 16 }}>
         <strong style={{ fontSize: '1rem' }}>Nueva entrega de {nombre}</strong>
+        {cfg.reef && <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginTop: 8, fontSize: '0.84rem' }}>
+          <span style={{ color: lista ? undefined : AMARILLO }}>
+            📋 Lista de precios: {lista ? <>«{lista.nombre || 'sin nombre'}», {lista.articulos.length} artículos{lista.guardada ? `, subida el ${fechaAr(lista.guardada.slice(0, 10))}` : ''}</> : 'todavía no está cargada (el remito no trae precios ni la curva: salen de la lista)'}
+          </span>
+          <Archivo etiqueta={lista ? '🔄 Cambiar lista (Excel)' : '📋 Subir lista de precios (Excel)'} accept=".xlsx,.xls" disabled={!!ocupado} estilo={botonChico} onArchivos={subirLista} />
+        </div>}
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
-          {cfg.ullua
-            ? <Archivo etiqueta="🧾 Remito o factura (foto o PDF)" accept="image/*,.pdf" multiple disabled={!!ocupado} onArchivos={(f) => { setPlanilla(f); setAMano(null); }} />
+          {cfg.unPapel
+            ? <Archivo etiqueta={cfg.reef ? '🧾 Remito (foto o PDF)' : '🧾 Remito o factura (foto o PDF)'} accept="image/*,.pdf" multiple disabled={!!ocupado} onArchivos={(f) => { setPlanilla(f); setAMano(null); }} />
             : <Archivo etiqueta="1 · 📄 Planilla de entrega (Excel o foto)" accept=".xlsx,.xls,image/*" multiple disabled={!!ocupado} onArchivos={(f) => { setPlanilla(f); setAMano(null); }} />}
           <span style={{ fontSize: '0.82rem', opacity: planilla.length ? 1 : 0.5 }}>{planilla.length ? `✔ ${planilla.length === 1 ? planilla[0].name : `${planilla.length} fotos`}` : 'sin elegir'}</span>
-          {!cfg.ullua && <>
+          {!cfg.unPapel && <>
             <Archivo etiqueta="2 · 📷 Foto del remito" accept="image/*" multiple disabled={!!ocupado} onArchivos={(f) => setFotosRemito(f)} />
             <span style={{ fontSize: '0.82rem', opacity: fotosRemito.length ? 1 : 0.5 }}>{fotosRemito.length ? `✔ ${fotosRemito.length} foto(s)` : 'sin elegir'}</span>
           </>}
           <button style={{ ...botonPrincipal, opacity: planilla.length && !ocupado ? 1 : 0.5, cursor: planilla.length && !ocupado ? 'pointer' : 'not-allowed' }}
             disabled={!planilla.length || !!ocupado} onClick={controlar}>Controlar</button>
-          <button style={enlace} onClick={() => { setAMano(aMano === null ? 'Fecha \n' : null); setPlanilla([]); }}>{aMano === null ? `o escribir ${cfg.ullua ? 'la entrega' : 'la planilla'} a mano` : 'cancelar'}</button>
+          <button style={enlace} onClick={() => { setAMano(aMano === null ? 'Fecha \n' : null); setPlanilla([]); }}>{aMano === null ? `o escribir ${cfg.unPapel ? 'la entrega' : 'la planilla'} a mano` : 'cancelar'}</button>
         </div>
-        {aMano !== null && <EditorTexto texto={aMano} onTexto={setAMano} onGuardar={guardarAMano} onCancelar={() => setAMano(null)} ayuda={cfg.ullua ? AYUDA_ULLUA : AYUDA_PLANILLA} etiqueta="💾 Guardar y controlar" />}
+        {aMano !== null && <EditorTexto texto={aMano} onTexto={setAMano} onGuardar={guardarAMano} onCancelar={() => setAMano(null)} ayuda={cfg.reef ? AYUDA_REEF : cfg.unPapel ? AYUDA_ULLUA : AYUDA_PLANILLA} etiqueta="💾 Guardar y controlar" />}
         <p style={{ fontSize: '0.8rem', opacity: 0.75, margin: '8px 0 0' }}>
-          {cfg.ullua
+          {cfg.reef
+            ? <>Subí la foto del remito de New Arrecife. No trae precios: el PMV, el PVP y la curva salen de la lista de precios. Los talles salen de la curva × la cantidad de curvas que llegaron; los de EE.UU. (parte del calzado y las ojotas) se escriben a mano. Costo = PMV − 15% (contrato); los nuevos se crean con el PVP de la lista (se puede cambiar). Con «⬆️ Cargar en Shopify» sumo el stock en {sucursal}, siempre con tu confirmación. Los precios de lo que ya existe no los toco.</>
+            : cfg.unPapel
             ? <>Subí la foto del remito (los precios traen IVA: los divido por 1,21) o de la factura (sin IVA). El precio de cada renglón es el de la curva: lo divido por las unidades de la curva (S1 M2 L3 XL2 = 8; mujer S2 M2 L2 XL2). Costo = precio c/u sin IVA − 15%; los nuevos se crean con el precio c/u × 2 (se puede cambiar). Te digo cuáles son nuevos y cuáles reposición, y con «⬆️ Cargar en Shopify» sumo el stock en {sucursal}, siempre con tu confirmación. Los precios de lo que ya existe no los toco.</>
             : <>Family no factura: controlo la planilla contra el remito, te digo qué artículos son nuevos y cuáles reposición (los busco en Shopify) y te aviso si cambió algún precio. Con «⬆️ Cargar en Shopify» creo los nuevos y sumo la reposición en {sucursal}, siempre con tu confirmación. Los precios de lo que ya existe no los toco.</>}
         </p>
@@ -395,7 +454,7 @@ export default function ControlFamily({ prov = 'family', aFotos }: { prov?: 'fam
         onFecha={(fecha) => guardar({ accion: 'guardarEntrega', entrega: { ...r.entrega, fecha } })}
         onIngreso={(fecha) => guardar({ accion: 'guardarIngreso', facturaId: r.entrega.id, fecha })}
         onConsultar={() => reconsultar(r.entrega)}
-        onBorrar={() => confirm(`¿Borrar la entrega del ${fechaAr(r.entrega.fecha)}?${cfg.ullua ? '' : ' Se borra también su remito.'}`) && guardar({ accion: 'borrarEntrega', id: r.entrega.id })} />;
+        onBorrar={() => confirm(`¿Borrar la entrega del ${fechaAr(r.entrega.fecha)}?${cfg.unPapel ? '' : ' Se borra también su remito.'}`) && guardar({ accion: 'borrarEntrega', id: r.entrega.id })} />;
   }
 }
 
@@ -413,6 +472,8 @@ const AYUDA_PLANILLA = <>Una línea por artículo: código, talle/cantidad, prec
   <code>Fecha 30/10/2026</code><br /><code>SHBSPEC S/2 M/4 L/4 XL/6 2XL/4 $34500 $69000 Short Spectrum Basket Negro/Multi</code></>;
 const AYUDA_ULLUA = <>Una línea por artículo: código, talle/cantidad (en unidades, no curvas), el precio c/u SIN IVA (con $) y la descripción. Ej.:<br />
   <code>Fecha 18/11/2026</code><br /><code>580580C S/1 M/2 L/3 XL/2 $50000 SP Hoodie OG Classic Melange</code><br />Sin talles: <code>251451 6 $9000 Medias Thrasher</code></>;
+const AYUDA_REEF = <>Una línea por artículo: código, talle/cantidad (talle argentino, en unidades), el PMV y el PVP (con $) y la descripción. Ej.:<br />
+  <code>Fecha 25/11/2026</code><br /><code>27112280 40/1 41/2 42/3 43/3 44/2 45/1 $49995 $99990 SHAKA BLACK/WHITE</code><br />Dobles con guion: <code>39-40/2</code>. Talle único: <code>272219086 3 $19995 $39990 Riñonera Austin Negro</code></>;
 const AYUDA_REMITO = <>Una línea por artículo: código y cantidad. Ej.: <code>SHBSPEC 20</code>. Si trae talles: <code>SHBSPEC S/2 M/4</code>. Arriba podés poner <code>Remito 0001-00002715</code>.</>;
 
 function EditorTexto({ texto, onTexto, onGuardar, onCancelar, ayuda, etiqueta, errores = [], dudas = [], extra }: {
@@ -507,12 +568,12 @@ function TarjetaFamily({ cfg, r, abierta, ocupado, cargas, plan, onArmar, onConf
       </div>
 
       <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 8 }}>
-        <Parte ok titulo={cfg.ullua ? 'Artículos' : 'Planilla'} detalle={`${r.filas.length} artículos${e.origen === 'foto' ? ' (de la foto)' : e.origen === 'manual' ? ' (escrita a mano)' : ''}`}>
+        <Parte ok titulo={cfg.unPapel ? 'Artículos' : 'Planilla'} detalle={`${r.filas.length} artículos${e.origen === 'foto' ? ' (de la foto)' : e.origen === 'manual' ? ' (escrita a mano)' : ''}`}>
           <button style={botonChico} onClick={() => abrir('planilla')}>✏️ Ver o corregir</button>
         </Parte>
-        {cfg.ullua
+        {cfg.unPapel
           ? <Parte ok={!!e.documento} titulo={e.documento?.tipo === 'factura' ? 'Factura' : 'Remito'}
-            detalle={e.documento ? `${e.documento.numero || 'sin número'}${e.documento.total ? ` · ${fmt(e.documento.total)}` : ''}${e.documento.tipo === 'remito' ? ' (con IVA)' : ' (sin IVA)'}${e.documento.tipo === 'factura' && e.documento.remito ? ` · remito ${e.documento.remito}` : ''}` : 'escrita a mano'}>
+            detalle={e.documento ? `${e.documento.numero || 'sin número'}${e.documento.total ? ` · ${fmt(e.documento.total)}` : ''}${cfg.reef ? '' : e.documento.tipo === 'remito' ? ' (con IVA)' : ' (sin IVA)'}${e.documento.tipo === 'factura' && e.documento.remito ? ` · remito ${e.documento.remito}` : ''}` : 'escrita a mano'}>
             {null}
           </Parte>
           : <Parte ok={!!r.remito} titulo="Remito" detalle={r.remito ? `${r.remito.numero || ''} · ${unidadesRemito} u.${r.remito.origen === 'foto' ? ' (de la foto)' : ''}` : 'falta'}>
@@ -521,13 +582,13 @@ function TarjetaFamily({ cfg, r, abierta, ocupado, cargas, plan, onArmar, onConf
           </Parte>}
         <Parte ok={enShopify.completa} titulo="Shopify" detalle={cargados ? `${cargados} de ${enShopify.total} cargados` : 'sin cargar'}>
           {!enShopify.completa && !plan && <button style={{ ...botonChico, opacity: puedeCargar && !ocupado ? 1 : 0.5 }} disabled={ocupado}
-            title={puedeCargar ? 'Crea los nuevos y suma la reposición, con vista previa y confirmación' : cfg.ullua ? 'Revisá los avisos primero' : 'Primero la planilla tiene que coincidir con el remito'}
+            title={puedeCargar ? 'Crea los nuevos y suma la reposición, con vista previa y confirmación' : cfg.unPapel ? 'Revisá los avisos primero' : 'Primero la planilla tiene que coincidir con el remito'}
             onClick={onArmar}>⬆️ Cargar en Shopify</button>}
         </Parte>
         {cargados > 0 && <Parte ok={!!enTrello} titulo="Trello" detalle={enTrello ? 'tarjeta en FINALIZADO' : 'se crea al cargar'}>
           {enTrello && <a href={enTrello} target="_blank" rel="noreferrer" style={{ ...botonChico, textDecoration: 'none' }}>🗂️ Ver tarjeta</a>}
-          {!cfg.ullua && <Archivo etiqueta="📎 Planilla" accept="image/*,.pdf,.xlsx,.xls" multiple disabled={ocupado} estilo={botonChico} onArchivos={(f) => onTrello('planilla', f)} />}
-          <Archivo etiqueta={cfg.ullua ? `📎 ${e.documento?.tipo === 'factura' ? 'Factura' : 'Remito'}` : '📎 Remito'} accept="image/*,.pdf" multiple disabled={ocupado} estilo={botonChico} onArchivos={(f) => onTrello('remito', f)} />
+          {!cfg.unPapel && <Archivo etiqueta="📎 Planilla" accept="image/*,.pdf,.xlsx,.xls" multiple disabled={ocupado} estilo={botonChico} onArchivos={(f) => onTrello('planilla', f)} />}
+          <Archivo etiqueta={cfg.unPapel ? `📎 ${e.documento?.tipo === 'factura' ? 'Factura' : 'Remito'}` : '📎 Remito'} accept="image/*,.pdf" multiple disabled={ocupado} estilo={botonChico} onArchivos={(f) => onTrello('remito', f)} />
         </Parte>}
       </div>
       {aRevisar.length > 0 && <div style={{ marginTop: 8, fontSize: '0.84rem', color: '#fbbf24' }}>
@@ -537,7 +598,9 @@ function TarjetaFamily({ cfg, r, abierta, ocupado, cargas, plan, onArmar, onConf
         </div>)}
       </div>}
       {plan && <PanelCarga plan={plan} ocupado={ocupado} onConfirmar={onConfirmar} onCancelar={onCancelarCarga} sucursal={cfg.m.sucursal}
-        explicacion={cfg.ullua
+        explicacion={cfg.reef
+          ? 'Los nuevos se crean activos y solo en Point of Sale (las fotos se agregan a mano), con el PVP de la lista (lo podés cambiar) y el costo PMV − 15%. La reposición se SUMA a lo que hay. Los precios de lo que ya existe no se tocan.'
+          : cfg.unPapel
           ? 'Los nuevos se crean activos y solo en Point of Sale (las fotos se agregan a mano), con el precio c/u sin IVA × 2 al 999 (lo podés cambiar) y el costo c/u sin IVA − 15%. La reposición se SUMA a lo que hay. Los precios de lo que ya existe no se tocan.'
           : 'Los nuevos se crean activos y solo en Point of Sale (las fotos se agregan a mano), con el precio público de la planilla y el costo por mayor − 15%. La reposición se SUMA a lo que hay. Los precios de lo que ya existe no se tocan.'} />}
 
@@ -548,7 +611,7 @@ function TarjetaFamily({ cfg, r, abierta, ocupado, cargas, plan, onArmar, onConf
           <button style={{ ...botonChico, color: '#f87171' }} onClick={onBorrarRemito}>Borrar remito</button>
         </>} />}
       {editando === 'planilla' && <EditorTexto texto={texto} onTexto={setTexto} onGuardar={guardarPlanilla} onCancelar={() => setEditando(null)}
-        ayuda={cfg.ullua ? AYUDA_ULLUA : AYUDA_PLANILLA} etiqueta={cfg.ullua ? '💾 Guardar' : '💾 Guardar planilla'} errores={errores} dudas={e.dudas ?? []} />}
+        ayuda={cfg.reef ? AYUDA_REEF : cfg.unPapel ? AYUDA_ULLUA : AYUDA_PLANILLA} etiqueta={cfg.unPapel ? '💾 Guardar' : '💾 Guardar planilla'} errores={errores} dudas={e.dudas ?? []} />}
 
       {motivos.length > 0 && <ul style={{ margin: '8px 0 0', paddingLeft: 18, fontSize: '0.84rem' }}>{motivos.map((m, i) => <li key={i}>{m}</li>)}</ul>}
       {!abierta && <button style={{ ...enlace, marginTop: 6 }} onClick={onAbrir}>Ver el detalle artículo por artículo</button>}
@@ -557,10 +620,10 @@ function TarjetaFamily({ cfg, r, abierta, ocupado, cargas, plan, onArmar, onConf
         <div style={{ marginTop: 10 }}>
           <div style={{ overflowX: 'auto' }}>
             <table style={{ borderCollapse: 'collapse', fontSize: '0.8rem', width: '100%' }}>
-              <thead><tr><th style={th}>Código</th><th style={th}>Descripción</th><th style={th}>Tipo</th><th style={th}>{cfg.ullua ? 'Unidades' : 'Planilla'}</th>{!cfg.ullua && <th style={th}>Remito</th>}
-                <th style={th}>{cfg.ullua ? 'c/u sin IVA' : 'Por mayor'}</th><th style={th}>{cfg.ullua ? 'Costo (−15%)' : 'Público'}</th><th style={th}>En Shopify</th><th style={th}>Estado</th></tr></thead>
+              <thead><tr><th style={th}>Código</th><th style={th}>Descripción</th><th style={th}>Tipo</th><th style={th}>{cfg.unPapel ? 'Unidades' : 'Planilla'}</th>{!cfg.unPapel && <th style={th}>Remito</th>}
+                <th style={th}>{cfg.reef ? 'PMV' : cfg.unPapel ? 'c/u sin IVA' : 'Por mayor'}</th><th style={th}>{cfg.unPapel ? 'Costo (−15%)' : 'Público'}</th><th style={th}>En Shopify</th><th style={th}>Estado</th></tr></thead>
               <tbody>{r.filas.map((f) => {
-                const [estado, color] = estadoFila(f, cfg.ullua);
+                const [estado, color] = estadoFila(f, cfg.unPapel);
                 const talles = e.renglones.find((x) => x.codigo === f.codigo)?.talles ?? [];
                 const precios = [...new Set(f.productos.flatMap((p) => p.precios.map(fmt)))];
                 const costos = [...new Set(f.productos.flatMap((p) => p.costos.map(fmt)))];
@@ -570,12 +633,12 @@ function TarjetaFamily({ cfg, r, abierta, ocupado, cargas, plan, onArmar, onConf
                   <td style={tdN}>{f.tipo === 'nuevo' ? '🆕 Nuevo' : f.tipo === 'reposicion' ? '🔁 Reposición' : '? sin consultar'}
                     {cargas[f.codigo] && <div style={{ color: cargas[f.codigo].estado === 'cargada' ? '#34d399' : '#fbbf24' }}>{cargas[f.codigo].estado === 'cargada' ? '✔ cargado' : `⚠️ ${cargas[f.codigo].estado}`}</div>}</td>
                   <td style={td}>{f.entrega}</td>
-                  {!cfg.ullua && <td style={td}>{f.remito ?? '—'}</td>}
+                  {!cfg.unPapel && <td style={td}>{f.remito ?? '—'}</td>}
                   <td style={tdN}>{f.precioMayor ? fmt(f.precioMayor) : '—'}{f.anterior && f.anterior.precioMayor && f.anterior.precioMayor !== f.precioMayor ? <div style={{ opacity: 0.7 }}>antes {fmt(f.anterior.precioMayor)}</div> : null}</td>
-                  {cfg.ullua
+                  {cfg.unPapel
                     ? <td style={tdN}>{f.precioMayor ? fmt(costoUllua(f.precioMayor)) : '—'}</td>
                     : <td style={tdN}>{f.precioPublico ? fmt(f.precioPublico) : '—'}{f.anterior && f.anterior.precioPublico && f.anterior.precioPublico !== f.precioPublico ? <div style={{ opacity: 0.7 }}>antes {fmt(f.anterior.precioPublico)}</div> : null}</td>}
-                  <td style={td}>{f.tipo === 'reposicion' ? <><span style={{ whiteSpace: 'nowrap' }}>{precios.join(' / ')}{cfg.ullua && costos.length ? ` · costo ${costos.join(' / ')}` : ''}</span><div style={{ opacity: 0.7 }}>{f.productos.map((p) => p.titulo).join(' · ')}</div></> : '—'}</td>
+                  <td style={td}>{f.tipo === 'reposicion' ? <><span style={{ whiteSpace: 'nowrap' }}>{precios.join(' / ')}{cfg.unPapel && costos.length ? ` · costo ${costos.join(' / ')}` : ''}</span><div style={{ opacity: 0.7 }}>{f.productos.map((p) => p.titulo).join(' · ')}</div></> : '—'}</td>
                   <td style={{ ...td, color }}>{estado}</td>
                 </tr>;
               })}</tbody>
@@ -584,7 +647,7 @@ function TarjetaFamily({ cfg, r, abierta, ocupado, cargas, plan, onArmar, onConf
           <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', alignItems: 'center', marginTop: 10, fontSize: '0.82rem' }}>
             <Copiar etiqueta="📋 Copiar resumen" texto={resumenFamily(r, cfg.m.nombre, cfg.opciones.mayor)} />
             <button style={botonChico} disabled={ocupado} onClick={onConsultar}>🔄 Consultar Shopify de nuevo</button>
-            <label>fecha {cfg.ullua ? 'de la entrega' : 'de la planilla'} <input type="date" value={e.fecha} style={inputSt} onChange={(ev) => ev.target.value && onFecha(ev.target.value)} /></label>
+            <label>fecha {cfg.unPapel ? 'de la entrega' : 'de la planilla'} <input type="date" value={e.fecha} style={inputSt} onChange={(ev) => ev.target.value && onFecha(ev.target.value)} /></label>
             <label title={`Va a la planilla de ingreso (FECHA). ${ingreso.origen === 'escrita' ? 'Escrita a mano.' : 'Por ahora es el día que se subió a la app: si entró otro día, cambiala antes de cargar.'}`}>
               📅 entró el <input type="date" value={ingreso.fecha} style={inputSt} disabled={ocupado}
                 onChange={(ev) => ev.target.value && ev.target.value !== ingreso.fecha && onIngreso(ev.target.value)} /></label>
