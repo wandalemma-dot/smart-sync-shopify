@@ -248,12 +248,13 @@ function noEntroDeEntrega(facturaId: string, d: Datos, p: Prov): (NoEntro & { no
 }
 
 function analizarControl(ctrl: (Pedido & { archivada?: boolean })[], d: Datos, p: Prov) {
-  const res = analizarFacturas(ctrl, d.facturas, d.asignaciones, d.remitos);
+  const opciones = { precioInforma: p === 'id' };
+  const res = analizarFacturas(ctrl, d.facturas, d.asignaciones, d.remitos, undefined, opciones);
   if (!ctrl.some((x) => x.archivada)) return res;
   const cargaEnt = p === 'id' || p === 'distrinando' || p === 'target';
   const abiertas = new Set(res.facturas.filter((r) => !(cargaEnt
     && entregaArchivada(r, estadoCargaFactura(r, d.cargas ?? {}, d.noLlego), d.archivo?.[r.factura.id]?.estado, p !== 'distrinando'))).map((r) => r.factura.id));
-  return analizarFacturas(ctrl, d.facturas, d.asignaciones, d.remitos, abiertas);
+  return analizarFacturas(ctrl, d.facturas, d.asignaciones, d.remitos, abiertas, opciones);
 }
 const sinListas = (elegidas: string[]) => elegidas.length
   ? 'Las listas de Trello elegidas como pedidos pendientes ya no están en el tablero: elegilas de nuevo en «Notas de pedido cargadas».'
@@ -1457,13 +1458,13 @@ export default function ControlFacturas() {
 }
 
 /** Estado de un renglón para la tabla: lo más grave primero. */
-function estadoRenglon(x: ControlRenglon, nombrePedido: (id: string) => string, naranja?: boolean): [string, string] {
+function estadoRenglon(x: ControlRenglon, nombrePedido: (id: string) => string, naranja?: boolean, precioInforma?: boolean): [string, string] {
   const rojo = naranja ? NARANJA : '#f87171', amarillo = '#fbbf24', x0 = naranja ? '🟠' : '❌';
   if (x.posibleDobleCobro) return [`${x0} doble cobro`, rojo];
   if (x.sinPedir > 0) return [`${x0} ${x.sinPedir} sin pedir`, rojo];
   if (x.remito !== null && x.remito < x.cantidad) return [`${x0} el remito trae ${x.remito}`, rojo];
   const dif = x.difPrecio.reduce((t, d) => t + d.diferencia, 0);
-  if (dif > 0) return [`${x0} +${fmt(dif)} neto`, rojo];
+  if (dif > 0) return precioInforma ? [`⚠️ +${fmt(dif)} neto (precio del día)`, amarillo] : [`${x0} +${fmt(dif)} neto`, rojo];
   if (x.difPrecio.length) return [`⚠️ precio distinto (${fmt(dif)})`, amarillo];
   if (!x.totalOk) return ['⚠️ renglón mal calculado', amarillo];
   if (x.remito !== null && x.remito > x.cantidad) return [`⚠️ el remito trae ${x.remito}`, amarillo];
@@ -1679,7 +1680,7 @@ function TarjetaEntrega({ r, abierta, onAbrir, pedidos, cerradas, nombrePedido, 
               <thead><tr><th style={th}>Código</th><th style={th}>Descripción</th><th style={th}>Pedido</th><th style={th}>Facturado</th><th style={th}>Remito</th><th style={th}>Precio pedido</th><th style={th}>Precio factura</th><th style={th}>Estado</th></tr></thead>
               <tbody>{r.renglones.map((x, i) => {
                 const fr = f.renglones[i];
-                const [estado, color] = estadoRenglon(x, nombrePedido, naranja);
+                const [estado, color] = estadoRenglon(x, nombrePedido, naranja, r.precioInformativo);
                 return <tr key={i}>
                   <td style={td}>{x.codigo}</td><td style={td}>{x.descripcion}</td>
                   <td style={td}>{x.pedidoCantidad ?? '—'}{x.yaFacturadoAntes ? <span style={{ opacity: 0.7 }}> (ya fact. {x.yaFacturadoAntes})</span> : null}</td>

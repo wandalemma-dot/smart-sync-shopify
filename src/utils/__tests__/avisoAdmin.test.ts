@@ -163,6 +163,22 @@ describe('Fila para la planilla de ingreso (16-nov-2026)', () => {
   });
 });
 
+describe('iD facturado más caro: con observaciones, en amarillo (26-nov-2026, gax)', () => {
+  const caro = { ...r, semaforo: 'observaciones', totalDifPrecio: 3850.26, precioInformativo: true } as unknown as ResultadoFactura;
+  it('la planilla dice «Con observaciones (diferencias de precio contra nota de pedido)» y pide amarillo', () => {
+    expect(observacionesPlanilla(caro)).toBe('Con observaciones (diferencias de precio contra nota de pedido: $ 3.850,26 de más)');
+    expect(filaPlanilla({ ...o, r: caro })).toMatchObject({
+      factura: 'FAC. - 0011-00139953', observaciones: 'APP - Con observaciones (diferencias de precio contra nota de pedido: $ 3.850,26 de más)', ok: false, aviso: true,
+    });
+  });
+  it('si además hay algo facturado sin pedir, va en naranja como siempre', () => {
+    expect(filaPlanilla({ ...o, r: { ...caro, totalSinPedirNeto: 60000 } as ResultadoFactura }).aviso).toBeUndefined();
+  });
+  it('Distrinando sigue diciendo «Facturado más caro»', () => {
+    expect(filaPlanilla({ ...o, prov: 'distrinando', r: { ...r, totalDifPrecio: 1500 } as ResultadoFactura }).aviso).toBeUndefined();
+  });
+});
+
 describe('Fecha de ingreso de la mercadería (21-nov-2026, gax)', () => {
   it('la planilla lleva el día que entró y CARGA STOCK el día que se carga; la factura es de antes', () => {
     expect(filaPlanilla({ ...o, ingreso: '2026-11-12' })).toMatchObject({ fecha: '12/11/26', carga: '16/11/26' });

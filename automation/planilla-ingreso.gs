@@ -8,7 +8,8 @@
 //
 // Qué hace: busca la hoja cuya fila 1 tiene FECHA, PROVEEDOR y N° FACTURA; encuentra las columnas por
 // su encabezado (no por letra); agrega la fila debajo de la última con FECHA; copia el formato de la
-// última fila del mismo proveedor (su color); pinta OBSERVACIONES en naranja si hubo algo para revisar.
+// última fila del mismo proveedor (su color); pinta OBSERVACIONES en naranja si hubo algo para revisar
+// (en amarillo si es solo una diferencia de precio de iD, que no se reclama).
 // Si el N° de factura ya está en la planilla, no la repite. Family no factura: la fila va sin N° de
 // factura y no se repite si su N° de remito ya está. No borra ni cambia otras filas.
 // «corregir» (25-nov-2026): cambia N° FACTURA y OBSERVACIONES (y su color) de la fila de esa factura, la última
@@ -139,7 +140,7 @@ function anotar(f) {
   h.getRange(n, c.carga).setNumberFormat('dd/mm/yy');
   var obs = h.getRange(n, c.observaciones);
   if (f.ok) { if (modelo) obs.setBackground(h.getRange(modelo, c.proveedor).getBackground()); }
-  else obs.setBackground('#ff6d01');
+  else obs.setBackground(f.aviso ? '#ffe599' : '#ff6d01');
   return { ok: true, fila: n };
 }
 
@@ -161,6 +162,6 @@ function corregir(f) {
   h.getRange(n, c.factura).setValue(texto(f.factura));
   obs.setValue(texto(f.observaciones));
   if (f.ok) obs.setBackground(h.getRange(n, c.proveedor).getBackground());
-  else obs.setBackground('#ff6d01');
+  else obs.setBackground(f.aviso ? '#ffe599' : '#ff6d01');
   return { ok: true, fila: n, antes: antes };
 }

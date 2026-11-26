@@ -256,6 +256,11 @@ export interface ResultadoFactura {
   pendientePedidos: { pedidoId: string; codigo: string; descripcion: string; pendiente: number }[];
   /** Lo que se reclama (precio de más + sin pedir): la nota de crédito se pide por el neto. */
   reclamo: Impuestos;
+  /**
+   * iD (26-nov-2026, gax: «se factura al día de la fecha… es solamente para que sepa administración»): lo facturado
+   * más caro que la nota es una observación (amarillo), no un reclamo. true si hay algo más caro y es iD.
+   */
+  precioInformativo?: boolean;
 }
 
 export interface Impuestos { neto: number; iva: number; percepciones: number; total: number }
@@ -614,6 +619,8 @@ export function analizarFacturas(
   remitosIn?: Record<string, Remito | undefined>,
   /** Entregas abiertas (no cargadas y cerradas): para ellas no cuentan las notas de tarjetas archivadas. */
   abiertas: Set<string> = new Set(),
+  /** precioInforma: iD factura al precio del día; lo más caro que la nota solo se informa (observación, sin reclamo). */
+  opciones: { precioInforma?: boolean } = {},
 ): ResultadoGeneral {
   // La O y el 0 se confunden (en el PDF, en la foto del remito o al tipear: CTN0225003O / CTN02250030).
   // Se comparan como iguales y se muestra la escritura de la factura (o, si no está, la del pedido).
@@ -818,7 +825,12 @@ export function analizarFacturas(
         motivos.push(`DOBLE COBRO: ${r.codigo} ya había sido facturado como adelanto en ${previas || 'una factura anterior'}.`);
       }
     }
-    if (difMas > 0) {
+    if (difMas > 0 && opciones.precioInforma) {
+      medias++;
+      const n = renglones.filter((r) => r.difPrecio.some((d) => d.diferencia > 0)).length;
+      const x = conImpuestos(difMas, f);
+      motivos.push(`PRECIO: ${n} artículo(s) facturados más caros que en la nota de pedido: ${fmt(x.neto)} neto + IVA ${fmt(x.iva)} + percepciones ${fmt(x.percepciones)} = ${fmt(x.total)}. iD factura al precio del día: solo se informa a administración, no se reclama.`);
+    } else if (difMas > 0) {
       criticas++;
       const n = renglones.filter((r) => r.difPrecio.some((d) => d.diferencia > 0)).length;
       const x = conImpuestos(difMas, f);
@@ -862,7 +874,7 @@ export function analizarFacturas(
     const pendientePedidos = [...mapa.values()].flat()
       .filter((g) => propios.has(g.pedido.id) && libreDe(g, f.fecha) > 0)
       .map((g) => ({ pedidoId: g.pedido.id, codigo: g.codigo, descripcion: g.descripcion, pendiente: libreDe(g, f.fecha) }));
-    const reclamo = conImpuestos(p(c(difMas) + c(totalSinPedirNeto)), f);
+    const reclamo = conImpuestos(p((opciones.precioInforma ? 0 : c(difMas)) + c(totalSinPedirNeto)), f);
     const incompleta = faltaRemito || faltaNota;
     resultados.push({
       factura: f,
@@ -893,6 +905,7 @@ export function analizarFacturas(
         : (Number(x.retirado) || 0) > 0 ? [{ codigo: normCodigo(x.codigo), talle: '', cantidad: Number(x.retirado) }] : []),
       pendientePedidos,
       reclamo,
+      precioInformativo: !!opciones.precioInforma && difMas > 0,
     });
   }
 
@@ -998,7 +1011,8 @@ export function motivoInformativo(m: string): string {
     .replace(/ no figura en ninguna nota de pedido pendiente: ¿falta cargar un pedido\?$/, ' no figura en ninguna nota de pedido.')
     .replace(/: ¿es el remito correcto\?$/, '.')
     .replace(/: subila o tildala a mano\.$/, '.')
-    .replace(/: revisar antes de reclamar\.$/, '.');
+    .replace(/: revisar antes de reclamar\.$/, '.')
+    .replace(/ iD factura al precio del día: solo se informa a administración, no se reclama\.$/, '');
 }
 
 /** Lo que vino sin pedirse: lo único que no tiene que pasar (va primero en el mensaje). */
