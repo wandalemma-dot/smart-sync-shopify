@@ -1,6 +1,6 @@
 // Carga de las entregas de Family en Shopify (11-nov-2026, pedido de gax). Shopify SIMULADO: ninguna escritura real.
 import { describe, it, expect, vi } from 'vitest';
-import {
+import { avisoLiberar,
   accionesElegidas, candidatosPorNombre, cargasDeEntrega, costoFamily, ejecutarCargaFamily, esBrandCo, estadoShopifyEntrega, firmaCarga, leerEstadoCarga,
   noSeEjecuto, planCargaFamily, resumenCarga, talleAlta, tituloFamily, type CargaFamily, type DepsCarga, type EstadoCarga, type PlanCarga, type ProductoCarga,
 } from '../cargaFamily';
@@ -171,6 +171,16 @@ function shopify(respuestas: Record<string, (v: Record<string, unknown>) => unkn
   });
 }
 const sinPagina = { hasNextPage: false, endCursor: null };
+
+describe('liberar una marca parcial (26-nov-2026)', () => {
+  it('dice qué talles ya se sumaron, para no sumarlos otra vez', () => {
+    const c: CargaFamily = { estado: 'parcial', fecha: 'x', firma: 'x', detalle: { talles: [{ talle: 'L', cantidad: 2 }] } };
+    const a = avisoLiberar('CTO0225001', c, 'parcial');
+    expect(a).toMatch(/ya se sumó L ×2.*poné 0 en ese talle/s);
+    expect(avisoLiberar('X', { estado: 'dudosa', fecha: 'x', firma: 'x' }, 'dudosa')).not.toMatch(/ya se sumó/);
+    expect(avisoLiberar('X', { estado: 'cargada', fecha: 'x', firma: 'x' }, '')).toMatch(/OTRA VEZ/);
+  });
+});
 
 describe('Family: entregas cargadas y pendientes en Shopify (pantalla)', () => {
   const marca = (estado: CargaFamily['estado']): CargaFamily => ({ estado, fecha: '2026-11-11T19:20:55.000Z', firma: 'x' });
@@ -346,6 +356,36 @@ describe('Family: carga en Shopify (después de confirmar)', () => {
     expect(d.terminar).toHaveBeenCalledWith('SHBSPEC', 'parcial', expect.objectContaining({
       unidades: 14, talles: [{ talle: 'S', cantidad: 2 }, { talle: 'M', cantidad: 4 }, { talle: 'L', cantidad: 4 }, { talle: 'XXL', cantidad: 4 }],
     }));
+  });
+
+  it('talle que se dio de alta mientras tanto («already active»): suma sobre lo que tiene ahora, sin quedar parcial', async () => {
+    const p = producto('gid://shopify/Product/1', 'Bermuda', { S: 1, M: 0, L: 3, XL: null, XXL: 2 });
+    const gql = shopify({
+      inventorySetQuantities: () => ({ inventorySetQuantities: { inventoryAdjustmentGroup: { createdAt: 'x' }, userErrors: [] } }),
+      inventoryActivate: () => ({ inventoryActivate: { inventoryLevel: null, userErrors: [{ field: ['available'], message: 'Not allowed to set available quantity when the item is already active at the location.' }] } }),
+      DisponibleId: () => ({ nodes: [{ id: `${p.id}/inv/XL`, inventoryLevel: { quantities: [{ name: 'available', quantity: 0 }] } }] }),
+    });
+    const d = deps(gql);
+    const [res] = await ejecutarCargaFamily(planSolo('SHBSPEC', estadoVacio({ porCodigo: { SHBSPEC: [p.id], GSKPT23: [] }, productos: { [p.id]: p } })), {}, d);
+    expect(res.estado).toBe('cargada');
+    expect(res.mensaje).toMatch(/XL 0→6/);
+    const sets = gql.mock.calls.filter(([q]) => q.includes('inventorySetQuantities')).map(([, v]) => v!.input as { quantities: unknown[] });
+    expect(sets[1].quantities).toEqual([{ inventoryItemId: `${p.id}/inv/XL`, locationId: LOC, quantity: 6, changeFromQuantity: 0 }]);
+    expect(d.terminar).toHaveBeenCalledWith('SHBSPEC', 'cargada', expect.objectContaining({ unidades: 20 }));
+  });
+
+  it('«already active» y no se puede leer el stock: no suma ese talle, queda para cargar a mano', async () => {
+    const p = producto('gid://shopify/Product/1', 'Bermuda', { S: 1, M: 0, L: 3, XL: null, XXL: 2 });
+    const gql = shopify({
+      inventorySetQuantities: () => ({ inventorySetQuantities: { inventoryAdjustmentGroup: { createdAt: 'x' }, userErrors: [] } }),
+      inventoryActivate: () => ({ inventoryActivate: { inventoryLevel: null, userErrors: [{ message: 'Not allowed to set available quantity when the item is already active at the location.' }] } }),
+      DisponibleId: () => ({ nodes: [null] }),
+    });
+    const d = deps(gql);
+    const [res] = await ejecutarCargaFamily(planSolo('SHBSPEC', estadoVacio({ porCodigo: { SHBSPEC: [p.id], GSKPT23: [] }, productos: { [p.id]: p } })), {}, d);
+    expect(res.estado).toBe('parcial');
+    expect(res.mensaje).toMatch(/XL \(ya estaba dado de alta y no pude leer su stock/);
+    expect(gql.mock.calls.filter(([q]) => q.includes('inventorySetQuantities'))).toHaveLength(1);
   });
 
   it('cargar solo una parte de la entrega: lo destildado no se carga y queda para otro día', async () => {

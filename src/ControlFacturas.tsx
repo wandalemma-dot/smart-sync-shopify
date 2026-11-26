@@ -29,7 +29,7 @@ import RegistroCargas from './RegistroCargas';
 import EnlacesRapidos from './EnlacesRapidos';
 import { Archivo, Copiar, Parte } from './EntregasPartes';
 import { NoEntraron, OrdenesQueSalen, PanelCarga } from './PanelCarga';
-import { accionesElegidas, ejecutarCargaFamily, resumenCarga, textoCarga, type CargaFamily, type EleccionesCarga, type ModoVenta, type NoEntroCarga, type PlanCarga, type ResultadoCarga } from './utils/cargaFamily';
+import { accionesElegidas, avisoLiberar, ejecutarCargaFamily, resumenCarga, textoCarga, type CargaFamily, type EleccionesCarga, type ModoVenta, type NoEntroCarga, type PlanCarga, type ResultadoCarga } from './utils/cargaFamily';
 import { ResultadosCarga } from './ResultadosCarga';
 import { comentarioTrello, fechaIngreso, filaPlanilla, resultadosGuardados, textoAvisoAdmin } from './utils/avisoAdmin';
 import { cambiosDePrecio, enlacesMail, textoAvisoPrecio, type CambioPrecio, type MailsAviso } from './utils/avisoPrecio';
@@ -1156,9 +1156,7 @@ export default function ControlFacturas() {
   }
 
   async function liberarCarga(entregaId: string, codigo: string, c: CargaFamily) {
-    const aviso = c.estado === 'cargada'
-      ? `${codigo} figura como cargado en Shopify. Si liberás la marca, la app lo deja cargar OTRA VEZ (sumaría el stock dos veces). ¿Seguro?`
-      : `${codigo}: ${textoCarga(c)}\n\nAntes de liberar, mirá en Shopify si quedó cargado y corregilo a mano si hace falta. Si liberás, la app lo deja cargar de nuevo. ¿Liberar?`;
+    const aviso = avisoLiberar(codigo, c, textoCarga(c));
     if (!confirm(aviso)) return;
     setPlanCarga(null);
     // manual: queda anotada en el registro de cargas.

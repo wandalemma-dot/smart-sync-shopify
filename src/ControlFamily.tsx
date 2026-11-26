@@ -32,6 +32,7 @@ import {
 import {
   cargasDeEntrega, ejecutarCargaFamily, estadoShopifyEntrega, FAMILY, leerEstadoCarga, planCargaFamily, resumenCarga, textoCarga,
   type CargaFamily, type EleccionesCarga, type Marketplace, type PlanCarga, type ResultadoCarga,
+  avisoLiberar,
 } from './utils/cargaFamily';
 import { ResultadosCarga } from './ResultadosCarga';
 import { leerTextoRemito, textoRemito } from './utils/lectoresFacturas';
@@ -383,7 +384,7 @@ export default function ControlFamily({ prov = 'family', aFotos }: { prov?: Prov
   async function liberarCarga(entregaId: string, codigo: string, c: CargaFamily) {
     const aviso = c.estado === 'cargada'
       ? `${codigo} figura como cargado en Shopify. Si liberás la marca, la app lo deja cargar OTRA VEZ (sumaría el stock dos veces o crearía otro producto). ¿Seguro?`
-      : `${codigo}: ${textoCarga(c)}\n\nAntes de liberar, mirá en Shopify si quedó cargado y corregilo a mano si hace falta. Si liberás, la app lo deja cargar de nuevo. ¿Liberar?`;
+      : avisoLiberar(codigo, c, textoCarga(c));
     if (!confirm(aviso)) return;
     setArmado(null);
     // manual: queda anotada en el registro de cargas (la que libera la app sola cuando Shopify rechazó la carga, no).
