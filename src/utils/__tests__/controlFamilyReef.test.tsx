@@ -9,7 +9,8 @@ describe('pantalla de Reef', () => {
     expect(html).toMatch(/Nueva entrega de Reef/);
     expect(html).toMatch(/Lista de precios: todavía no está cargada/);
     expect(html).toMatch(/Subir lista de precios \(Excel\)/);
-    expect(html).toMatch(/Remito \(foto o PDF\)/);
+    expect(html).toMatch(/Remito \(Excel, foto o PDF\)/);
+    expect(html).toMatch(/accept="\.xlsx,\.xls,image\/\*,\.pdf"/);
     expect(html).toMatch(/PMV − 15%/);
     expect(html).not.toMatch(/1,21|o factura/);
   });

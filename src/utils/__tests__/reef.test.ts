@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  altaReef, curvaReef, entregaDeRemitoReef, esTalleUs, leerListaReef, marketplaceReef, skuEsDeReef, talleSkuReef, tituloReef, type ListaReef,
+  altaReef, curvaReef, entregaDeRemitoReef, esTalleUs, leerListaReef, marketplaceReef, remitoReefDeExcel, skuEsDeReef, talleSkuReef, tituloReef, type ListaReef,
 } from '../reef';
 import { leerTextoEntregaFamily, talleFamily } from '../controlFamily';
 import type { AltaFamily } from '../cargaFamily';
@@ -142,6 +142,43 @@ describe('Reef: remito + lista → entrega', () => {
     const r = entregaDeRemitoReef(remito, null, '2026-11-26');
     expect(r.avisos[0]).toMatch(/lista de precios/);
     expect(r.entrega.renglones[0]).toMatchObject({ precioMayor: 0, talles: [] });
+  });
+});
+
+describe('Reef: remito digital (Excel, 26-nov-2026)', () => {
+  // Mismo formato que «Detalle Remit …xlsx» de New Arrecife, con datos armados (el archivo real no va al repositorio).
+  const FILAS: unknown[][] = [
+    ['Estadísticas de Ventas', '', '', '', '', '', ''],
+    ['desde el 01/10/2026 hasta el 26/11/2026 (Clientes parcial)'],
+    ['Artículo: ', 'Comprobante', 'Fecha', 'Clnte', 'Razón Social', 'Cant.Mov.', 'Importe'],
+    ['27112280     - SHAKA BLACK/WHITE                  ', 'RTTO-R 0067-00003073', '25/11/2026', '00001', 'CLIENTE DE PRUEBA SA', 12, 509949],
+    ['27112289     - ROCKER ALL BLACK                   ', 'RTTO-R 0067-00003073', '25/11/2026', '00001', 'CLIENTE DE PRUEBA SA', 24, 1100000],
+    ['', '', '', '', '', 36, 1609949],
+  ];
+  const { lista } = leerListaReef(HOJAS, 'Lista');
+
+  it('lee número, fecha, cantidades e importes; la fila de totales no es un artículo', () => {
+    const doc = remitoReefDeExcel(FILAS);
+    expect(doc).toMatchObject({ numero: '0067-00003073', fecha: '2026-11-25', total: 1609949 });
+    expect(doc.renglones).toEqual([
+      { codigo: '27112280', descripcion: 'SHAKA BLACK/WHITE', cantidad: 12, talles: '', importe: 509949 },
+      { codigo: '27112289', descripcion: 'ROCKER ALL BLACK', cantidad: 24, talles: '', importe: 1100000 },
+    ]);
+  });
+
+  it('con la lista: talles por la curva, origen Excel, total del remito; avisa si el importe no es PMV − 15%', () => {
+    const { entrega } = entregaDeRemitoReef(remitoReefDeExcel(FILAS), lista, '2026-11-26', 'excel');
+    expect(entrega).toMatchObject({ origen: 'excel', nombre: 'Remito 0067-00003073', documento: { tipo: 'remito', numero: '0067-00003073', total: 1609949 } });
+    expect(entrega.renglones[0].talles.map((t) => `${t.talle}:${t.cantidad}`).join(' ')).toBe('40:1 41:2 42:3 43:3 44:2 45:1');
+    // 509.949 / 12 = 42.495,75 = 49.995 − 15%: sin duda. 1.100.000 / 24 = 45.833,33: duda.
+    expect(entrega.dudas!.join(' ')).not.toMatch(/27112280/);
+    expect(entrega.dudas!.join(' ')).toMatch(/27112289: el remito dice \$1\.100\.000 por 24 u\..*PMV − 15% da \$42\.495,75/);
+  });
+
+  it('no es el remito digital, o trae varios remitos: no adivina', () => {
+    expect(() => remitoReefDeExcel([['Linea', 'Artículo', 'Curva']])).toThrow(/no encontré las columnas/);
+    const dos = [...FILAS.slice(0, 4), ['27112289 - ROCKER ALL BLACK', 'RTTO-R 0067-00003074', '26/11/2026', '', '', 12, 509949]];
+    expect(() => remitoReefDeExcel(dos)).toThrow(/2 remitos distintos.*uno por remito/);
   });
 });
 

@@ -14,7 +14,7 @@
 // SKU de los nuevos = código.talle (27112280.040, 272222167.S, 27103265.3940), como los
 // Reef que ya están en la tienda; etiqueta = el código.
 // ============================================================================
-import type { EntregaFamily, RenglonFamily } from './controlFamily';
+import { fechaFamily, type EntregaFamily, type RenglonFamily } from './controlFamily';
 import { costoFamily, talleAlta, type Marketplace, type OpcionCarga } from './cargaFamily';
 
 export const SUCURSAL_REEF = 'NEW ARRECIFE (Reef)';
@@ -168,8 +168,42 @@ export function leerListaReef(hojas: { nombre: string; filas: unknown[][] }[], n
 // ---------------------------------------------------------------------------
 // REMITO (leído de la foto) + LISTA → ENTREGA
 // ---------------------------------------------------------------------------
-export interface RenglonRemitoReef { codigo: string; descripcion: string; cantidad: number; talles: string }
-export interface RemitoReef { numero: string; fecha: string; renglones: RenglonRemitoReef[]; dudas: string[] }
+export interface RenglonRemitoReef { codigo: string; descripcion: string; cantidad: number; talles: string; importe?: number }
+export interface RemitoReef { numero: string; fecha: string; renglones: RenglonRemitoReef[]; dudas: string[]; total?: number }
+
+/**
+ * Remito digital de Reef (26-nov-2026, «Detalle Remit …xlsx»): una hoja «Estadísticas de Ventas» con
+ * Artículo («27112280 - SHAKA BLACK/WHITE») | Comprobante («RTTO-R 0067-00003073») | Fecha | Clnte | Razón Social | Cant.Mov. | Importe.
+ * Trae cantidades por artículo (sin talles) y el importe a costo (PMV − 15%, sin IVA). La fila de totales se ignora.
+ * Si trae más de un remito, se pide bajar uno por remito.
+ */
+export function remitoReefDeExcel(filas: unknown[][]): RemitoReef {
+  const txt = (v: unknown) => String(v ?? '').replace(/\s+/g, ' ').trim();
+  const sin = (v: unknown) => txt(v).toUpperCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
+  const enc = filas.findIndex((f) => (f ?? []).some((c) => /^ARTICULO/.test(sin(c))) && (f ?? []).some((c) => /^COMPROBANTE/.test(sin(c))));
+  if (enc < 0) throw new Error('No es el remito digital de Reef: no encontré las columnas «Artículo» y «Comprobante».');
+  const col = (re: RegExp) => (filas[enc] ?? []).findIndex((c) => re.test(sin(c)));
+  const cArt = col(/^ARTICULO/), cComp = col(/^COMPROBANTE/), cFecha = col(/^FECHA/), cCant = col(/^CANT/), cImp = col(/^IMPORTE/);
+  if (cCant < 0) throw new Error('El remito digital no tiene la columna «Cant.Mov.».');
+  const renglones: RenglonRemitoReef[] = [];
+  const comprobantes = new Set<string>();
+  let fecha = '';
+  let total = 0;
+  for (const f of filas.slice(enc + 1)) {
+    const m = /^([A-Z0-9][A-Z0-9.-]*)\s+-\s*(.*)$/i.exec(txt(f?.[cArt]));
+    if (!m) continue;
+    const comp = txt(f?.[cComp]);
+    const num = /(\d{4}-\d{8})/.exec(comp)?.[1] || comp;
+    if (num) comprobantes.add(num);
+    fecha ||= cFecha >= 0 ? fechaFamily(f?.[cFecha]) : '';
+    const importe = cImp >= 0 ? Number(f?.[cImp]) || 0 : 0;
+    total += importe;
+    renglones.push({ codigo: m[1], descripcion: m[2], cantidad: Number(f?.[cCant]) || 0, talles: '', ...(importe ? { importe } : {}) });
+  }
+  if (comprobantes.size > 1) throw new Error(`El Excel trae ${comprobantes.size} remitos distintos (${[...comprobantes].join(', ')}): bajá uno por remito.`);
+  if (!renglones.length) throw new Error('No encontré artículos en el remito digital.');
+  return { numero: [...comprobantes][0] ?? '', fecha, renglones, dudas: [], ...(total ? { total: Math.round(total * 100) / 100 } : {}) };
+}
 
 /** Talles impresos en el remito («040 041 042» → 40 41 42). Un número de 3 cifras que termina en 0 puede ser ×10 (070 = 7). */
 function tallesImpresos(s: string): string[] {
@@ -185,7 +219,9 @@ function coincideImpreso(impreso: string, talle: string): boolean {
  * Lo que no se puede saber (código fuera de la lista, talles de EE.UU., cantidad que no es múltiplo de la curva)
  * queda sin talles y con una duda: se completa en «✏️ Ver o corregir».
  */
-export function entregaDeRemitoReef(doc: RemitoReef, lista: ListaReef | null, hoy: string): { entrega: Omit<EntregaFamily, 'id'>; avisos: string[] } {
+const pesosReef = (n: number) => `$${n.toLocaleString('es-AR', { minimumFractionDigits: 0, maximumFractionDigits: 2 })}`;
+
+export function entregaDeRemitoReef(doc: RemitoReef, lista: ListaReef | null, hoy: string, origen: 'foto' | 'excel' = 'foto'): { entrega: Omit<EntregaFamily, 'id'>; avisos: string[] } {
   const dudas = [...(doc.dudas ?? [])];
   const avisos: string[] = [];
   const arts = new Map((lista?.articulos ?? []).map((a) => [a.codigo, a]));
@@ -197,6 +233,11 @@ export function entregaDeRemitoReef(doc: RemitoReef, lista: ListaReef | null, ho
     const cantidad = Math.round(Number(r.cantidad) || 0);
     if (!(cantidad > 0)) { dudas.push(`${codigo}: no tiene cantidad.`); continue; }
     const a = arts.get(codigo);
+    // Remito digital: el importe es a costo (PMV − 15%). Si no da, se avisa (no se cambia el costo).
+    if (a?.pvm && r.importe) {
+      const unidad = r.importe / cantidad, esperado = costoFamily(a.pvm);
+      if (Math.abs(unidad - esperado) > 1) dudas.push(`${codigo}: el remito dice ${pesosReef(r.importe)} por ${cantidad} u. (${pesosReef(unidad)} c/u) y PMV − 15% da ${pesosReef(esperado)}. Revisá el precio con Reef.`);
+    }
     const renglon: RenglonFamily = { codigo, descripcion: a?.descripcion || String(r.descripcion ?? '').replace(/\s+/g, ' ').trim(), precioMayor: a?.pvm ?? 0, precioPublico: a?.pvp ?? 0, cantidad, talles: [] };
     if (!a) {
       if (arts.size) dudas.push(`${codigo}: no está en la lista de precios. Escribí los talles y los precios (PMV y PVP) en «✏️ Ver o corregir».`);
@@ -236,8 +277,8 @@ export function entregaDeRemitoReef(doc: RemitoReef, lista: ListaReef | null, ho
   const numero = String(doc.numero ?? '').trim();
   return {
     entrega: {
-      nombre: `Remito ${numero}`.trim(), fecha: doc.fecha || hoy, origen: 'foto', renglones: [...porCodigo.values()], dudas,
-      documento: { tipo: 'remito', numero, remito: numero, total: 0 },
+      nombre: `Remito ${numero}`.trim(), fecha: doc.fecha || hoy, origen, renglones: [...porCodigo.values()], dudas,
+      documento: { tipo: 'remito', numero, remito: numero, total: doc.total ?? 0 },
     },
     avisos,
   };
