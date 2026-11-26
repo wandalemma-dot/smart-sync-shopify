@@ -47,6 +47,38 @@ describe('Ullua: entregas con remito o factura (19-nov-2026)', () => {
   });
 });
 
+describe('Reef: lista de precios (26-nov-2026)', () => {
+  const art = { codigo: '27112280', hoja: 'CALZADO', linea: 'CALZADO WALL SHOES GUYS', descripcion: 'SHAKA BLACK/WHITE', curva: '40 (1) / 41 (2)= 3', talles: [{ talle: '40', cantidad: 1 }, { talle: '41', cantidad: 2 }], pvm: 49995, pvp: 99990, unidades: 3 };
+  it('guarda la lista limpia y la devuelve solo en Reef', async () => {
+    const { fn } = memoria();
+    const r = await aplicar(fn, { proveedor: 'reef', accion: 'guardarListaReef', lista: { nombre: 'Summer 2027', articulos: [{ ...art, email: 'x@y.com' }, { ...art, codigo: '27103013', us: true }] } });
+    expect(r).toEqual({ ok: true, articulos: 2 });
+    const t = await leerTodo(fn, 'reef');
+    expect(t.lista.nombre).toBe('Summer 2027');
+    expect(t.lista.articulos[0]).toEqual(art);
+    expect(t.lista.articulos[1].us).toBe(true);
+    expect(JSON.stringify(t.lista)).not.toContain('x@y.com');
+    expect((await leerTodo(fn, 'ullua')).lista).toBeUndefined();
+    expect(Array.isArray(t.entregas) && t.cargas).toBeTruthy();
+  });
+  it('rechaza códigos inválidos, repetidos, lista vacía y otro proveedor', async () => {
+    const { fn } = memoria();
+    await expect(aplicar(fn, { proveedor: 'reef', accion: 'guardarListaReef', lista: { articulos: [] } })).rejects.toThrow(/no tiene artículos/);
+    await expect(aplicar(fn, { proveedor: 'reef', accion: 'guardarListaReef', lista: { articulos: [{ ...art, codigo: '<x>' }] } })).rejects.toThrow(/Código/);
+    await expect(aplicar(fn, { proveedor: 'reef', accion: 'guardarListaReef', lista: { articulos: [art, art] } })).rejects.toThrow(/repetidos/);
+    await expect(aplicar(fn, { proveedor: 'ullua', accion: 'guardarListaReef', lista: { articulos: [art] } })).rejects.toThrow(/Solo Reef/);
+  });
+  it('las entregas de Reef van en su propia base y guardan el día que entró', async () => {
+    const { fn } = memoria();
+    await aplicar(fn, { proveedor: 'reef', accion: 'guardarEntrega', entrega: { id: 'E-1', nombre: 'Remito 0067-00003073', fecha: '2026-11-25', renglones: [{ codigo: '27112280', cantidad: 12, talles: [{ talle: '39-40', cantidad: 2 }] }] } });
+    await aplicar(fn, { proveedor: 'reef', accion: 'guardarIngreso', facturaId: 'E-1', fecha: '2026-11-26' });
+    const t = await leerTodo(fn, 'reef');
+    expect(t.entregas[0]).toMatchObject({ ingreso: '2026-11-26' });
+    expect(t.entregas[0].renglones[0].talles[0].talle).toBe('39-40');
+    expect((await leerTodo(fn, 'ullua')).entregas).toEqual([]);
+  });
+});
+
 describe('Family: entregas sin factura (11-nov-2026)', () => {
   it('guarda la planilla con su consulta a Shopify, la lee y la borra junto con su remito', async () => {
     const { fn } = memoria();

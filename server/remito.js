@@ -211,6 +211,42 @@ Reglas:
 - No hagas cuentas para completar lo que no se lee: la app las controla.
 - Ignorá firmas y sellos; las marcas a mano anotalas en «dudas».`;
 
+// Reef (26-nov-2026, gax): remito de NEW ARRECIFE. Código | Descripción | Cantidad | Talles, SIN precios. El precio
+// y la curva salen de la lista de precios de Reef que se guarda en la app (reef.ts).
+const ESQUEMA_REEF = {
+  type: 'object',
+  additionalProperties: false,
+  required: ['numero', 'fecha', 'renglones', 'dudas'],
+  properties: {
+    numero: { type: 'string', description: 'Número del remito tal como está impreso (por ejemplo 0067-00003073).' },
+    fecha: { type: 'string', description: 'Fecha del remito en formato AAAA-MM-DD, o vacío.' },
+    renglones: {
+      type: 'array',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        required: ['codigo', 'descripcion', 'cantidad', 'talles'],
+        properties: {
+          codigo: { type: 'string', description: 'Código del artículo, solo los números (27112279).' },
+          descripcion: { type: 'string', description: 'La descripción tal como está impresa.' },
+          cantidad: { type: 'number', description: 'Cantidad (unidades o pares) del renglón.' },
+          talles: { type: 'string', description: 'Lo que dice la columna Talles, tal cual (por ejemplo «040 041 042 043 044 045»), o vacío.' },
+        },
+      },
+    },
+    dudas: { type: 'array', items: { type: 'string' } },
+  },
+};
+
+const INSTRUCCIONES_REEF = `Transcribí este remito de NEW ARRECIFE (marca Reef). Puede venir en varias fotos: son páginas del mismo remito; la foto puede estar girada.
+Columnas de los renglones: Código | Descripción | Cantidad | Talles. No trae precios.
+- El código son los números del principio del renglón (27112279); el guion que lo sigue no es parte del código.
+- La columna Talles se transcribe tal cual, en el mismo orden («040 041 042 043 044 045»).
+- Recorré todos los renglones, también el primero y el último, aunque la foto esté girada o con reflejo.
+Reglas:
+- No corrijas, no completes y no adivines. Si algo no se lee con seguridad, transcribí lo más probable y explicalo en «dudas» (código y qué no se lee).
+- Ignorá firmas y sellos; las marcas a mano anotalas en «dudas».`;
+
 /** Valida las fotos que manda la pantalla. */
 export function validarFotos(fotos) {
   if (!Array.isArray(fotos) || !fotos.length) throw falla('Falta la foto del remito.');
@@ -329,6 +365,22 @@ export function normalizarUllua(crudo) {
   };
 }
 
+/** Normaliza el remito de Reef. La curva, los talles y los precios se resuelven en la app con la lista (reef.ts). */
+export function normalizarReef(crudo) {
+  const dudas = (Array.isArray(crudo?.dudas) ? crudo.dudas : []).slice(0, 50).map((d) => txt(d, 300)).filter(Boolean);
+  const renglones = [];
+  for (const r of (Array.isArray(crudo?.renglones) ? crudo.renglones : []).slice(0, 300)) {
+    const codigo = txt(r?.codigo, 30).toUpperCase().replace(/[\s-]+$/g, '').replace(/\s+/g, '');
+    if (!codigo) continue;
+    renglones.push({ codigo, descripcion: txt(r?.descripcion, 200), cantidad: cant(r?.cantidad), talles: txt(r?.talles, 200) });
+  }
+  return {
+    numero: txt(crudo?.numero, 40),
+    fecha: /^\d{4}-\d{2}-\d{2}$/.test(String(crudo?.fecha || '')) ? crudo.fecha : '',
+    renglones, dudas, origen: 'foto',
+  };
+}
+
 /**
  * Códigos de la factura de la entrega (25-nov-2026, factura 0011-00140160: la foto girada y con reflejo se salteó el
  * primer renglón, 10027339A03, y el control dijo «facturaron más de lo que dice el remito»). Se le pasan al modelo
@@ -362,17 +414,18 @@ export async function leerRemito({ fotos, cliente, tipo = 'remito', esperados })
   const esEntrega = tipo === 'entrega';
   const esFactura = tipo === 'factura';
   const esUllua = tipo === 'ullua';
+  const esReef = tipo === 'reef';
   const client = cliente || new Anthropic({ apiKey: claveEnv('ANTHROPIC_API_KEY') });
   const content = [
     ...validas.map((f) => ({ type: 'image', source: { type: 'base64', media_type: f.media, data: f.datos } })),
-    { type: 'text', text: esUllua ? INSTRUCCIONES_ULLUA : esFactura ? INSTRUCCIONES_FACTURA : esEntrega ? INSTRUCCIONES_ENTREGA : INSTRUCCIONES + ayudaEsperados(lista) },
+    { type: 'text', text: esReef ? INSTRUCCIONES_REEF : esUllua ? INSTRUCCIONES_ULLUA : esFactura ? INSTRUCCIONES_FACTURA : esEntrega ? INSTRUCCIONES_ENTREGA : INSTRUCCIONES + ayudaEsperados(lista) },
   ];
   const respuesta = await client.beta.messages.create({
     model: process.env.ANTHROPIC_MODEL || MODELO_POR_DEFECTO,
     max_tokens: 16000,
     betas: ['server-side-fallback-2026-07-01'],
     fallbacks: 'default',
-    output_config: { effort: process.env.ANTHROPIC_EFFORT || 'medium', format: { type: 'json_schema', schema: esUllua ? ESQUEMA_ULLUA : esFactura ? ESQUEMA_FACTURA : esEntrega ? ESQUEMA_ENTREGA : ESQUEMA } },
+    output_config: { effort: process.env.ANTHROPIC_EFFORT || 'medium', format: { type: 'json_schema', schema: esReef ? ESQUEMA_REEF : esUllua ? ESQUEMA_ULLUA : esFactura ? ESQUEMA_FACTURA : esEntrega ? ESQUEMA_ENTREGA : ESQUEMA } },
     messages: [{ role: 'user', content }],
   });
   if (respuesta.stop_reason === 'refusal') throw falla('No se pudo leer la foto. Escribí el remito a mano.');
@@ -380,7 +433,7 @@ export async function leerRemito({ fotos, cliente, tipo = 'remito', esperados })
   const texto = (respuesta.content || []).filter((b) => b.type === 'text').map((b) => b.text).join('');
   let crudo;
   try { crudo = JSON.parse(texto); } catch { throw falla('No se pudo leer la foto. Probá de nuevo o escribí el remito a mano.'); }
-  const leido = esUllua ? normalizarUllua(crudo) : esFactura ? normalizarFactura(crudo) : esEntrega ? normalizarEntrega(crudo) : normalizarRemito(crudo);
+  const leido = esReef ? normalizarReef(crudo) : esUllua ? normalizarUllua(crudo) : esFactura ? normalizarFactura(crudo) : esEntrega ? normalizarEntrega(crudo) : normalizarRemito(crudo);
   if (!leido.renglones.length) throw falla(`No encontré artículos en la foto. ¿Es ${esUllua ? 'el remito o la factura' : esFactura ? 'la factura' : esEntrega ? 'la planilla de entrega' : 'el remito'}? Probá con una foto más clara${esFactura ? '' : ' o escribilo a mano'}.`);
   return leido;
 }

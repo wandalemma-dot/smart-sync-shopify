@@ -274,6 +274,8 @@ export interface AltaFamily {
   precioEditable?: boolean;
   /** Ullua: precio c/u sin IVA (para mostrar de dónde sale el precio y el costo). */
   precioBase?: number;
+  /** Reef (26-nov-2026): de dónde sale el precio sugerido («PVP de la lista»). */
+  origenPrecio?: string;
 }
 export interface LineaReposicion { talle: string; inventoryItemId: string; actual: number | null; suma: number }
 /**
@@ -579,7 +581,7 @@ function opcionReposicion(r: RenglonFamily, p: ProductoCarga | undefined, fila: 
  * cómo se reconocen sus productos, en qué sucursal se suma el stock y cómo se crea un producto nuevo.
  */
 export interface Marketplace extends BuscadorShopify {
-  id: 'family' | 'ullua';
+  id: 'family' | 'ullua' | 'reef';
   /** Para los mensajes. */
   nombre: string;
   sucursal: string;

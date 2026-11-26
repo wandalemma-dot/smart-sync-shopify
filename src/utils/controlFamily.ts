@@ -76,6 +76,9 @@ export function fechaFamily(v: unknown): string {
 export function talleFamily(t: string): string {
   const s = norm(t).replace(/\s+/g, '');
   const eq: Record<string, string> = { '2XL': 'XXL', '3XL': 'XXXL', '4XL': 'XXXXL', U: 'TU', UNICO: 'TU' };
+  // Talles dobles (Reef, 26-nov-2026): «39 / 40» de Shopify = «39-40» de la lista = «39/40».
+  const doble = /^(\d{1,3})[-/](\d{1,3})$/.exec(s);
+  if (doble) return `${Number(doble[1])}/${Number(doble[2])}`;
   return eq[s] ?? s;
 }
 
@@ -179,7 +182,7 @@ export function leerTextoEntregaFamily(texto: string): { fecha: string; renglone
         precios.push(Math.round(n * 100) / 100);
         continue;
       }
-      const m = /^([A-Z0-9.]+?)[/×:=](\d+)$/i.exec(t);
+      const m = /^([A-Z0-9.]+?(?:-\d{1,3})?)[/×:=](\d+)$/i.exec(t);
       if (m) { r.talles.push({ talle: m[1].toUpperCase(), cantidad: Number(m[2]) }); continue; }
       if (/^\d+$/.test(t)) { total += Number(t); continue; }
       if (/\d/.test(t) && !/\//.test(t)) { errores.push(`Línea ${i + 1}: no entiendo «${t}» (talle/cantidad, por ejemplo XL/6).`); continue; }

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { COOKIE, makeSession } from './access.js';
-import { codigosEsperados, leerRemito, normalizarEntrega, normalizarFactura, normalizarRemito, normalizarUllua, validarFotos } from './remito.js';
+import { codigosEsperados, leerRemito, normalizarEntrega, normalizarFactura, normalizarReef, normalizarRemito, normalizarUllua, validarFotos } from './remito.js';
 import handler from '../api/leer-remito.js';
 
 const foto = { media: 'image/jpeg', datos: 'QUJD' };
@@ -79,6 +79,21 @@ describe('lectura de la foto del remito', () => {
     expect(r.renglones).toEqual([{ codigo: '580580C', descripcion: 'SP HOODIE OG CLASSIC MELANGE CURVA S1 M2 L3', cantidad: 2, precio: 484000, total: 968000 }]);
     expect(normalizarUllua({ tipo: 'otro', fecha: '18/11/2026', renglones: [{ codigo: 'X1C', cantidad: -2, precio: 'abc' }] }))
       .toMatchObject({ tipo: 'remito', fecha: '', renglones: [{ codigo: 'X1C', cantidad: 0, precio: 0 }] });
+  });
+
+  it('Reef (26-nov-2026): remito de New Arrecife sin precios, con su esquema; el código sin el guion', async () => {
+    const { create, cliente: c } = cliente(json({
+      numero: '0067-00003073', fecha: '2026-11-25', dudas: [],
+      renglones: [{ codigo: '27112279 -', descripcion: 'SHAKA GREEN/WHITE - 045', cantidad: 12, talles: '040 041 042 043 044 045' }],
+    }));
+    const r = await leerRemito({ fotos: [foto], cliente: c, tipo: 'reef' });
+    const pedido = create.mock.calls[0][0];
+    expect(pedido.output_config.format.schema.required).toEqual(['numero', 'fecha', 'renglones', 'dudas']);
+    expect(pedido.messages[0].content.at(-1).text).toMatch(/NEW ARRECIFE/);
+    expect(r).toEqual({ numero: '0067-00003073', fecha: '2026-11-25', dudas: [], origen: 'foto',
+      renglones: [{ codigo: '27112279', descripcion: 'SHAKA GREEN/WHITE - 045', cantidad: 12, talles: '040 041 042 043 044 045' }] });
+    expect(normalizarReef({ fecha: '25/11/2026', renglones: [{ codigo: '1', cantidad: -1 }, { codigo: '' }] }))
+      .toMatchObject({ fecha: '', renglones: [{ codigo: '1', cantidad: 0, talles: '' }] });
   });
 
   it('rechaza fotos inválidas, demasiadas y respuestas sin artículos', async () => {
