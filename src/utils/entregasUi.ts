@@ -138,8 +138,8 @@ export async function archivosFamily(planilla: File[], remito: File[], numeroRem
   await fotos(planilla.filter((f) => !directos(f)), `Planilla de entrega ${dia}`);
   // Ullua: el papel puede ser una factura («Factura 0001-…»).
   const nombreRemito = papel || `Remito ${numeroRemito || dia}`;
-  await tal(remito.filter(esPdf), nombreRemito);
-  await fotos(remito.filter((f) => !esPdf(f)), nombreRemito);
+  await tal(remito.filter(directos), nombreRemito);
+  await fotos(remito.filter((f) => !directos(f)), nombreRemito);
   return out;
 }
 

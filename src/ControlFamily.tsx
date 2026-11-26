@@ -19,7 +19,7 @@
 // ============================================================================
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { costoUllua, entregaDeDocumentoUllua, ULLUA, type DocumentoUllua } from './utils/ullua';
-import { entregaDeRemitoReef, leerListaReef, marketplaceReef, type ListaReef, type RemitoReef } from './utils/reef';
+import { entregaDeRemitoReef, leerListaReef, marketplaceReef, remitoReefDeExcel, type ListaReef, type RemitoReef } from './utils/reef';
 import * as XLSX from 'xlsx';
 import { Archivo, Copiar, Parte } from './EntregasPartes';
 import { PanelCarga } from './PanelCarga';
@@ -32,6 +32,7 @@ import {
 import {
   cargasDeEntrega, ejecutarCargaFamily, estadoShopifyEntrega, FAMILY, leerEstadoCarga, planCargaFamily, resumenCarga, textoCarga,
   type CargaFamily, type EleccionesCarga, type Marketplace, type PlanCarga, type ResultadoCarga,
+  avisoLiberar,
 } from './utils/cargaFamily';
 import { ResultadosCarga } from './ResultadosCarga';
 import { leerTextoRemito, textoRemito } from './utils/lectoresFacturas';
@@ -78,8 +79,19 @@ async function leerDocumentoUllua(files: File[], aFotos?: (f: File[]) => Promise
   return { ...entrega, origen: 'foto', avisos };
 }
 
-/** Reef: el remito (fotos, o PDF pasado a fotos) leído con IA, completado con la lista de precios. */
+/**
+ * Reef: el remito digital (Excel, 26-nov-2026) o, si no lo hay, las fotos (o PDF pasado a fotos) leídas con IA.
+ * Las dos formas se completan con la lista de precios. Con Excel y fotos juntos manda el Excel.
+ */
 async function leerRemitoReef(files: File[], lista: ListaReef | null, aFotos?: (f: File[]) => Promise<File[]>): Promise<Leida> {
+  const excel = files.find(esExcel);
+  if (excel) {
+    const wb = XLSX.read(await excel.arrayBuffer());
+    const hoja = wb.SheetNames.find((_, i) => !wb.Workbook?.Sheets?.[i]?.Hidden) || wb.SheetNames[0];
+    const doc = remitoReefDeExcel(XLSX.utils.sheet_to_json<unknown[]>(wb.Sheets[hoja], { header: 1, raw: true }));
+    const { entrega, avisos } = entregaDeRemitoReef(doc, lista, hoy(), 'excel');
+    return { ...entrega, origen: 'excel', avisos: files.length > 1 ? [...avisos, 'Usé el Excel del remito; las fotos quedan para Trello.'] : avisos };
+  }
   const doc = await leerFotos<RemitoReef>(aFotos ? await aFotos(files) : files, 'reef');
   const { entrega, avisos } = entregaDeRemitoReef(doc, lista, hoy());
   return { ...entrega, origen: 'foto', avisos };
@@ -212,7 +224,7 @@ export default function ControlFamily({ prov = 'family', aFotos }: { prov?: Prov
     if (!planilla.length) return;
     let leida: Leida;
     if (cfg.unPapel) {
-      setOcupado(cfg.reef ? 'Leyendo el remito… (puede tardar un minuto)' : 'Leyendo el remito o la factura… (puede tardar un minuto)');
+      setOcupado(cfg.reef ? (planilla.some(esExcel) ? 'Leyendo el remito…' : 'Leyendo el remito… (puede tardar un minuto)') : 'Leyendo el remito o la factura… (puede tardar un minuto)');
       try { leida = cfg.reef ? await leerRemitoReef(planilla, lista, aFotos) : await leerDocumentoUllua(planilla, aFotos); }
       catch (e) { setAvisos([`No pude leer ${cfg.reef ? 'el remito' : 'el remito o la factura'}: ${mensaje(e)} Podés escribirlo a mano.`]); setOcupado(''); return; }
       setOcupado('');
@@ -372,7 +384,7 @@ export default function ControlFamily({ prov = 'family', aFotos }: { prov?: Prov
   async function liberarCarga(entregaId: string, codigo: string, c: CargaFamily) {
     const aviso = c.estado === 'cargada'
       ? `${codigo} figura como cargado en Shopify. Si liberás la marca, la app lo deja cargar OTRA VEZ (sumaría el stock dos veces o crearía otro producto). ¿Seguro?`
-      : `${codigo}: ${textoCarga(c)}\n\nAntes de liberar, mirá en Shopify si quedó cargado y corregilo a mano si hace falta. Si liberás, la app lo deja cargar de nuevo. ¿Liberar?`;
+      : avisoLiberar(codigo, c, textoCarga(c));
     if (!confirm(aviso)) return;
     setArmado(null);
     // manual: queda anotada en el registro de cargas (la que libera la app sola cuando Shopify rechazó la carga, no).
@@ -405,9 +417,9 @@ export default function ControlFamily({ prov = 'family', aFotos }: { prov?: Prov
         </div>}
         <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', alignItems: 'center', marginTop: 10 }}>
           {cfg.unPapel
-            ? <Archivo etiqueta={cfg.reef ? '🧾 Remito (foto o PDF)' : '🧾 Remito o factura (foto o PDF)'} accept="image/*,.pdf" multiple disabled={!!ocupado} onArchivos={(f) => { setPlanilla(f); setAMano(null); }} />
+            ? <Archivo etiqueta={cfg.reef ? '🧾 Remito (Excel, foto o PDF)' : '🧾 Remito o factura (foto o PDF)'} accept={cfg.reef ? '.xlsx,.xls,image/*,.pdf' : 'image/*,.pdf'} multiple disabled={!!ocupado} onArchivos={(f) => { setPlanilla(f); setAMano(null); }} />
             : <Archivo etiqueta="1 · 📄 Planilla de entrega (Excel o foto)" accept=".xlsx,.xls,image/*" multiple disabled={!!ocupado} onArchivos={(f) => { setPlanilla(f); setAMano(null); }} />}
-          <span style={{ fontSize: '0.82rem', opacity: planilla.length ? 1 : 0.5 }}>{planilla.length ? `✔ ${planilla.length === 1 ? planilla[0].name : `${planilla.length} fotos`}` : 'sin elegir'}</span>
+          <span style={{ fontSize: '0.82rem', opacity: planilla.length ? 1 : 0.5 }}>{planilla.length ? `✔ ${planilla.length === 1 ? planilla[0].name : `${planilla.length} ${planilla.some(esExcel) ? 'archivos' : 'fotos'}`}` : 'sin elegir'}</span>
           {!cfg.unPapel && <>
             <Archivo etiqueta="2 · 📷 Foto del remito" accept="image/*" multiple disabled={!!ocupado} onArchivos={(f) => setFotosRemito(f)} />
             <span style={{ fontSize: '0.82rem', opacity: fotosRemito.length ? 1 : 0.5 }}>{fotosRemito.length ? `✔ ${fotosRemito.length} foto(s)` : 'sin elegir'}</span>
@@ -419,7 +431,7 @@ export default function ControlFamily({ prov = 'family', aFotos }: { prov?: Prov
         {aMano !== null && <EditorTexto texto={aMano} onTexto={setAMano} onGuardar={guardarAMano} onCancelar={() => setAMano(null)} ayuda={cfg.reef ? AYUDA_REEF : cfg.unPapel ? AYUDA_ULLUA : AYUDA_PLANILLA} etiqueta="💾 Guardar y controlar" />}
         <p style={{ fontSize: '0.8rem', opacity: 0.75, margin: '8px 0 0' }}>
           {cfg.reef
-            ? <>Subí la foto del remito de New Arrecife. No trae precios: el PMV, el PVP y la curva salen de la lista de precios. Los talles salen de la curva × la cantidad de curvas que llegaron; los de EE.UU. (parte del calzado y las ojotas) se escriben a mano. Costo = PMV − 15% (contrato); los nuevos se crean con el PVP de la lista (se puede cambiar). Con «⬆️ Cargar en Shopify» sumo el stock en {sucursal}, siempre con tu confirmación. Los precios de lo que ya existe no los toco.</>
+            ? <>Subí el remito de New Arrecife: el Excel (remito digital, lo más seguro) o, si no lo tenés, la foto o el PDF. No trae precios: el PMV, el PVP y la curva salen de la lista de precios. Los talles salen de la curva × la cantidad de curvas que llegaron; los de EE.UU. (parte del calzado y las ojotas) se escriben a mano. Costo = PMV − 15% (contrato); los nuevos se crean con el PVP de la lista (se puede cambiar). Con «⬆️ Cargar en Shopify» sumo el stock en {sucursal}, siempre con tu confirmación. Los precios de lo que ya existe no los toco.</>
             : cfg.unPapel
             ? <>Subí la foto del remito (los precios traen IVA: los divido por 1,21) o de la factura (sin IVA). El precio de cada renglón es el de la curva: lo divido por las unidades de la curva (S1 M2 L3 XL2 = 8; mujer S2 M2 L2 XL2). Costo = precio c/u sin IVA − 15%; los nuevos se crean con el precio c/u × 2 (se puede cambiar). Te digo cuáles son nuevos y cuáles reposición, y con «⬆️ Cargar en Shopify» sumo el stock en {sucursal}, siempre con tu confirmación. Los precios de lo que ya existe no los toco.</>
             : <>Family no factura: controlo la planilla contra el remito, te digo qué artículos son nuevos y cuáles reposición (los busco en Shopify) y te aviso si cambió algún precio. Con «⬆️ Cargar en Shopify» creo los nuevos y sumo la reposición en {sucursal}, siempre con tu confirmación. Los precios de lo que ya existe no los toco.</>}
@@ -588,7 +600,7 @@ function TarjetaFamily({ cfg, r, abierta, ocupado, cargas, plan, onArmar, onConf
         {cargados > 0 && <Parte ok={!!enTrello} titulo="Trello" detalle={enTrello ? 'tarjeta en FINALIZADO' : 'se crea al cargar'}>
           {enTrello && <a href={enTrello} target="_blank" rel="noreferrer" style={{ ...botonChico, textDecoration: 'none' }}>🗂️ Ver tarjeta</a>}
           {!cfg.unPapel && <Archivo etiqueta="📎 Planilla" accept="image/*,.pdf,.xlsx,.xls" multiple disabled={ocupado} estilo={botonChico} onArchivos={(f) => onTrello('planilla', f)} />}
-          <Archivo etiqueta={cfg.unPapel ? `📎 ${e.documento?.tipo === 'factura' ? 'Factura' : 'Remito'}` : '📎 Remito'} accept="image/*,.pdf" multiple disabled={ocupado} estilo={botonChico} onArchivos={(f) => onTrello('remito', f)} />
+          <Archivo etiqueta={cfg.unPapel ? `📎 ${e.documento?.tipo === 'factura' ? 'Factura' : 'Remito'}` : '📎 Remito'} accept={cfg.reef ? '.xlsx,.xls,image/*,.pdf' : 'image/*,.pdf'} multiple disabled={ocupado} estilo={botonChico} onArchivos={(f) => onTrello('remito', f)} />
         </Parte>}
       </div>
       {aRevisar.length > 0 && <div style={{ marginTop: 8, fontSize: '0.84rem', color: '#fbbf24' }}>

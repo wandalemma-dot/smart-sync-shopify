@@ -131,6 +131,19 @@ export interface CargaFamily {
   registrado?: boolean;
 }
 
+/**
+ * Aviso antes de liberar una marca (26-nov-2026, factura 0011-00140179: la Box Star quedó «parcial» con el L sumado,
+ * se liberó, se volvió a cargar todo y el L se sumó dos veces). Dice qué talles ya se sumaron.
+ */
+export function avisoLiberar(codigo: string, c: CargaFamily, texto: string): string {
+  if (c.estado === 'cargada') return `${codigo} figura como cargado en Shopify. Si liberás la marca, la app lo deja cargar OTRA VEZ (sumaría el stock dos veces). ¿Seguro?`;
+  const ya = (c.detalle?.talles ?? []).filter((t) => t.cantidad > 0);
+  const sumado = c.estado === 'parcial' && ya.length
+    ? `\n\nOJO: ya se sumó ${ya.map((t) => `${t.talle === 'TU' ? '' : `${t.talle} `}×${t.cantidad}`).join(', ')}. Si volvés a armar la carga, poné 0 en ${ya.length === 1 ? 'ese talle' : 'esos talles'} (o sacalos con «Sacar de la carga»), si no se suman otra vez.`
+    : '';
+  return `${codigo}: ${texto}${sumado}\n\nAntes de liberar, mirá en Shopify si quedó cargado y corregilo a mano si hace falta. Si liberás, la app lo deja cargar de nuevo. ¿Liberar?`;
+}
+
 /** Productos parecidos por nombre (Family sin SKU ni etiqueta con el código). */
 export function candidatosPorNombre(descripcion: string, familia: ProductoLista[]): (ProductoLista & { motivo: string })[] {
   const { resto, tipo } = partesFamily(descripcion);
@@ -900,6 +913,14 @@ async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga
         { inventoryActivate?: { inventoryLevel?: { id?: string } | null; userErrors?: { message?: string }[] } } | null;
       const ue = d?.inventoryActivate?.userErrors;
       if (!Array.isArray(ue) || (!ue.length && !d?.inventoryActivate?.inventoryLevel?.id)) { dudas.push(l.talle); enviadas.push(l); }
+      else if (ue.length && ue.some((x) => /already active/i.test(String(x.message)))) {
+        // Ya estaba dado de alta (26-nov-2026, factura 0011-00140179: se dio de alta entre la vista previa y la carga).
+        // Se suma sobre lo que tiene ahora; antes quedaba «parcial» y, al volver a cargar, se sumaba dos veces lo que sí entró.
+        const r = await sumarYaActiva(l, plan.locationId, deps);
+        if (r.estado === 'ok') { hechas.push(`${l.talle} ${r.antes}→${r.antes + l.suma}`); sumados.push({ talle: l.talle, antes: r.antes, suma: l.suma }); unidades += l.suma; enviadas.push(l); }
+        else if (r.estado === 'duda') { dudas.push(l.talle); enviadas.push(l); }
+        else fallas.push(`${l.talle} (${r.motivo})`);
+      }
       else if (ue.length) fallas.push(`${l.talle} (${errores(ue)})`);
       else { hechas.push(`${l.talle} alta con ${l.suma}`); sumados.push({ talle: l.talle, antes: null, suma: l.suma }); unidades += l.suma; enviadas.push(l); }
     } catch (e) { if (noSeEjecuto(e)) fallas.push(`${l.talle} (${motivo(e)})`); else { dudas.push(l.talle); enviadas.push(l); } }
@@ -925,6 +946,30 @@ async function sumarStock(codigo: string, rep: ReposicionFamily, plan: PlanCarga
     return { ...comun, estado: 'parcial', mensaje: `${resumen} ${extra}`.trim(), extra: extra.trim() };
   }
   return { ...comun, estado: 'cargada', mensaje: `${resumen}${etiqueta}`, extra: etiqueta.trim() };
+}
+
+/**
+ * Talle que la vista previa vio sin alta en la sucursal pero que Shopify ya tiene dado de alta: lee lo que tiene
+ * ahora y suma lo que llegó (changeFromQuantity = lo leído). No reintenta: si algo no se sabe, queda «dudosa».
+ */
+async function sumarYaActiva(l: LineaReposicion, loc: string, deps: DepsCarga): Promise<{ estado: 'ok'; antes: number } | { estado: 'duda' } | { estado: 'falla'; motivo: string }> {
+  let antes: number;
+  try {
+    const d = (await deps.gql(DISPONIBLE_ID, { ids: [l.inventoryItemId], loc })) as { nodes?: ({ inventoryLevel?: { quantities?: { name: string; quantity: number }[] } | null } | null)[] } | null;
+    const q = d?.nodes?.[0]?.inventoryLevel?.quantities?.find((x) => x.name === 'available')?.quantity;
+    if (!Number.isFinite(Number(q)) || q === null || q === undefined) return { estado: 'falla', motivo: 'ya estaba dado de alta y no pude leer su stock; cargalo a mano' };
+    antes = Number(q);
+  } catch { return { estado: 'falla', motivo: 'ya estaba dado de alta y no pude leer su stock; cargalo a mano' }; }
+  const input = { name: 'available', reason: 'received', quantities: [{ inventoryItemId: l.inventoryItemId, locationId: loc, quantity: antes + l.suma, changeFromQuantity: antes }] };
+  let data: { inventorySetQuantities?: { inventoryAdjustmentGroup?: unknown; userErrors?: { code?: string; message?: string }[] } } | null;
+  try { data = (await deps.gql(SUMAR, { input, key: deps.clave() })) as typeof data; }
+  catch (e) { return noSeEjecuto(e) ? { estado: 'falla', motivo: motivo(e) } : { estado: 'duda' }; }
+  const ue = data?.inventorySetQuantities?.userErrors;
+  if (!Array.isArray(ue)) return { estado: 'duda' };
+  if (ue.length) return { estado: 'falla', motivo: errores(ue) };
+  if (!data?.inventorySetQuantities?.inventoryAdjustmentGroup
+    && (await confirmarCantidades([{ inventoryItemId: l.inventoryItemId, quantity: antes + l.suma }], loc, deps.gql)).size !== 1) return { estado: 'duda' };
+  return { estado: 'ok', antes };
 }
 
 /** Distrinando: el SKU nuevo de los talles que ya existían (y el código de barras si es un EAN). Devuelve el texto para el mensaje. */
