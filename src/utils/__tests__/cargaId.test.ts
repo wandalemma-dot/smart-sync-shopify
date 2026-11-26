@@ -541,9 +541,12 @@ describe('iD: cargar y pasar la venta de iD a Martínez (gax, 12-nov-2026)', () 
       'inventorySetQuantities(': () => { orden_.push('stock'); return SUMA_OK(); },
       'fulfillmentOrderMove(': () => { orden_.push('mover'); return { fulfillmentOrderMove: { movedFulfillmentOrder: { id: 'F9', status: 'OPEN' }, userErrors: [] } }; },
     });
-    const [res] = await ejecutarCargaFamily(plan, {}, deps(gql));
+    const d = deps(gql);
+    const [res] = await ejecutarCargaFamily(plan, {}, d);
     expect(res.estado).toBe('cargada');
     expect(orden_).toEqual(['stock', 'mover']);
+    // Las ventas pasadas quedan anotadas en la marca, para el mail de una carga posterior de la misma factura.
+    expect(d.terminar).toHaveBeenLastCalledWith('CTO0325003', 'cargada', { pasadas: [{ talle: 'S', cantidad: 1, orden: '#210855' }, { talle: 'M', cantidad: 1, orden: '#210855' }] });
     const llamada = gql.mock.calls.find(([q]) => q.includes('fulfillmentOrderMove('))!;
     expect(llamada[1]).toEqual({ id: 'F1', loc: LOC, items: [{ id: 'F1-linea', quantity: 1 }, { id: 'L-M', quantity: 1 }] });
     expect(res.mensaje).toMatch(/Venta pasada de iD a .*S #210855, M #210855/);

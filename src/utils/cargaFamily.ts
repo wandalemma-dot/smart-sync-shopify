@@ -126,7 +126,7 @@ export interface CargaFamily {
   estado: 'en curso' | 'cargada' | 'parcial' | 'dudosa';
   fecha: string;
   firma: string;
-  detalle?: { accion?: 'alta' | 'reposicion'; productoId?: string; titulo?: string; unidades?: number; mensaje?: string; talles?: { talle: string; cantidad: number }[] };
+  detalle?: { accion?: 'alta' | 'reposicion'; productoId?: string; titulo?: string; unidades?: number; mensaje?: string; talles?: { talle: string; cantidad: number }[]; pasadas?: VentaPasada[] };
   /** Ya quedó anotada en el registro de cargas. */
   registrado?: boolean;
 }
@@ -1276,6 +1276,12 @@ export async function ejecutarCargaFamily(plan: PlanCarga, elecciones: Eleccione
       if (!t) continue;
       if (t.texto) r.mensaje = `${r.mensaje} ${t.texto}`.trim();
       if (r.detalle) { r.detalle.pasadas.push(...t.pasadas); r.detalle.notas.push(...t.avisos); }
+    }
+    // Las ventas pasadas quedan anotadas en la marca (26-nov-2026, factura 0011-00140179: el mail de la segunda carga
+    // no mostraba las ventas que pasó la primera). Solo se mueve lo que quedó «cargada».
+    for (const [codigo, t] of Object.entries(textos)) {
+      if (!t.pasadas.length) continue;
+      try { await deps.terminar(codigo, 'cargada', { pasadas: t.pasadas }); } catch { /* el mail de esta carga igual las muestra */ }
     }
   }
   return out;

@@ -1,6 +1,6 @@
 // Aviso de carga a administración y comentario en Trello (16-nov-2026, gax).
 import { describe, expect, it } from 'vitest';
-import { comentarioTrello, conLoCargado, diaArgentina, fechaCorta, fechaIngreso, filaPlanilla, filaPlanillaFamily, observacionesPlanilla, proveedorPlanilla, resultadosGuardados, textoAvisoAdmin } from '../avisoAdmin';
+import { comentarioTrello, conCargasAnteriores, conLoCargado, diaArgentina, fechaCorta, fechaIngreso, filaPlanilla, filaPlanillaFamily, observacionesPlanilla, proveedorPlanilla, resultadosGuardados, textoAvisoAdmin } from '../avisoAdmin';
 import type { CargaFamily } from '../cargaFamily';
 import type { ResultadoCarga } from '../cargaFamily';
 import type { ResultadoFactura } from '../controlFacturas';
@@ -125,6 +125,22 @@ describe('Corregir la fila en la planilla con lo cargado guardado (25-nov-2026)'
     expect(filaPlanilla({ ...o, resultados: resultadosGuardados('F-1', cargas), hoy: '2026-11-25' })).toMatchObject({
       proveedor: 'ID CONVERSE / LE COQ', factura: 'FAC.OK - 0011-00139953', observaciones: 'APP - ok', ok: true,
     });
+  });
+});
+
+describe('El mail cuenta toda la factura, también las cargas anteriores (26-nov-2026, factura 0011-00140179)', () => {
+  it('suma lo cargado antes (con sus ventas pasadas) y lo de esta carga manda para sus códigos', () => {
+    const cargas: Record<string, CargaFamily> = {
+      'F-1|CTO0325021': { estado: 'cargada', fecha: '2026-11-26', firma: 'x', detalle: { titulo: 'Buzo Converse Hoodie', unidades: 3, talles: [{ talle: 'M', cantidad: 2 }, { talle: 'L', cantidad: 1 }], pasadas: [{ talle: 'M', cantidad: 1, orden: '#212020' }] } },
+      // Lo de esta carga (LTO0224043) reemplaza lo guardado antes para ese código.
+      'F-1|LTO0224043': { estado: 'parcial', fecha: '2026-11-26', firma: 'x', detalle: { unidades: 1, talles: [{ talle: 'M', cantidad: 1 }] } },
+      'F-2|CTO1': { estado: 'cargada', fecha: '2026-11-26', firma: 'x', detalle: { unidades: 9 } },
+    };
+    const todo = conCargasAnteriores('F-1', resultados, cargas);
+    expect(todo.map((x) => x.codigo)).toEqual(['CTO0325021', 'LTO0224043', 'LTO0226092']);
+    const { cuerpo } = textoAvisoAdmin({ ...o, resultados: todo });
+    expect(cuerpo).toContain('Se cargaron 9 u. en DEPOSITO MARTINEZ, 2 de ellas para ventas de iD que pasaron a DEPOSITO MARTINEZ.');
+    expect(cuerpo).toMatch(/• CTO0325021 Buzo Converse Hoodie: 3 u\. \(M 2, L 1\) · 1 u\. para ventas de iD/);
   });
 });
 

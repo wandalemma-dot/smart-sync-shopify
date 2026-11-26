@@ -207,6 +207,8 @@ function limpiarDetalleCarga(d) {
   if (x.unidades !== undefined) out.unidades = num(x.unidades);
   if (x.mensaje) out.mensaje = txt(x.mensaje, 600);
   if (x.talles !== undefined) out.talles = talles(x.talles);
+  // Ventas de iD pasadas a Martínez (26-nov-2026): para que el mail a administración cuente las de cargas anteriores.
+  if (x.pasadas !== undefined) out.pasadas = lista(x.pasadas || [], 50).map((v) => ({ talle: txt(v?.talle, 20), cantidad: num(v?.cantidad || 0), orden: txt(v?.orden, 20) }));
   return out;
 }
 
