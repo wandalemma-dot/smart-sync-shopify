@@ -182,8 +182,17 @@ export function resultadosGuardados(facturaId: string, cargas: Record<string, Ca
     const sumados = talles.length ? talles.map((t) => ({ talle: t.talle, antes: null, suma: Number(t.cantidad) || 0 }))
       : (c.detalle?.unidades ?? 0) > 0 ? [{ talle: '', antes: null, suma: Number(c.detalle!.unidades) }] : [];
     return { codigo: k.slice(pre.length), estado: c.estado as 'cargada' | 'parcial', mensaje: c.detalle?.mensaje ?? '',
-      detalle: { titulo: c.detalle?.titulo, sumados, costos: [], pasadas: [], notas: [] } };
+      detalle: { titulo: c.detalle?.titulo, sumados, costos: [], pasadas: c.detalle?.pasadas ?? [], notas: [] } };
   });
+}
+
+/**
+ * Lo cargado en esta carga más lo de las cargas anteriores de la misma factura (26-nov-2026, gax: el mail de la
+ * factura 0011-00140179 solo mostraba la segunda carga). Lo de esta carga manda para sus códigos.
+ */
+export function conCargasAnteriores(facturaId: string, resultados: ResultadoCarga[], cargas: Record<string, CargaFamily>): ResultadoCarga[] {
+  const ahora = new Set(resultados.map((x) => x.codigo));
+  return [...resultadosGuardados(facturaId, cargas).filter((x) => !ahora.has(x.codigo)), ...resultados];
 }
 
 /** Fila para la planilla «CONTROL INGRESO MERCADERIA» (la agrega el Apps Script de la planilla). */

@@ -31,7 +31,7 @@ import { Archivo, Copiar, Parte } from './EntregasPartes';
 import { NoEntraron, OrdenesQueSalen, PanelCarga } from './PanelCarga';
 import { accionesElegidas, avisoLiberar, ejecutarCargaFamily, resumenCarga, textoCarga, type CargaFamily, type EleccionesCarga, type ModoVenta, type NoEntroCarga, type PlanCarga, type ResultadoCarga } from './utils/cargaFamily';
 import { ResultadosCarga } from './ResultadosCarga';
-import { comentarioTrello, fechaIngreso, filaPlanilla, resultadosGuardados, textoAvisoAdmin } from './utils/avisoAdmin';
+import { comentarioTrello, conCargasAnteriores, fechaIngreso, filaPlanilla, resultadosGuardados, textoAvisoAdmin } from './utils/avisoAdmin';
 import { cambiosDePrecio, enlacesMail, textoAvisoPrecio, type CambioPrecio, type MailsAviso } from './utils/avisoPrecio';
 import { diferenciasDeTalles, netosDeCarga, textoAvisoTalles } from './utils/avisoTalles';
 import { planCargaDistrinando } from './utils/cargaDistrinando';
@@ -1119,12 +1119,14 @@ export default function ControlFacturas() {
     const algo = resultados.some((x) => (x.detalle?.sumados.length ?? 0) > 0 || (x.detalle?.pasadas.length ?? 0) > 0);
     if (!algo) return;
     const datosAviso = { prov: p, r, resultados, sucursal: SUCURSAL_CARGA_ID, hoy: hoyAr(), ingreso: fechaIngreso(r.factura, r.remito).fecha };
-    setAvisoAdmin(textoAvisoAdmin(datosAviso));
+    // El mail y la planilla cuentan toda la factura, también lo de cargas anteriores; el comentario de Trello, solo esta carga.
+    const todo = { ...datosAviso, resultados: conCargasAnteriores(r.factura.id, resultados, datos.cargas ?? {}) };
+    setAvisoAdmin(textoAvisoAdmin(todo));
     const hechos: string[] = [];
     // Fila en la planilla «CONTROL INGRESO MERCADERIA» (16-nov-2026, gax): la agrega sola; si esa factura
     // ya está anotada (otra carga de la misma entrega), no la repite.
     try {
-      const a = await anotarEnPlanilla(filaPlanilla(datosAviso));
+      const a = await anotarEnPlanilla(filaPlanilla(todo));
       if (a.sinPlanilla) hechos.push('Planilla de ingreso: todavía no está conectada (ver «Planilla de ingreso» en Notas de pedido).');
       else if (a.yaEstaba) hechos.push(`Planilla de ingreso: la factura ${r.factura.numero} ya estaba anotada${a.fila ? ` (fila ${a.fila})` : ''}.`);
       else hechos.push(`Planilla de ingreso: agregué la factura ${r.factura.numero}${a.fila ? ` en la fila ${a.fila}` : ''}.`);

@@ -145,6 +145,10 @@ describe('Family: entregas sin factura (11-nov-2026)', () => {
     expect((await aplicar(fn, { ...c, accion: 'reservarCarga', firma: 'x' })).ok).toBe(false);
     await aplicar(fn, { ...c, accion: 'terminarCarga', estado: 'cargada', detalle: { unidades: 2 } });
     expect((await leerTodo(fn, 'id')).cargas[`${c.entregaId}|CTO0325003`]).toMatchObject({ estado: 'cargada', factura: '0011-00139953' });
+    // Las ventas pasadas a Martínez se suman a la marca sin borrar lo demás ni volver al registro (26-nov-2026).
+    await aplicar(fn, { ...c, accion: 'terminarCarga', estado: 'cargada', detalle: { pasadas: [{ talle: 'XL', cantidad: 1, orden: '#212204', extra: 'x' }] } });
+    expect((await leerTodo(fn, 'id')).cargas[`${c.entregaId}|CTO0325003`].detalle).toEqual({ accion: 'reposicion', titulo: 'Remera Converse', unidades: 2, pasadas: [{ talle: 'XL', cantidad: 1, orden: '#212204' }] });
+    expect((await leerRegistro(fn)).eventos).toHaveLength(1);
     expect((await leerTodo(fn, 'family')).cargas).toEqual({});
     const { eventos } = await leerRegistro(fn);
     expect(eventos[0]).toMatchObject({ proveedor: 'id', codigo: 'CTO0325003', factura: '0011-00139953', remito: '0013-00125274', entrega: { fecha: '2026-11-10' }, talles: [{ talle: 'XL', cantidad: 2 }] });
