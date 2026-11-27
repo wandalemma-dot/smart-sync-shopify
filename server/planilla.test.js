@@ -56,6 +56,11 @@ describe('Planilla de ingreso', () => {
     }
   });
 
+  it('aviso (26-nov-2026, diferencia de precio de iD): pasa solo si la fila no está ok', () => {
+    expect(validarFila({ ...fila, ok: false, aviso: true }).aviso).toBe(true);
+    expect(validarFila({ ...fila, ok: true, aviso: true }).aviso).toBeUndefined();
+    expect(validarFila({ ...fila, ok: false, aviso: 'si' }).aviso).toBeUndefined();
+  });
   it('Family (sin factura): va con el remito; sin factura ni remito, o con otro número, no', () => {
     const fam = { fecha: '11/11/26', proveedor: 'Familyarg', numero: '0001-00002716', factura: '', remito: '0001-00002716', monto: null, observaciones: 'APP - ok', ok: true, carga: '16/11/26' };
     expect(validarFila(fam)).toMatchObject({ factura: '', remito: '0001-00002716', monto: null });

@@ -86,7 +86,9 @@ export const motivosParaAdmin = (r: ResultadoFactura) => r.motivos.filter((m) =>
 export function observacionesPlanilla(r: ResultadoFactura): string {
   const partes: string[] = [];
   if (r.notaFaltante) partes.push(`Sin nota de pedido (${r.unidadesSinNota} de ${r.unidades} u.)`);
-  if (r.totalDifPrecio > 0) partes.push(`Facturado más caro (${pesos(r.totalDifPrecio)} de más)`);
+  if (r.totalDifPrecio > 0) partes.push(r.precioInformativo
+    ? `Con observaciones (diferencias de precio contra nota de pedido: ${pesos(r.totalDifPrecio)} de más)`
+    : `Facturado más caro (${pesos(r.totalDifPrecio)} de más)`);
   if (r.totalSinPedirNeto > 0) partes.push(`Facturado sin pedir (${pesos(r.totalSinPedirNeto)} neto)`);
   if (!partes.length) partes.push(...r.motivos.filter((m) => GRAVE.test(m)).slice(0, 2).map(motivoInformativo));
   return partes.length ? partes.join(' · ') : 'ok';
@@ -199,7 +201,12 @@ export function conCargasAnteriores(facturaId: string, resultados: ResultadoCarg
 export interface FilaPlanilla {
   fecha: string; proveedor: string; numero: string; factura: string; remito: string;
   monto: number | null; observaciones: string; ok: boolean; carga: string;
+  /** Solo una diferencia de precio de iD (26-nov-2026): el script pinta OBSERVACIONES en amarillo, no en naranja. */
+  aviso?: boolean;
 }
+
+/** Lo único observado es lo facturado más caro de iD (no se reclama). */
+const soloPrecio = (r: ResultadoFactura) => !!r.precioInformativo && !r.notaFaltante && !(r.totalSinPedirNeto > 0);
 
 /** Como las filas que ya están: «FAC.OK - 0011-…» si está todo bien, «FAC. - …» si hay algo; observaciones «APP - …». */
 export function filaPlanilla(datos: DatosAvisoAdmin): FilaPlanilla {
@@ -218,6 +225,7 @@ export function filaPlanilla(datos: DatosAvisoAdmin): FilaPlanilla {
     observaciones: `APP - ${obs}`.slice(0, 290),
     ok,
     carga: fechaCorta(o.hoy),
+    ...(!ok && soloPrecio(o.r) ? { aviso: true } : {}),
   };
 }
 

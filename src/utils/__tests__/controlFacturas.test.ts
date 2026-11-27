@@ -69,6 +69,22 @@ describe('control de facturas contra pedidos', () => {
     expect(rojo.difPrecio[0].diferencia).toBe(-10000);
   });
 
+  it('iD (26-nov-2026): lo facturado más caro que la nota es una observación, no un reclamo', () => {
+    const facts = [factura('1', '2026-10-05', [ren('X1', 5, 110000), ren('ROJO', 2)])];
+    const otro = analizarFacturas([pA], facts).facturas[0];
+    expect(otro.semaforo).toBe('reclamar');
+    expect(otro.reclamo.neto).toBe(30000);
+    const id = analizarFacturas([pA], facts, {}, undefined, undefined, { precioInforma: true }).facturas[0];
+    expect(id.semaforo).toBe('observaciones');
+    expect(id.precioInformativo).toBe(true);
+    expect(id.reclamo.neto).toBe(0);
+    expect(id.renglones[0].difPrecio[0].diferencia).toBe(30000);
+    expect(id.motivos.join(' ')).toMatch(/PRECIO: 1 artículo\(s\) facturados más caros que en la nota de pedido: .*solo se informa a administración, no se reclama\./);
+    expect(id.motivos.join(' ')).not.toMatch(/nota de crédito/);
+    // Igual que la nota: nada cambia.
+    expect(analizarFacturas([pA], [factura('2', '2026-10-05', [ren('X1', 5)])], {}, undefined, undefined, { precioInforma: true }).facturas[0].precioInformativo).toBe(false);
+  });
+
   it('control aritmético detecta IVA y total mal', () => {
     const f = factura('1', '2026-10-05', [ren('X1', 5)]);
     f.iva += 10; f.total += 10;

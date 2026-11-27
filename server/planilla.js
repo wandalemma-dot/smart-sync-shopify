@@ -47,6 +47,8 @@ export function validarFila(f) {
     proveedor: texto(f.proveedor, 40, 'Proveedor'),
     observaciones: texto(f.observaciones, 300, 'Observaciones'),
     ok: f.ok === true,
+    // Solo una diferencia de precio de iD: amarillo en lugar de naranja (26-nov-2026).
+    ...(f.ok !== true && f.aviso === true ? { aviso: true } : {}),
   };
 }
 

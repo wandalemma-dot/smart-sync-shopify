@@ -110,6 +110,7 @@ Por cada artículo devolvé:
 - codigo: exacto como está impreso (por ejemplo SHBSPEC, GSKPT23).
 - descripcion: artículo, modelo, corte y color, en ese orden, como figuran.
 - precioMayor y precioPublico: como número, sin $ ni separadores de miles ($34,500.00 → 34500).
+- Si la planilla trae una columna PRECIO C/DESC (precio por mayor con descuento, por ejemplo en Black Friday), precioMayor es ESE precio, no el PRECIOXMAYOR de lista.
 - talles: cada talle con su cantidad; las celdas vacías no van.
 - cantidad: el TOTAL impreso del artículo.
 También la fecha de la planilla (AAAA-MM-DD) si se lee.
