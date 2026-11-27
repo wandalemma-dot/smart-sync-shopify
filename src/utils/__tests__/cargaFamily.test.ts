@@ -444,3 +444,27 @@ describe('Family: carga en Shopify (después de confirmar)', () => {
     expect(gql.mock.calls.find(([q]) => q.includes('tagsAdd'))![1]).toEqual({ id: p.id, tags: ['SHBSPEC'] });
   });
 });
+
+describe('Family Black Friday: PRECIO C/DESC (27-nov-2026, gax)', () => {
+  const BF: unknown[][] = [
+    ['ENTREGA MERCADERIA', 'FAMILYARG', null, null, '27-Nov-26', 'BLACK FRIDAY'],
+    ['CODIGO', 'ARTICULO', 'MODELO', 'CORTE', 'COLOR', 'PRECIOXMAYOR', 'DESC 35%', 'PRECIO C/DESC', 'PRECIO PUBLICO', 'XS', 'S', 'M', 'L', 'XL', '2XL', '3XL', 'TOTAL'],
+    ['RMCRWH02', 'REMERA', 'ROSES', 'STANDARD', 'BLANCO', '$19,500.00', '$6,825.00', '$12,675.00', '$25,350.00', null, null, 8, 8, 8, 4, null, 28],
+  ];
+  it('el por mayor y el costo salen del precio con descuento (12.675 − 15% = 10.773,75), con aviso', () => {
+    const { entrega: e0, avisos } = leerEntregaFamily(BF, 'Planilla', '2026-01-01');
+    expect(e0.fecha).toBe('2026-11-27');
+    expect(e0.renglones[0]).toMatchObject({ codigo: 'RMCRWH02', precioMayor: 12675, precioPublico: 25350, cantidad: 28 });
+    expect(e0.renglones[0].talles.map((t) => t.talle)).toEqual(['M', 'L', 'XL', '2XL']);
+    expect(avisos.join(' ')).toMatch(/PRECIO C\/DESC/);
+    const e: EntregaFamily = { ...e0, id: 'BF', shopify: { fecha: 'x', codigos: { RMCRWH02: [] } } };
+    const rem: Remito = { numero: '0001-1', fecha: '2026-11-27', renglones: [{ codigo: 'RMCRWH02', cantidad: 28, talles: [] }] };
+    const plan = planCargaFamily(controlarEntregaFamily(e, rem, [e]), estadoVacio({ porCodigo: { RMCRWH02: [] } }), {});
+    const alta = plan.items[0].opciones[0];
+    expect(alta.accion).toMatchObject({ tipo: 'alta', precio: 25350, costo: 10773.75 });
+    expect(alta.avisos.join(' ')).not.toMatch(/no es la mitad/);
+  });
+  it('sin PRECIO C/DESC sigue igual: costo del PRECIOXMAYOR', () => {
+    expect(leerEntregaFamily(PLANILLA, 'Planilla', '2026-01-01').entrega.renglones[0].precioMayor).toBe(34500);
+  });
+});

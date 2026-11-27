@@ -111,8 +111,14 @@ export function leerEntregaFamily(filas: unknown[][], nombre: string, fechaPorDe
   const col = (re: RegExp) => enc.findIndex((c) => re.test(c));
   const cCodigo = enc.indexOf('CODIGO');
   const cArt = col(/^ARTICULO$/), cModelo = col(/^MODELO$/), cCorte = col(/^CORTE$/), cColor = col(/^COLOR$/);
-  const cMayor = col(/MAYOR/), cPublico = col(/PUBLICO/), cTotal = enc.indexOf('TOTAL');
-  const talles = enc.map((c, i) => ({ c, i })).filter(({ c, i }) => RE_TALLE_COL.test(c.replace(/\s+/g, '')) && ![cCodigo, cArt, cModelo, cCorte, cColor, cMayor, cPublico, cTotal].includes(i));
+  const cMayorLista = col(/MAYOR/), cPublico = col(/PUBLICO/), cTotal = enc.indexOf('TOTAL');
+  // Black Friday (27-nov-2026, gax): la planilla trae DESC 35% y PRECIO C/DESC. El por mayor que se
+  // paga es el precio con descuento, y de ahí sale el costo (− 15%), no del PRECIOXMAYOR de lista.
+  const cConDesc = col(/^PRECIO (C\/ ?|CON )DESC/);
+  const cMayor = cConDesc >= 0 ? cConDesc : cMayorLista;
+  if (cConDesc >= 0) avisos.push('La planilla trae PRECIO C/DESC: el precio por mayor (y el costo, − 15%) sale de esa columna, no de PRECIOXMAYOR.');
+  const otras = [cCodigo, cArt, cModelo, cCorte, cColor, cMayorLista, cConDesc, cPublico, cTotal];
+  const talles = enc.map((c, i) => ({ c, i })).filter(({ c, i }) => RE_TALLE_COL.test(c.replace(/\s+/g, '')) && !otras.includes(i));
   if (!talles.length && cTotal < 0) throw new Error('La planilla de Family no tiene columnas de talles ni TOTAL.');
   if (cMayor < 0) avisos.push('La planilla no tiene la columna PRECIOXMAYOR: no se controla ese precio.');
   if (cPublico < 0) avisos.push('La planilla no tiene la columna PRECIO PUBLICO: no se controla ese precio.');
@@ -145,7 +151,7 @@ export function leerEntregaFamily(filas: unknown[][], nombre: string, fechaPorDe
     };
     const descripcion = [cArt, cModelo, cCorte, cColor].filter((j) => j >= 0).map((j) => String(f[j] ?? '').trim()).filter(Boolean).join(' ');
     agregarRenglon(porCodigo, {
-      codigo, descripcion, precioMayor: precio(cMayor, 'precio por mayor'), precioPublico: precio(cPublico, 'precio público'),
+      codigo, descripcion, precioMayor: precio(cMayor, cConDesc >= 0 ? 'precio con descuento' : 'precio por mayor'), precioPublico: precio(cPublico, 'precio público'),
       cantidad, talles: ts, ...(Number.isFinite(total) ? { totalImpreso: Math.round(total) } : {}),
     }, avisos, 'Planilla');
   }
